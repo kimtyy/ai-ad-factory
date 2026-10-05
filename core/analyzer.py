@@ -289,7 +289,7 @@ def plan_storyboard(
     tone_and_manner: str = "aggro",
     duration_preset: str = "15s",
     audio_mode: str = "voice_and_sub",
-    output_plan_path: str = "storyboard_plan.json",
+    output_plan_path: Optional[str] = None,
     mock: bool = False,
     force: bool = False,
     api_key: Optional[str] = None,
@@ -315,23 +315,23 @@ def plan_storyboard(
         f"톤앤매너='{tone_info['name']}', 길이='{preset_info['name']}', 오디오='{audio_mode}', force={force}"
     )
     
-    if force and os.path.exists(output_plan_path):
+    if force and output_plan_path and os.path.exists(output_plan_path):
         logger.info(f"기존 기획 파일 '{output_plan_path}' 삭제 후 재생성 진행.")
         os.remove(output_plan_path)
 
-    if not force and os.path.exists(output_plan_path) and os.path.getsize(output_plan_path) > 0 and not mock:
+    if not force and output_plan_path and os.path.exists(output_plan_path) and os.path.getsize(output_plan_path) > 0 and not mock:
         try:
             with open(output_plan_path, "r", encoding="utf-8") as f:
                 existing_data = json.load(f)
             if isinstance(existing_data, list) and len(existing_data) == num_scenes:
-                logger.info(f"기존 storyboard_plan.json 감지 ({len(existing_data)}개 씬 일치). 기존 기획을 유지합니다.")
+                logger.info(f"기존 기획 파일 감지 ({len(existing_data)}개 씬 일치). 기존 기획을 유지합니다.")
                 return existing_data
             else:
                 logger.info(f"기존 기획 씬 수가 요청 씬 수({num_scenes})와 달라 재생성을 진행합니다.")
                 if os.path.exists(output_plan_path):
                     os.remove(output_plan_path)
         except Exception as e:
-            logger.warning(f"기존 storyboard_plan.json 로드 실패: {e}. 재생성을 진행합니다.")
+            logger.warning(f"기존 기획 파일 로드 실패: {e}. 재생성을 진행합니다.")
             if os.path.exists(output_plan_path):
                 os.remove(output_plan_path)
 
@@ -358,8 +358,9 @@ def plan_storyboard(
             for sc in scenes:
                 sc["duration_sec"] = per_scene_dur
 
-        with open(output_plan_path, "w", encoding="utf-8") as f:
-            json.dump(scenes, f, ensure_ascii=False, indent=2)
+        if output_plan_path:
+            with open(output_plan_path, "w", encoding="utf-8") as f:
+                json.dump(scenes, f, ensure_ascii=False, indent=2)
         logger.info(f"Mock 콘티가 '{output_plan_path}'에 저장되었습니다 ({len(scenes)}개 씬).")
         return scenes
 
@@ -688,8 +689,9 @@ JSON 출력 스키마 예시:
             last_scene["caption"] = TRAVEL_CTA_SUBTITLE
             last_scene["duration_sec"] = 2.5
 
-        with open(output_plan_path, "w", encoding="utf-8") as f:
-            json.dump(scenes, f, ensure_ascii=False, indent=2)
+        if output_plan_path:
+            with open(output_plan_path, "w", encoding="utf-8") as f:
+                json.dump(scenes, f, ensure_ascii=False, indent=2)
 
         logger.info(f"스토리보드 기획 완료 (모드={mode})! 총 {len(scenes)}개 씬이 '{output_plan_path}'에 저장되었습니다.")
         return scenes

@@ -43,6 +43,10 @@ from core.asset_generator import AssetGenerator, VOICE_ACTOR_PROFILES
 from core.compositor import AdCompositor
 from core.scraper import scrape_product_info
 from core.image_processor import extract_product_cutout, composite_cutout_on_background
+from core.job import JobContext
+from core.media import is_video_file, probe_media
+from core.media.normalize import DEFAULT_TRIM_START
+from core.render.brand import BrandOverlay, EndCard
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -111,9 +115,30 @@ if "rejected_urls" not in st.session_state:
 if "vision_cache" not in st.session_state:
     st.session_state.vision_cache = {}       # 비전 판정 캐시 (이미지 해시:역할 -> 판정)
 if "uploaded_paths" not in st.session_state:
-    st.session_state.uploaded_paths = []     # 일괄 업로드 사진 (씬 1부터 순서대로 배정)
+    st.session_state.uploaded_paths = []     # 일괄 업로드 사진/영상 (씬 1부터 순서대로 배정)
+if "job" not in st.session_state:
+    # 브라우저 세션마다 독립 작업 공간 (outputs/jobs/{job_id}/) - 동시 사용자 간 파일 충돌 방지
+    st.session_state.job = JobContext.create(app="streamlit")
 
-CACHE_DIR = "outputs/cache"
+UPLOAD_TYPES = ["jpg", "jpeg", "png", "mp4", "mov", "m4v"]
+
+
+def current_job() -> JobContext:
+    return st.session_state.job
+
+
+def start_new_job(**meta) -> JobContext:
+    """새 작업 공간을 만들고 이전 작업의 씬/에셋 상태를 비움 (이전 작업 파일은 그대로 보존)"""
+    st.session_state.job = JobContext.create(app="streamlit", **meta)
+    st.session_state.storyboard = []
+    st.session_state.uploaded_paths = []
+    st.session_state.rejected_urls = set()
+    st.session_state.final_video_path = None
+    st.session_state.generated_images = []
+    st.session_state.cutout_path = None
+    for k in [k for k in st.session_state.keys() if str(k).startswith("applied_upload_")]:
+        del st.session_state[k]
+    return st.session_state.job
 
 
 def _safe_int(value, default: int) -> int:
@@ -130,28 +155,40 @@ def _scene_num(scene: dict, default: int) -> int:
 
 
 def invalidate_scene_derivatives(s_num: int):
-    """씬 사진이 바뀌면 그 씬의 파생 키프레임/영상 캐시만 삭제"""
-    for ext in (".png", ".mp4"):
-        p = os.path.join(CACHE_DIR, f"scene_{s_num:02d}{ext}")
+    """씬 사진/영상이 바뀌면 그 씬의 파생 키프레임/클립 캐시만 삭제"""
+    for suffix in (".png", ".mp4", ".mp4.json", "_thumb.jpg"):
+        p = current_job().asset_path(f"scene_{s_num:02d}{suffix}")
         if os.path.exists(p):
             os.remove(p)
 
 
-def save_uploaded_image(up_file) -> str:
-    """업로드 파일을 내용 해시 기반 고유 파일명으로 저장 (다른 업로드/세션과 파일명 충돌 방지)"""
-    os.makedirs(CACHE_DIR, exist_ok=True)
+def save_uploaded_file(up_file) -> str:
+    """업로드 사진/영상을 작업 공간 uploads/에 내용 해시 기반 고유 파일명으로 저장"""
     data = up_file.getbuffer()
     ext = os.path.splitext(up_file.name)[-1].lower() or ".jpg"
-    path = os.path.abspath(os.path.join(CACHE_DIR, f"user_upload_{hashlib.md5(data).hexdigest()[:12]}{ext}"))
+    path = os.path.join(current_job().uploads_dir, f"upload_{hashlib.md5(data).hexdigest()[:12]}{ext}")
     if not os.path.exists(path):
         with open(path, "wb") as f:
             f.write(data)
     return path
 
 
-def assign_image_to_scene(scene: dict, image_path: str, source: str, matched_url: str = None):
-    """씬 dict에 사진을 키로 기록 (순번 매핑 금지)"""
-    scene["image_path"] = image_path
+def scene_has_media(scene: dict) -> bool:
+    media = scene.get("media") or {}
+    if media.get("type") == "video" and media.get("path") and os.path.exists(media["path"]):
+        return True
+    return bool(scene.get("image_path") and os.path.exists(scene["image_path"]))
+
+
+def assign_media_to_scene(scene: dict, path: str, source: str, matched_url: str = None):
+    """씬 dict에 사진 또는 스마트폰 영상을 키로 기록 (순번 매핑 금지)"""
+    if is_video_file(path):
+        probe_media(path)  # 읽을 수 없는 영상이면 여기서 예외 → 배정하지 않음
+        scene["media"] = {"type": "video", "path": path, "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
+        scene.pop("image_path", None)
+    else:
+        scene["image_path"] = path
+        scene.pop("media", None)
     scene["asset_status"] = source
     scene["vision_verdict"] = None
     if matched_url:
@@ -163,7 +200,7 @@ def assign_image_to_scene(scene: dict, image_path: str, source: str, matched_url
 
 def assign_uploads_to_scenes(scenes: list, paths: list):
     for scene, p in zip(scenes, paths):
-        assign_image_to_scene(scene, p, "uploaded")
+        assign_media_to_scene(scene, p, "uploaded")
 
 
 def rematch_scenes(target_scenes: list, api_key: str):
@@ -176,7 +213,7 @@ def rematch_scenes(target_scenes: list, api_key: str):
     return core.scraper.download_targeted_scene_assets(
         scenes=target_scenes,
         image_pool=st.session_state.get("image_pool", []),
-        output_dir=CACHE_DIR,
+        output_dir=current_job().assets_dir,
         api_key=api_key,
         exclude_urls=set(st.session_state.rejected_urls) | in_use,
         vision_cache=st.session_state.vision_cache
@@ -264,6 +301,41 @@ with st.sidebar:
     st.session_state.selected_actor = selected_actor
 
     st.markdown("---")
+    st.markdown("#### 🏷️ 브랜드 오버레이 (B2B)")
+    brand_enabled = st.checkbox("상호명 워터마크 + 검색 유도 엔딩 카드", value=False,
+                                help="펜션/매장 사장님용: 전 씬에 상호명 라벨, 마지막에 네이버 플레이스 검색 유도 카드를 넣습니다.")
+    brand_cfg = None
+    if brand_enabled:
+        brand_name = st.text_input("상호명", key="brand_name", placeholder="예: 가평 솔바람 펜션")
+        brand_logo_file = st.file_uploader("로고 (PNG 권장, 선택)", type=["png", "jpg", "jpeg"], key="brand_logo")
+        brand_position = st.radio("워터마크 위치", ["top_right", "top_left"], horizontal=True,
+                                  format_func=lambda x: "우측 상단" if x == "top_right" else "좌측 상단")
+        end_card_on = st.checkbox("검색 유도 엔딩 카드 추가", value=True)
+        search_keyword = st.text_input("검색어", key="brand_search_kw", placeholder="비우면 상호명 사용")
+        end_cta = st.text_input("안내 문구", value="네이버 플레이스에서 검색해 보세요", key="brand_cta")
+        end_sub = st.text_input("보조 문구 (선택)", key="brand_sub", placeholder="예: 경기 가평군 · 예약 문의 환영")
+        if brand_name.strip():
+            logo_path = save_uploaded_file(brand_logo_file) if brand_logo_file else None
+            brand_cfg = BrandOverlay(
+                business_name=brand_name.strip(),
+                logo_path=logo_path,
+                position=brand_position,
+                end_card=EndCard(
+                    search_keyword=search_keyword.strip() or brand_name.strip(),
+                    cta_text=end_cta.strip(),
+                    sub_text=end_sub.strip(),
+                ) if end_card_on else None,
+            )
+        else:
+            st.caption("상호명을 입력하면 적용됩니다.")
+        if st.session_state.get("production_mode") == "여행 상품 모드":
+            st.caption("ℹ️ 여행(제휴) 모드는 숙소명을 숨기는 대본입니다. 상호 노출은 사장님 본인 홍보 영상에만 사용하세요.")
+
+    st.markdown("---")
+    st.caption(f"📁 작업 ID: `{current_job().job_id}`")
+    if st.button("🆕 새 작업 시작", use_container_width=True, help="새 작업 공간을 만듭니다. 이전 작업 파일은 outputs/jobs/에 보존됩니다."):
+        start_new_job()
+        st.rerun()
     st.caption("AI Short-form Ad Video Factory v2.0 (Streamlit)")
 
 
@@ -313,25 +385,10 @@ if crawl_btn:
     if not target_url or not target_url.strip():
         st.warning("⚠️ 상품 페이지 URL을 입력해 주세요.")
     else:
-        # 1. outputs/cache 내 기존 더미/캐시 파일 완전 강제 삭제
-        cache_dir = "outputs/cache"
-        os.makedirs(cache_dir, exist_ok=True)
-        import glob
-        for old_f in (
-            glob.glob(os.path.join(cache_dir, "gallery_*.jpg")) +
-            glob.glob(os.path.join(cache_dir, "gallery_*.png")) +
-            glob.glob(os.path.join(cache_dir, "sample_*.jpg")) +
-            glob.glob(os.path.join(cache_dir, "sample_*.png"))
-        ):
-            try:
-                os.remove(old_f)
-            except Exception:
-                pass
-
-        # 기존 세션에 캐시된 데이터 즉시 초기화 (새 숙소이므로 거부 목록도 초기화)
+        # 새 상품/숙소 = 새 작업 공간 (이전 작업의 씬·사진·거부 목록과 완전히 분리)
+        start_new_job(source_url=target_url.strip(), mode="travel" if is_travel_mode else "commerce")
         st.session_state.gallery_images = []
         st.session_state.scraped_data = None
-        st.session_state.rejected_urls = set()
 
         # 최신 크롤러 모듈 강제 핫 리로드 (Streamlit 장시간 구동 시 모듈 캐시 갱신 보장)
         import importlib
@@ -348,6 +405,7 @@ if crawl_btn:
 
             scraped = core.scraper.scrape_product_info(
                 url=clean_url,
+                output_image_dir=current_job().assets_dir,
                 mode="travel" if is_travel_mode else "commerce",
                 max_gallery_images=7
             )
@@ -380,7 +438,7 @@ if crawl_btn:
                     if scraped.get("image_path") and os.path.exists(scraped["image_path"]):
                         with st.spinner("✂️ rembg AI로 제품 누끼(배경 투명화)를 자동 추출하고 있습니다..."):
                             try:
-                                cutout_p = extract_product_cutout(scraped["image_path"])
+                                cutout_p = extract_product_cutout(scraped["image_path"], current_job().asset_path("product_cutout.png"))
                                 st.session_state.cutout_path = cutout_p
                                 st.toast("제품 누끼 추출 완료!", icon="✨")
                             except Exception as e:
@@ -420,20 +478,21 @@ if is_travel_mode:
 
     # 📷 수동 이미지 파일 업로드 Fallback UI
     uploaded_files = st.file_uploader(
-        "📷 숙소/여행지 사진 직접 올리기 (선택 사항)",
+        "📷 숙소 사진·스마트폰 영상 직접 올리기 (선택 사항)",
         accept_multiple_files=True,
-        type=['jpg', 'jpeg', 'png'],
-        help="업로드 순서대로 씬 1부터 배정됩니다. 특정 씬만 바꾸려면 아래 씬별 '다른 사진으로 변경'에서 업로드하세요."
+        type=UPLOAD_TYPES,
+        help="사진(JPG/PNG)과 스마트폰 영상(MP4/MOV)을 섞어 올릴 수 있습니다. 업로드 순서대로 씬 1부터 배정되며, "
+             "영상은 자동으로 세로 크롭·무음 처리되어 Ken Burns 대신 실제 영상으로 들어갑니다."
     )
     if uploaded_files:
-        new_uploaded_paths = [save_uploaded_image(up_file) for up_file in uploaded_files[:7]]
+        new_uploaded_paths = [save_uploaded_file(up_file) for up_file in uploaded_files[:10]]
         if new_uploaded_paths != st.session_state.uploaded_paths:
             st.session_state.uploaded_paths = new_uploaded_paths
             # 이미 기획된 스토리보드가 있으면 즉시 씬 키로 배정 (없으면 기획 직후 배정)
             if st.session_state.storyboard:
                 assign_uploads_to_scenes(st.session_state.storyboard, new_uploaded_paths)
             print(f"[app.py] 수동 업로드 이미지 반영 ({len(new_uploaded_paths)}장): {new_uploaded_paths}")
-            st.toast(f"📷 직접 업로드한 실물 사진 {len(new_uploaded_paths)}장 반영 완료!", icon="✨")
+            st.toast(f"📷 직접 업로드한 사진/영상 {len(new_uploaded_paths)}개 반영 완료!", icon="✨")
             st.rerun()
 else:
     # [일반 커머스 모드] 선택 시: 단일 대표 이미지 및 투명 누끼 PNG 박스 노출
@@ -486,18 +545,19 @@ if generate_plan_btn:
                 api_key=api_key,
                 mode="travel" if is_travel_mode else "commerce",
                 script_style=selected_script_style,
-                photo_inventory=photo_inventory
+                photo_inventory=photo_inventory,
+                output_plan_path=current_job().plan_path
             )
             st.session_state.storyboard = scenes
 
             # [Step 3. 씬별 에셋 배정] 업로드 사진 우선 배정 → 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
             if is_travel_mode:
                 assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths)
-                pending = [s for s in scenes if not s.get("image_path")]
+                pending = [s for s in scenes if not scene_has_media(s)]
                 if pending and st.session_state.get("image_pool"):
                     with st.spinner("🎯 씬별 최적 사진을 매칭하고 비전 검증 중 (자판기·복도·외벽 등 자동 탈락)..."):
                         rematch_scenes(pending, api_key)
-                matched = sum(1 for s in scenes if s.get("image_path"))
+                matched = sum(1 for s in scenes if scene_has_media(s))
                 if matched:
                     st.toast(f"🎯 {matched}/{len(scenes)}개 씬 사진 배정 완료!", icon="✨")
                 if matched < len(scenes):
@@ -557,8 +617,7 @@ if st.session_state.storyboard:
             merged["caption"] = text_content
         merged_records.append(merged)
     st.session_state.storyboard = merged_records
-    with open("storyboard_plan.json", "w", encoding="utf-8") as f:
-        json.dump(merged_records, f, ensure_ascii=False, indent=2, default=str)
+    current_job().save_plan(merged_records)
 
     # 여행 상품 모드: 씬별 사진 갤러리 (씬 키 기준) 및 수동 교체/거부/업로드
     if is_travel_mode:
@@ -595,7 +654,23 @@ if st.session_state.storyboard:
                     st.caption(f"**씬 {s_num} [{v_role.upper()}]**\n\n`{kw_str}`")
 
                     img_p = scene.get("image_path")
-                    if img_p and os.path.exists(img_p):
+                    video_media = scene.get("media") if (scene.get("media") or {}).get("type") == "video" else None
+                    if video_media and os.path.exists(video_media.get("path", "")):
+                        st.video(video_media["path"])
+                        try:
+                            v_info = probe_media(video_media["path"])
+                            st.caption(f"🎬 직접 촬영 영상 · {v_info.duration:.1f}초 · {'세로' if v_info.is_portrait else '가로(흐린 배경 채움)'}"
+                                       f"{' · HDR→SDR' if v_info.is_hdr else ''}")
+                            trim = st.number_input(
+                                "사용 시작 지점(초)", min_value=0.0, max_value=max(0.0, round(v_info.duration - 0.5, 1)),
+                                value=float(min(video_media.get("trim_start", DEFAULT_TRIM_START), max(0.0, v_info.duration - 0.5))),
+                                step=0.5, key=f"trim_{s_num}"
+                            )
+                            if abs(trim - float(video_media.get("trim_start", DEFAULT_TRIM_START))) > 1e-6:
+                                video_media["trim_start"] = float(trim)
+                        except Exception as ve:
+                            st.error(f"영상 정보를 읽을 수 없습니다: {ve}")
+                    elif img_p and os.path.exists(img_p):
                         st.image(img_p, use_container_width=True)
                         verdict = scene.get("vision_verdict") or {}
                         if scene.get("asset_status") == "uploaded":
@@ -611,7 +686,7 @@ if st.session_state.storyboard:
                         st.warning("사진 없음")
 
                     with st.popover("🔄 다른 사진으로 변경", use_container_width=True):
-                        st.markdown(f"**씬 {s_num} 사진 교체**")
+                        st.markdown(f"**씬 {s_num} 사진/영상 교체**")
 
                         # ① 이 사진 거부 → 자동 재선별 (거부 사진은 이후 재등장 금지)
                         if st.session_state.get("image_pool") and st.button(
@@ -625,16 +700,19 @@ if st.session_state.storyboard:
 
                         # ② 내 사진 업로드
                         up = st.file_uploader(
-                            "📷 내 사진으로 교체", type=["jpg", "jpeg", "png"], key=f"scene_upload_{s_num}"
+                            "📷 내 사진·영상으로 교체", type=UPLOAD_TYPES, key=f"scene_upload_{s_num}"
                         )
                         if up is not None:
-                            up_path = save_uploaded_image(up)
+                            up_path = save_uploaded_file(up)
                             applied_key = f"applied_upload_{s_num}"
                             if st.session_state.get(applied_key) != up_path:
                                 st.session_state[applied_key] = up_path
-                                assign_image_to_scene(scene, up_path, "uploaded")
-                                st.toast(f"씬 {s_num} 사진을 업로드한 사진으로 교체했습니다!", icon="📷")
-                                st.rerun()
+                                try:
+                                    assign_media_to_scene(scene, up_path, "uploaded")
+                                    st.toast(f"씬 {s_num}을(를) 업로드한 {'영상' if is_video_file(up_path) else '사진'}으로 교체했습니다!", icon="📷")
+                                    st.rerun()
+                                except Exception as ue:
+                                    st.error(f"업로드 파일을 사용할 수 없습니다: {ue}")
 
                         # ③ 크롤링 후보에서 직접 선택
                         if clean_pool:
@@ -656,13 +734,13 @@ if st.session_state.storyboard:
                                         timeout=12
                                     )
                                     if resp.status_code == 200 and len(resp.content) >= 30000:
-                                        save_p = os.path.abspath(os.path.join(CACHE_DIR, f"scene_{s_num:02d}.jpg"))
+                                        save_p = current_job().scene_asset(s_num, ".jpg")
                                         with open(save_p, "wb") as f:
                                             f.write(resp.content)
                                         old_url = scene.get("matched_image_url")
                                         if old_url and old_url != target_cand["url"]:
                                             st.session_state.rejected_urls.add(old_url)
-                                        assign_image_to_scene(scene, save_p, "manual", matched_url=target_cand["url"])
+                                        assign_media_to_scene(scene, save_p, "manual", matched_url=target_cand["url"])
                                         st.toast(f"씬 {s_num} 사진이 교체되었습니다!", icon="🎉")
                                         st.rerun()
                                     else:
@@ -691,7 +769,7 @@ if render_btn:
         # 여행 모드: 실물 사진이 없는 씬이 있으면 렌더링 중단 (순번 대체·AI 가짜 숙소 사진 금지)
         missing_scenes = [
             _scene_num(s, i + 1) for i, s in enumerate(scenes)
-            if not (s.get("image_path") and os.path.exists(s["image_path"]))
+            if not scene_has_media(s)
         ] if (is_travel_mode and not mock_mode) else []
         if missing_scenes:
             st.error(f"씬 {', '.join(map(str, missing_scenes))}에 사진이 없습니다. 위 갤러리에서 사진을 교체하거나 업로드한 뒤 다시 시도해 주세요.")
@@ -707,7 +785,8 @@ if render_btn:
                 voice_actor=chosen_actor,
                 audio_mode=selected_audio_mode,
                 mock=mock_mode,
-                mode="travel" if is_travel_mode else "commerce"
+                mode="travel" if is_travel_mode else "commerce",
+                cache_dir=current_job().assets_dir
             )
 
             manifest = []
@@ -739,7 +818,7 @@ if render_btn:
                 # 일반 커머스 모드: 제품 누끼가 존재하고 씬 2인 경우 누끼 합성 (여행 모드는 절대 실행 안 함)
                 if not is_travel_mode and st.session_state.cutout_path and os.path.exists(st.session_state.cutout_path):
                     if s_num == 2:
-                        comp_img_path = os.path.join("outputs/cache", f"scene_{s_num:02d}_comp.png")
+                        comp_img_path = current_job().scene_asset(s_num, ".png", suffix="_comp")
                         try:
                             composite_cutout_on_background(
                                 background_path=img_path,
@@ -757,7 +836,7 @@ if render_btn:
                 # 음성 생성
                 audio_path = asset_gen.generate_voice(scene, force=force_render)
 
-                # 비디오 생성 (로컬 2D Ken Burns 팬앤줌 모션 24fps 9:16 풀스크린 MP4 합성 - 외부 비디오 API 차단)
+                # 비디오 생성 (업로드 영상이면 UGC 정규화 클립, 아니면 로컬 2D Ken Burns 모션 - 외부 비디오 API 차단)
                 video_path = asset_gen.generate_video(scene, img_path, force=force_render)
 
                 item = dict(scene)
@@ -779,15 +858,17 @@ if render_btn:
             progress_bar.progress(75, text="타임라인 조립, 상단 후킹 바 및 볼드 자막 오버레이 렌더링 중...")
             importlib.reload(core.compositor)
             from core.compositor import AdCompositor
-            compositor = AdCompositor()
-            
+            compositor = AdCompositor(output_dir=current_job().final_dir)
+
             final_mp4 = compositor.assemble_ad(
                 asset_manifest=manifest,
-                output_filename="final_ad.mp4",
+                output_filename="final.mp4",
                 fps=24,
                 audio_mode=selected_audio_mode,
-                mode="travel" if is_travel_mode else "commerce"
+                mode="travel" if is_travel_mode else "commerce",
+                brand=brand_cfg
             )
+            current_job().save_plan(scenes)
 
             progress_bar.progress(100, text="✨ 렌더링 완료!")
             st.session_state.final_video_path = final_mp4
@@ -825,7 +906,8 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         st.markdown(f"""
         - **제작 모드**: {production_mode}
         - **해상도**: 1080 x 1920 (9:16 Vertical Video)
-        - **비디오 렌더링**: 로컬 2D Ken Burns 모션 (24 FPS, H.264 / AAC, 비용 0원)
+        - **비디오 렌더링**: 로컬 2D Ken Burns 모션 + 직접 촬영 영상 (24 FPS, H.264 / AAC, 비용 0원)
+        - **작업 ID**: `{current_job().job_id}`
         - **적용 톤앤매너**: {selected_tone_label}
         - **적용 성우**: {selected_actor_label} ({audio_mode_options[selected_audio_mode]})
         - **자막 폰트**: Pretendard-Black (Weight 900)

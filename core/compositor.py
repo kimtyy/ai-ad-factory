@@ -18,11 +18,15 @@ from moviepy.editor import (
 
 import urllib.request
 
+from core.render.brand import BrandOverlay
+
 logger = logging.getLogger("ad_factory.compositor")
 
 
 class AdCompositor:
-    def __init__(self, output_dir: str = "outputs/final", font_dir: str = "fonts"):
+    def __init__(self, output_dir: Optional[str] = None, font_dir: str = "fonts"):
+        if not output_dir:
+            raise ValueError("output_dir가 필요합니다. JobContext.final_dir을 전달하세요.")
         self.output_dir = output_dir
         self.font_dir = font_dir
         os.makedirs(self.output_dir, exist_ok=True)
@@ -272,23 +276,27 @@ class AdCompositor:
     def assemble_ad(
         self,
         asset_manifest: List[Dict[str, Any]],
-        output_filename: str = "final_ad.mp4",
+        output_filename: str = "final.mp4",
         fps: int = 24,
         bgm_path: Optional[str] = None,
         audio_mode: str = "voice_and_sub",
         mode: str = "commerce",
+        brand: Optional[BrandOverlay] = None,
         **kwargs
     ) -> str:
         """
         Step 3: 각 씬별 비디오와 오디오를 오디오 길이에 맞춰 컷팅하고,
         상단 후킹 바 및 런비 스타일 중앙 자막을 합성한 뒤 최종 광고 비디오 결합.
         audio_mode가 'voice_and_bgm'이거나 bgm_path가 주어지면 15% 볼륨으로 BGM 동시 믹싱.
+        brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
         logger.info(f"Step 3 시작 (모드={mode}): 타임라인 조립, 자막 오버레이 합성 진행 (총 {len(asset_manifest)}개 씬, 오디오 모드: {audio_mode})")
 
         processed_clips = []
         opened_clips = []
+        watermark_cache = {}
+        has_end_card = bool(brand and brand.end_card)
 
         try:
             for idx, item in enumerate(asset_manifest, 1):
@@ -330,7 +338,7 @@ class AdCompositor:
 
                 # 4. 상단 후킹 바 & 런비 스타일 중앙 자막 오버레이 생성
                 w, h = synced_video.size
-                if caption_text or hook_title:
+                if caption_text or hook_title or brand:
                     if mode == "travel":
                         logger.info(f"씬 {scene_num} [런비 스타일] 중앙 자막 오버레이 렌더링 (화면 46%): '{caption_text}'")
                     elif hook_title and hook_title.strip():
@@ -345,6 +353,12 @@ class AdCompositor:
                         height=h,
                         mode=mode
                     )
+                    if brand:
+                        if (w, h) not in watermark_cache:
+                            watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
+                        merged = Image.fromarray(overlay_img_arr).convert("RGBA")
+                        merged.alpha_composite(watermark_cache[(w, h)])
+                        overlay_img_arr = np.array(merged)
                     sub_clip = ImageClip(overlay_img_arr, ismask=False).set_duration(scene_target_duration)
                     opened_clips.append(sub_clip)
                     # 비디오 위에 오버레이 클립 합성
@@ -353,8 +367,8 @@ class AdCompositor:
                 # 5. 오디오 결합 (오디오가 완전히 끝난 뒤에도 화면이 0.3~0.5초간 머물도록 비디오 길이에 맞춤)
                 synced_video = synced_video.set_audio(audio_clip)
 
-                # 6. 마지막 씬은 오디오 끝난 후 0.4초간 자연스러운 페이드아웃 적용
-                if is_last_scene:
+                # 6. 마지막 씬은 오디오 끝난 후 0.4초간 자연스러운 페이드아웃 적용 (엔딩 카드가 있으면 카드에서 페이드아웃)
+                if is_last_scene and not has_end_card:
                     try:
                         synced_video = synced_video.fadeout(0.4)
                     except Exception as fe:
@@ -365,6 +379,16 @@ class AdCompositor:
 
             if not processed_clips:
                 raise ValueError("합성할 유효한 비디오 클립이 없습니다.")
+
+            # 브랜드 엔딩 카드: 마지막 장면의 마지막 프레임을 흐리게 깔고 상호명 + 검색 유도 그래픽 표시
+            if has_end_card:
+                last_clip = processed_clips[-1]
+                last_frame = last_clip.get_frame(max(0, last_clip.duration - 0.05))
+                card_arr = brand.render_end_card(last_frame, font_path=self.font_path)
+                card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec)).fadein(0.3).fadeout(0.4)
+                opened_clips.append(card_clip)
+                processed_clips.append(card_clip)
+                logger.info(f"브랜드 엔딩 카드 추가 ({brand.end_card.duration_sec:.1f}초): '{brand.business_name}' / 검색어 '{brand.end_card.search_keyword}'")
 
             # 전체 씬 결합
             logger.info(f"전체 {len(processed_clips)}개 클립 타임라인 결합 중...")
@@ -400,8 +424,12 @@ class AdCompositor:
 
             logger.info(f"최종 렌더링 시작 -> {final_output_path} (FPS: {fps}, Codec: libx264, Audio: aac)")
 
+            # MoviePy 임시 오디오 파일을 작업 폴더 안에 생성 (CWD 오염 및 세션 간 충돌 방지)
+            temp_audio_path = os.path.join(self.output_dir, os.path.splitext(output_filename)[0] + "_TEMP_MPY_audio.m4a")
             final_composite.write_videofile(
                 final_output_path,
+                temp_audiofile=temp_audio_path,
+                remove_temp=True,
                 fps=fps,
                 codec="libx264",
                 audio_codec="aac",

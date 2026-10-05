@@ -24,6 +24,8 @@ from rich.panel import Panel
 from core.analyzer import plan_storyboard
 from core.asset_generator import AssetGenerator
 from core.compositor import AdCompositor
+from core.job import JobContext
+from core.render.brand import BrandOverlay, EndCard
 
 # 환경 변수 로드
 load_dotenv()
@@ -67,7 +69,7 @@ def check_env_keys(mock: bool = False) -> dict:
     return keys
 
 def display_storyboard_table(scenes: list):
-    table = Table(title="[Storyboard Plan] 씬별 콘티 기획안 (storyboard_plan.json)", show_lines=True)
+    table = Table(title="[Storyboard Plan] 씬별 콘티 기획안 (storyboard.json)", show_lines=True)
     table.add_column("씬", justify="center", style="cyan", no_wrap=True)
     table.add_column("길이", justify="center", style="green", no_wrap=True)
     table.add_column("상단 후킹 바 (Hook Title)", style="bold bright_yellow")
@@ -112,7 +114,10 @@ def main():
     )
     parser.add_argument("--mock", action="store_true", help="실제 API 호출 대신 모의 에셋으로 파이프라인 전체를 빠르게 테스트")
     parser.add_argument("--force", action="store_true", help="기존 캐시 파일 및 기존 기획안을 무시하고 강제로 재생성")
-    parser.add_argument("--plan-file", type=str, default="storyboard_plan.json", help="스토리보드 기획 JSON 파일 경로")
+    parser.add_argument("--job-id", type=str, default=None, help="이어서 작업할 job ID (미지정 시 outputs/jobs/ 아래 새 작업 생성, --step generate/compose는 필수)")
+    parser.add_argument("--brand-name", type=str, default=None, help="[B2B] 상호명 워터마크 + 검색 유도 엔딩 카드 적용")
+    parser.add_argument("--brand-logo", type=str, default=None, help="[B2B] 로고 이미지 경로 (선택)")
+    parser.add_argument("--search-keyword", type=str, default=None, help="[B2B] 엔딩 카드 검색어 (미지정 시 상호명)")
 
     args = parser.parse_args()
     setup_logging()
@@ -124,6 +129,16 @@ def main():
     if not args.usp:
         args.usp = "전 객실 파노라마 오션뷰, 야외 온수 인피니티 풀, 프라이빗 자쿠지" if args.mode == "travel" else "속당김 즉각 해결, 48시간 고보습 지속"
 
+    # 작업 공간: 새 작업이면 생성, 단계별 이어서 실행이면 기존 job 로드
+    if args.job_id:
+        job = JobContext.load(args.job_id)
+    elif args.step in ("generate", "compose"):
+        console.print("[bold red]오류:[/bold red] --step generate/compose는 --job-id로 이어서 작업할 작업을 지정해야 합니다.")
+        sys.exit(1)
+    else:
+        job = JobContext.create(app="cli", mode=args.mode, source_url=args.url)
+    console.print(f"[bold green]>> 작업 공간:[/bold green] {job.workdir} (job-id: {job.job_id})")
+
     image_pool = []
     photo_inventory = None
 
@@ -131,7 +146,7 @@ def main():
     if args.url:
         from core.scraper import scrape_product_info
         console.print(f"[bold cyan]>> 상세 페이지 크롤링 중 (모드={args.mode}):[/bold cyan] {args.url}")
-        scraped = scrape_product_info(args.url, mode=args.mode)
+        scraped = scrape_product_info(args.url, output_image_dir=job.assets_dir, mode=args.mode)
         if scraped["success"]:
             args.product = scraped.get("product_name") or args.product
             args.usp = scraped.get("usp") or args.usp
@@ -166,7 +181,7 @@ def main():
                 tone_and_manner=args.tone,
                 duration_preset=args.duration,
                 audio_mode=args.audio_mode,
-                output_plan_path=args.plan_file,
+                output_plan_path=job.plan_path,
                 mock=args.mock,
                 force=args.force,
                 api_key=keys.get("GEMINI_API_KEY"),
@@ -179,24 +194,22 @@ def main():
                 download_targeted_scene_assets(
                     scenes=scenes,
                     image_pool=image_pool,
-                    output_dir="outputs/cache",
+                    output_dir=job.assets_dir,
                     api_key=keys.get("GEMINI_API_KEY")
                 )
-                with open(args.plan_file, "w", encoding="utf-8") as f:
-                    json.dump(scenes, f, ensure_ascii=False, indent=2, default=str)
+            job.save_plan(scenes)
             display_storyboard_table(scenes)
-            console.print(f"[bold green][OK] Step 1 완료![/bold green] 기획안 저장: [underline]{args.plan_file}[/underline]\n")
+            console.print(f"[bold green][OK] Step 1 완료![/bold green] 기획안 저장: [underline]{job.plan_path}[/underline]\n")
         except Exception as e:
             console.print(f"[bold red][ERROR] Step 1 실행 중 오류 발생:[/bold red] {e}")
             sys.exit(1)
     else:
-        # Step 2나 3만 개별 실행 시 기존 storyboard_plan.json 로드
-        if os.path.exists(args.plan_file):
-            with open(args.plan_file, "r", encoding="utf-8") as f:
-                scenes = json.load(f)
-            console.print(f"[dim]기존 '{args.plan_file}' 파일에서 {len(scenes)}개 씬 기획을 로드했습니다.[/dim]\n")
+        # Step 2나 3만 개별 실행 시 해당 job의 storyboard.json 로드
+        scenes = job.load_plan()
+        if scenes:
+            console.print(f"[dim]'{job.plan_path}'에서 {len(scenes)}개 씬 기획을 로드했습니다.[/dim]\n")
         else:
-            console.print(f"[bold red]오류:[/bold red] '{args.plan_file}' 파일이 없습니다. 먼저 Step 1을 실행하세요.")
+            console.print(f"[bold red]오류:[/bold red] '{job.plan_path}' 파일이 없습니다. 먼저 Step 1을 실행하세요.")
             sys.exit(1)
 
     if args.step == "analyze":
@@ -215,7 +228,7 @@ def main():
                 tts_lang="ko",
                 voice_actor=args.actor,
                 audio_mode=args.audio_mode,
-                cache_dir="outputs/cache",
+                cache_dir=job.assets_dir,
                 mock=args.mock,
                 mode=args.mode
             )
@@ -224,6 +237,7 @@ def main():
                 missing = [
                     sc.get("scene_index") for sc in scenes
                     if not (sc.get("image_path") and os.path.exists(sc["image_path"]))
+                    and not AssetGenerator.scene_video_media(sc)
                 ]
                 if missing:
                     raise ValueError(f"씬 {missing}에 매칭된 실물 사진이 없습니다. 웹 대시보드에서 교체/업로드해 주세요.")
@@ -232,20 +246,20 @@ def main():
                 scenes=scenes,
                 force=args.force
             )
-            console.print(f"[bold green][OK] Step 2 완료![/bold green] 총 {len(manifest)}개 씬 에셋이 outputs/cache/ 에 준비되었습니다.\n")
+            console.print(f"[bold green][OK] Step 2 완료![/bold green] 총 {len(manifest)}개 씬 에셋이 {job.assets_dir} 에 준비되었습니다.\n")
         except Exception as e:
             console.print(f"[bold red][ERROR] Step 2 실행 중 오류 발생:[/bold red] {e}")
             sys.exit(1)
     else:
-        # Step 3만 실행하는 경우 outputs/cache 매니페스트 재구성
+        # Step 3만 실행하는 경우 해당 job의 assets/ 에서 매니페스트 재구성
         for idx, sc in enumerate(scenes, 1):
             s_num = int(sc.get("scene_index") or sc.get("scene_number", idx))
             manifest.append({
                 "scene_number": s_num,
                 "scene_index": s_num,
-                "image_path": f"outputs/cache/scene_{s_num:02d}.png",
-                "audio_path": f"outputs/cache/scene_{s_num:02d}.mp3",
-                "video_path": f"outputs/cache/scene_{s_num:02d}.mp4",
+                "image_path": job.scene_asset(s_num, ".png"),
+                "audio_path": job.scene_asset(s_num, ".mp3"),
+                "video_path": job.scene_asset(s_num, ".mp4"),
                 "caption": sc.get("caption") or sc.get("voiceover", ""),
                 "hook_title": sc.get("hook_title", "")
             })
@@ -260,12 +274,21 @@ def main():
     if args.step in ["all", "compose"]:
         console.rule("[bold cyan]Step 3: 비디오-오디오 싱크 매칭 & 타임라인 조립 (Compositor)[/bold cyan]")
         try:
-            compositor = AdCompositor(output_dir="outputs/final")
+            brand = None
+            if args.brand_name:
+                brand = BrandOverlay(
+                    business_name=args.brand_name,
+                    logo_path=args.brand_logo,
+                    end_card=EndCard(search_keyword=args.search_keyword or args.brand_name),
+                )
+            compositor = AdCompositor(output_dir=job.final_dir)
             final_video_path = compositor.assemble_ad(
                 asset_manifest=manifest,
-                output_filename="final_ad.mp4",
+                output_filename="final.mp4",
                 fps=24,
-                mode=args.mode
+                audio_mode=args.audio_mode,
+                mode=args.mode,
+                brand=brand
             )
             console.print(Panel(
                 f"[bold green]최종 광고 영상 제작 완료![/bold green]\n\n"

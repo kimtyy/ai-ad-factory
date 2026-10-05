@@ -422,7 +422,7 @@ CDN_DOWNLOAD_HEADERS = {
 
 def scrape_product_info(
     url: str,
-    output_image_dir: str = "outputs/cache",
+    output_image_dir: Optional[str] = None,
     mode: str = "commerce",
     max_gallery_images: int = 7
 ) -> Dict[str, Any]:
@@ -430,6 +430,8 @@ def scrape_product_info(
     쇼핑몰 또는 숙소/여행 상품 URL을 분석하여 제품명, USP(소구점 설명), 대표 이미지 URL 및
     여행 상품 모드용 다중 갤러리 컷(5~7장)을 추출하여 로컬 저장 경로를 반환합니다.
     """
+    if not output_image_dir:
+        raise ValueError("output_image_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
     os.makedirs(output_image_dir, exist_ok=True)
     logger.info(f"URL 크롤링 시작 (모드={mode}): {url}")
     print(f"\n[Scraper] URL 크롤링 시작: {url} (모드={mode})")
@@ -759,7 +761,7 @@ def score_candidate_for_scene(cand: Dict[str, Any], target_role: str, keywords: 
 def download_targeted_scene_assets(
     scenes: List[Dict[str, Any]],
     image_pool: List[Dict[str, Any]],
-    output_dir: str = "outputs/cache",
+    output_dir: Optional[str] = None,
     api_key: Optional[str] = None,
     exclude_urls: Optional[set] = None,
     vision_cache: Optional[Dict[str, Any]] = None
@@ -772,6 +774,8 @@ def download_targeted_scene_assets(
     - api_key가 있으면 텍스트 상위 후보를 Gemini 비전으로 재판정하여 reject/저적합 사진을 탈락시킵니다.
       비전 판정을 통과한 사진이 없으면 그 씬은 'missing'으로 남기고 억지로 아무 사진이나 채우지 않습니다.
     """
+    if not output_dir:
+        raise ValueError("output_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
     os.makedirs(output_dir, exist_ok=True)
     excluded = set(exclude_urls or set())
     used_urls = set()
@@ -796,11 +800,11 @@ def download_targeted_scene_assets(
         keywords = _scene_keywords(scene)
 
         # 0. 이 씬의 이전 결과 및 파생 캐시만 삭제 (다른 씬 파일은 건드리지 않음)
-        for key in ("image_path", "matched_image_url", "vision_verdict"):
+        for key in ("image_path", "matched_image_url", "vision_verdict", "media"):
             scene.pop(key, None)
         scene["asset_status"] = "missing"
-        for ext in (".jpg", ".png", ".mp4"):
-            stale = os.path.join(output_dir, f"scene_{s_num:02d}{ext}")
+        for suffix in (".jpg", ".png", ".mp4", ".mp4.json", "_thumb.jpg"):
+            stale = os.path.join(output_dir, f"scene_{s_num:02d}{suffix}")
             if os.path.exists(stale):
                 try:
                     os.remove(stale)

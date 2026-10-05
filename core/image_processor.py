@@ -11,7 +11,7 @@ logger = logging.getLogger("ad_factory.image_processor")
 
 def extract_product_cutout(
     input_image_path: str,
-    output_cutout_path: str = "outputs/cache/product_cutout.png"
+    output_cutout_path: str
 ) -> str:
     """
     rembg 라이브러리를 사용하여 제품 원본 이미지에서 배경을 제거하고 투명 PNG(RGBA)를 생성합니다.

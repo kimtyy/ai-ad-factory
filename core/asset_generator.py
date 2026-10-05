@@ -17,8 +17,11 @@ from google import genai
 from google.genai import types
 from gtts import gTTS
 import imageio_ffmpeg
+import json
 
 from core.guardrail import validate_model_call
+from core.media import normalize_ugc_clip, extract_thumbnail
+from core.media.normalize import DEFAULT_TRIM_START
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
@@ -145,10 +148,12 @@ class AssetGenerator:
         audio_speed: float = 1.15, # 쇼츠 광고 최적의 자연스럽고 경쾌한 배속(1.1~1.15배속)
         voice_actor: str = "female_20s",
         audio_mode: str = "voice_and_sub",
-        cache_dir: str = "outputs/cache",
+        cache_dir: Optional[str] = None,
         mock: bool = False,
         mode: str = "commerce"
     ):
+        if not cache_dir:
+            raise ValueError("cache_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self.tts_lang = tts_lang
         self.audio_speed = audio_speed
@@ -178,6 +183,14 @@ class AssetGenerator:
     ) -> str:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.png")
+
+        # 스마트폰 직접 촬영 영상 씬: 대표 프레임을 키프레임(갤러리/누끼 합성용)으로 사용
+        video_media = self.scene_video_media(scene)
+        if video_media:
+            thumb_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_thumb.jpg")
+            if force or not self.is_cached(thumb_path) or os.path.getmtime(thumb_path) < os.path.getmtime(video_media["path"]):
+                extract_thumbnail(video_media["path"], thumb_path, at=float(video_media.get("trim_start", DEFAULT_TRIM_START)) + 0.3)
+            return thumb_path
 
         # 여행 상품 모드: 수집된 갤러리 컷 1:1 매핑 (rembg 누끼 및 Imagen 3 완전 바이패스)
         if gallery_image_path and os.path.exists(gallery_image_path):
@@ -566,6 +579,10 @@ class AssetGenerator:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp4")
 
+        video_media = self.scene_video_media(scene)
+        if video_media:
+            return self._generate_ugc_video(scene, video_media, out_path, force)
+
         if not force and self.is_cached(out_path):
             img_mtime = os.path.getmtime(image_path) if os.path.exists(image_path) else 0
             vid_mtime = os.path.getmtime(out_path)
@@ -606,6 +623,52 @@ class AssetGenerator:
             focus_bottom=is_focus_bottom
         )
         logger.info(f"씬 {scene_num} Ken Burns 비디오 렌더링 완료 -> {out_path}")
+        return out_path
+
+    # -------------------------------------------------------------
+    # 3-1. 스마트폰 직접 촬영 영상(UGC) 클립
+    # -------------------------------------------------------------
+    @staticmethod
+    def scene_video_media(scene: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """씬에 업로드 영상이 배정되어 있으면 media dict 반환 ({'type': 'video', 'path', 'trim_start', 'fit'})"""
+        media = scene.get("media")
+        if isinstance(media, dict) and media.get("type") == "video" and media.get("path") and os.path.exists(media["path"]):
+            return media
+        return None
+
+    def _generate_ugc_video(self, scene: Dict[str, Any], media: Dict[str, Any], out_path: str, force: bool) -> str:
+        """업로드 영상을 씬 길이에 맞춰 트림/정규화(1080x1920, 24fps CFR, 무음)하여 Ken Burns 클립 자리에 배치"""
+        scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
+        # Ken Burns와 동일하게 나레이션 + 테일 마진을 덮는 길이로 생성 (compositor가 오디오 길이에 맞춰 컷)
+        duration_sec = max(float(scene.get("duration_sec", 3.0)) + 2.0, 5.0)
+        signature = {
+            "src": os.path.abspath(media["path"]),
+            "src_mtime": os.path.getmtime(media["path"]),
+            "trim_start": float(media.get("trim_start", DEFAULT_TRIM_START)),
+            "fit": media.get("fit", "auto"),
+            "duration": duration_sec,
+        }
+        sig_path = out_path + ".json"
+        if not force and self.is_cached(out_path) and os.path.exists(sig_path):
+            try:
+                with open(sig_path, "r", encoding="utf-8") as f:
+                    if json.load(f) == signature:
+                        logger.info(f"[Cache Hit] 씬 {scene_num} UGC 클립 이미 존재: {out_path}")
+                        return out_path
+            except Exception:
+                pass
+
+        logger.info(f"[UGC Video] 씬 {scene_num} 직접 촬영 영상 정규화 (시작 {signature['trim_start']:.1f}초, 길이 {duration_sec:.1f}초)")
+        normalize_ugc_clip(
+            src=media["path"],
+            dst=out_path,
+            duration=duration_sec,
+            start=signature["trim_start"],
+            fps=24,
+            fit=signature["fit"]
+        )
+        with open(sig_path, "w", encoding="utf-8") as f:
+            json.dump(signature, f)
         return out_path
 
     # -------------------------------------------------------------
