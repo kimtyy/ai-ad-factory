@@ -22,6 +22,9 @@ from core.render.brand import BrandOverlay
 
 logger = logging.getLogger("ad_factory.compositor")
 
+# 화면 중앙(46%) 자막 + 후킹 바 동시 노출 스타일을 쓰는 모드 (실사 공간 영상)
+CENTER_CAPTION_MODES = ("travel", "owner")
+
 
 class AdCompositor:
     def __init__(self, output_dir: Optional[str] = None, font_dir: str = "fonts"):
@@ -207,7 +210,7 @@ class AdCompositor:
                         stroke_fill=(0, 0, 0)
                     )
 
-            if mode != "travel":
+            if mode not in CENTER_CAPTION_MODES:
                 # 커머스 모드는 씬 1에서 후킹 바 단독 노출
                 return np.array(img)
 
@@ -217,8 +220,8 @@ class AdCompositor:
         if caption_text and caption_text.strip():
             sub_text = caption_text.strip()
 
-            if mode == "travel":
-                # [여행 상품 전용 런비 스타일]: 시선 집중 중앙(46% 지점), 순백색(#FFFFFF) + 굵은 검은색 테두리(5px) + 드롭 섀도우
+            if mode in CENTER_CAPTION_MODES:
+                # [여행/사장님 공통 런비 스타일]: 시선 집중 중앙(46% 지점), 순백색(#FFFFFF) + 굵은 검은색 테두리(5px) + 드롭 섀도우
                 sub_font_size = int(width * 0.072)
                 center_y_sub = int(height * 0.46)
                 stroke_width = 5
@@ -339,7 +342,7 @@ class AdCompositor:
                 # 4. 상단 후킹 바 & 런비 스타일 중앙 자막 오버레이 생성
                 w, h = synced_video.size
                 if caption_text or hook_title or brand:
-                    if mode == "travel":
+                    if mode in CENTER_CAPTION_MODES:
                         logger.info(f"씬 {scene_num} [런비 스타일] 중앙 자막 오버레이 렌더링 (화면 46%): '{caption_text}'")
                     elif hook_title and hook_title.strip():
                         logger.info(f"씬 {scene_num} 상단 후킹 바 단독 렌더링 (모바일 세이프존 17%): '{hook_title}'")

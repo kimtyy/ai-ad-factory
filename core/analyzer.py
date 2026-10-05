@@ -302,6 +302,8 @@ def plan_storyboard(
     - 일반 커머스 모드: 숏폼 퍼포먼스 마케팅 디렉터, 씬별 앵글 다변화, 제품 및 제형 매크로 시연
     - 여행 상품 모드: 대한민국 1등 여행/숙소 숏폼 크리에이티브 디렉터, 숙소명 은닉, 시각적 공간감/물멍, 엔딩 댓글 CTA
     """
+    if mode == "owner":
+        raise ValueError("사장님(owner) 모드는 core.planners.plan_owner_storyboard를 사용하세요 (트랙 A 제휴 플래너와 분리).")
     preset_info = DURATION_PRESETS.get(duration_preset, DURATION_PRESETS["15s"])
     target_total_sec = preset_info["target_sec"]
     if num_scenes is None or num_scenes <= 0:

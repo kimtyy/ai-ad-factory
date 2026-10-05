@@ -25,6 +25,9 @@ from core.media.normalize import DEFAULT_TRIM_START
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
+# 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장 사진은 허위광고)
+REAL_MEDIA_MODES = ("travel", "owner")
+
 
 def num_to_sino_korean(num: int) -> str:
     """숫자를 광고 구어체에 적합한 한자어 발음으로 변환 (예: 48 -> 사십팔, 3 -> 삼)"""
@@ -210,7 +213,7 @@ class AssetGenerator:
                 return gallery_image_path
 
         # 여행 상품 모드는 실물 사진만 허용: AI로 숙소 사진을 지어내면 허위광고가 되므로 생성 대신 중단
-        if self.mode == "travel" and not self.mock:
+        if self.mode in REAL_MEDIA_MODES and not self.mock:
             raise ValueError(
                 f"씬 {scene_num}에 매칭된 실물 사진이 없습니다. 사진을 교체하거나 직접 업로드해 주세요."
             )
@@ -613,6 +616,7 @@ class AssetGenerator:
             motion_type = patterns[(scene_num - 1) % len(patterns)]
 
         logger.info(f"[Local Video Gen] 씬 {scene_num} 2D Ken Burns 모션 합성 시작 (모션: {motion_type}, 길이: {duration_sec:.1f}초, 원본: {image_path})")
+        # 제휴(travel) 모드만 씬 1 상단 간판을 프레임 밖으로 밀어 숙소명을 숨김. 사장님(owner) 모드는 간판 노출이 목적
         is_focus_bottom = bool(scene.get("focus_bottom") or (self.mode == "travel" and scene_num == 1))
         self._create_ken_burns_video(
             image_path=image_path,

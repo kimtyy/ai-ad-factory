@@ -26,6 +26,9 @@ from core.asset_generator import AssetGenerator
 from core.compositor import AdCompositor
 from core.job import JobContext
 from core.render.brand import BrandOverlay, EndCard
+from core.planners import BUSINESS_TYPES, plan_owner_storyboard
+from core.media import is_video_file
+from core.media.normalize import DEFAULT_TRIM_START
 
 # 환경 변수 로드
 load_dotenv()
@@ -95,7 +98,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="AI Short-form Ad Video Factory - 레퍼런스 역기획 및 숏폼 광고 자동 양산 CLI"
     )
-    parser.add_argument("--mode", type=str, choices=["travel", "commerce"], default="travel", help="제작 모드 (travel: 여행 상품 모드, commerce: 일반 커머스 모드)")
+    parser.add_argument("--mode", type=str, choices=["owner", "travel", "commerce"], default="travel",
+                        help="제작 모드 (owner: 사장님 직영 홍보 / travel: 숙소 제휴 쇼츠 / commerce: 쇼핑 제휴 쇼츠)")
+    parser.add_argument("--media", type=str, nargs="*", default=[], help="[owner] 사장님 사진·영상 경로 (순서대로 씬 배정)")
+    parser.add_argument("--business-type", type=str, choices=list(BUSINESS_TYPES), default="food", help="[owner] 업종")
     parser.add_argument("--url", type=str, default=None, help="상품/숙소 상세 페이지 URL (입력 시 정보 및 이미지 자동 수집)")
     parser.add_argument("--ref", type=str, default="reference.mp4", help="레퍼런스 영상 경로 (기본값: reference.mp4)")
     parser.add_argument("--product", type=str, default=None, help="홍보 대상 제품/숙소명 (미입력 시 모드별 기본값 자동 적용)")
@@ -173,21 +179,40 @@ def main():
     if args.step in ["all", "analyze"]:
         console.rule("[bold cyan]Step 1: 콘티 역기획 (Gemini Vision Analyzer)[/bold cyan]")
         try:
-            scenes = plan_storyboard(
-                reference_video_path=args.ref,
-                product_name=args.product,
-                usp=args.usp,
-                num_scenes=args.scenes,
-                tone_and_manner=args.tone,
-                duration_preset=args.duration,
-                audio_mode=args.audio_mode,
-                output_plan_path=job.plan_path,
-                mock=args.mock,
-                force=args.force,
-                api_key=keys.get("GEMINI_API_KEY"),
-                mode=args.mode,
-                photo_inventory=photo_inventory
-            )
+            if args.mode == "owner":
+                # 트랙 B: 업로드 미디어 기반 콘티 (상호명 보존, 네이버 검색 CTA) + 미디어를 씬 키로 배정
+                scenes = plan_owner_storyboard(
+                    business_name=args.product,
+                    usp=args.usp,
+                    business_type=args.business_type,
+                    search_keyword=args.search_keyword or args.product,
+                    media_paths=args.media,
+                    api_key=keys.get("GEMINI_API_KEY"),
+                    mock=args.mock,
+                    thumb_dir=job.assets_dir,
+                )
+                for sc, path in zip(scenes, args.media):
+                    if is_video_file(path):
+                        sc["media"] = {"type": "video", "path": os.path.abspath(path), "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
+                    else:
+                        sc["image_path"] = os.path.abspath(path)
+            else:
+                # 트랙 A: 제휴(숙소/쇼핑) 대본 선기획
+                scenes = plan_storyboard(
+                    reference_video_path=args.ref,
+                    product_name=args.product,
+                    usp=args.usp,
+                    num_scenes=args.scenes,
+                    tone_and_manner=args.tone,
+                    duration_preset=args.duration,
+                    audio_mode=args.audio_mode,
+                    output_plan_path=job.plan_path,
+                    mock=args.mock,
+                    force=args.force,
+                    api_key=keys.get("GEMINI_API_KEY"),
+                    mode=args.mode,
+                    photo_inventory=photo_inventory
+                )
             # 여행 모드: 씬별 실물 사진 매칭 (비전 검증) 후 결과(image_path)를 기획 파일에 함께 저장
             if args.mode == "travel" and image_pool:
                 from core.scraper import download_targeted_scene_assets
@@ -275,11 +300,12 @@ def main():
         console.rule("[bold cyan]Step 3: 비디오-오디오 싱크 매칭 & 타임라인 조립 (Compositor)[/bold cyan]")
         try:
             brand = None
-            if args.brand_name:
+            brand_name = args.brand_name or (args.product if args.mode == "owner" else None)
+            if brand_name:
                 brand = BrandOverlay(
-                    business_name=args.brand_name,
+                    business_name=brand_name,
                     logo_path=args.brand_logo,
-                    end_card=EndCard(search_keyword=args.search_keyword or args.brand_name),
+                    end_card=EndCard(search_keyword=args.search_keyword or brand_name),
                 )
             compositor = AdCompositor(output_dir=job.final_dir)
             final_video_path = compositor.assemble_ad(

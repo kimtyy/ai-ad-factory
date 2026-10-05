@@ -1,0 +1,11 @@
+# 앱 전체 색상 테마 (app.py의 CSS는 레이아웃만 담당)
+[theme]
+base = "dark"
+primaryColor = "#8B5CF6"
+backgroundColor = "#0A0D14"
+secondaryBackgroundColor = "#181B26"
+textColor = "#F8FAFC"
+
+[server]
+# 스마트폰 영상 업로드 허용 용량 (MB)
+maxUploadSize = 500
