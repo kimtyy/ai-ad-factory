@@ -39,7 +39,7 @@ importlib.reload(core.asset_generator)
 importlib.reload(core.tts)
 importlib.reload(core.audio)
 
-from core.analyzer import plan_storyboard, TONE_PRESETS, DURATION_PRESETS
+from core.analyzer import plan_storyboard, TONE_PRESETS, DURATION_PRESETS, TRAVEL_TEMPLATES, DEFAULT_TRAVEL_TEMPLATE
 from core.asset_generator import AssetGenerator, VOICE_ACTOR_PROFILES
 from core.compositor import AdCompositor
 from core.scraper import scrape_product_info
@@ -47,6 +47,7 @@ from core.image_processor import extract_product_cutout, composite_cutout_on_bac
 from core.job import JobContext
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.planners import BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE, plan_owner_storyboard
+from core.planners.travel import plan_travel_storyboard
 from core.planners.owner import ROLE_LABELS_KO as OWNER_ROLE_LABELS
 from core.media.normalize import DEFAULT_TRIM_START
 from core.render.brand import BrandOverlay, EndCard
@@ -279,6 +280,14 @@ with st.sidebar:
     )
     st.session_state.script_style = selected_script_style
 
+    travel_template = DEFAULT_TRAVEL_TEMPLATE
+    if is_travel_mode:
+        travel_template = st.selectbox(
+            "숙소 제휴 씬 템플릿", list(TRAVEL_TEMPLATES), key="travel_template",
+            format_func=lambda k: TRAVEL_TEMPLATES[k]["name"],
+            help="7씬 황금 비율: 01~03 수영장·자쿠지 후킹 → 04~05 객실·창밖 뷰 → 06~07 바베큐·카페·불멍 + 댓글 CTA"
+        )
+
     st.markdown("#### 🎭 대본 톤앤매너")
     tone_keys = list(TONE_PRESETS.keys())
     tone_labels = [TONE_PRESETS[k]["name"] for k in tone_keys]
@@ -295,7 +304,6 @@ with st.sidebar:
     audio_mode_options = {
         "voice_and_sub": "🎙️ AI 나레이션 + 자막 (기본)",
         "silent": "🔇 무음 + 자막 전용 (유튜브 음원용)",
-        "voice_and_bgm": "🎵 나레이션 + BGM 동시 믹싱"
     }
     selected_audio_mode = st.selectbox(
         "오디오 모드",
@@ -544,8 +552,7 @@ if generate_plan_btn:
                 raise ValueError("상호명을 입력해 주세요.")
             # 여행 모드: 크롤링 사진 인벤토리를 넘겨 실제 없는 시설을 대본에 쓰지 못하게 함
             photo_inventory = None
-            if is_travel_mode and st.session_state.get("image_pool") and not st.session_state.uploaded_paths:
-                photo_inventory = (st.session_state.scraped_data or {}).get("category_counts")
+            travel_photo_first = is_travel_mode and bool(st.session_state.get("image_pool")) and not st.session_state.uploaded_paths
             if is_owner_mode:
                 # 트랙 B: 업로드 미디어를 보고 씬 구성, 상호명 보존, 네이버 검색 CTA
                 scenes = plan_owner_storyboard(
@@ -560,6 +567,25 @@ if generate_plan_btn:
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
                 )
+            elif travel_photo_first:
+                # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
+                with st.spinner("👁️ 사진을 비전으로 분류해 씬 비율(수영장3·객실2·부대시설2)에 배정하고 대본을 쓰는 중..."):
+                    scenes, photo_inventory = plan_travel_storyboard(
+                        product_name=product_name,
+                        usp=usp_desc,
+                        image_pool=st.session_state.image_pool,
+                        assets_dir=current_job().assets_dir,
+                        api_key=api_key,
+                        vision_cache=st.session_state.vision_cache,
+                        exclude_urls=set(st.session_state.rejected_urls),
+                        travel_template=travel_template,
+                        mock=mock_mode,
+                        tone_and_manner=selected_tone,
+                        duration_preset=selected_duration,
+                        audio_mode=selected_audio_mode,
+                        script_style=selected_script_style,
+                        output_plan_path=current_job().plan_path,
+                    )
             else:
                 # 트랙 A: 제휴(숙소/쇼핑) 대본 선기획
                 scenes = plan_storyboard(
@@ -574,7 +600,8 @@ if generate_plan_btn:
                     mode=pipeline_mode,
                     script_style=selected_script_style,
                     photo_inventory=photo_inventory,
-                    output_plan_path=current_job().plan_path
+                    output_plan_path=current_job().plan_path,
+                    travel_template=travel_template
                 )
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
@@ -933,6 +960,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                 type="primary",
                 key="download_cta"
             )
+        st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
     with col_meta:
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:

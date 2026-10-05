@@ -6,7 +6,7 @@ import re
 import time
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
@@ -131,18 +131,20 @@ SCRIPT_STYLE_PRESETS = {
 
 
 # -------------------------------------------------------------
-# [씬별 시각 역할 계획]
+# [씬별 시각 역할 계획 - 숙소 제휴(트랙 A) 템플릿]
 # 특정 숙소를 가정하지 않고, 실제 확보된 사진 인벤토리(카테고리별 장수)에 맞춰 씬 역할을 배정합니다.
 # 인벤토리에 없는 시설(예: 수영장이 없는 펜션)은 씬 역할로 배정하지 않아 대본이 지어내지 못하게 합니다.
 # -------------------------------------------------------------
 PHOTO_ROLES = ("view", "pool", "facility", "bedroom")
-ROLE_TEMPLATE = ["view", "pool", "pool", "facility", "bedroom"]
+ROLE_TEMPLATE = ["view", "pool", "pool", "facility", "bedroom"]   # classic 템플릿 (기존 6씬)
 ROLE_FALLBACK_ORDER = ["view", "facility", "bedroom", "pool"]
 ROLE_KEYWORDS = {
     "view": ["전경", "외관", "뷰", "테라스"],
     "pool": ["수영장", "풀", "자쿠지", "스파"],
     "facility": ["라운지", "로비", "카페", "부대시설"],
     "bedroom": ["객실", "침실", "침구", "거실"],
+    "bedroom_or_view": ["객실", "창밖", "마운틴뷰", "오션뷰"],
+    "facility_or_night_view": ["불멍", "바베큐", "야경", "노을", "테라스"],
     "view_or_night": ["야경", "전경", "테라스", "뷰"],
 }
 ROLE_LABELS_KO = {
@@ -150,15 +152,54 @@ ROLE_LABELS_KO = {
     "pool": "수영장/자쿠지/스파",
     "facility": "라운지/로비/카페 등 부대시설",
     "bedroom": "객실/침실",
+    "bedroom_or_view": "객실 또는 창밖 마운틴·오션 뷰",
+    "facility_or_night_view": "부대시설 또는 노을·야경·테라스 뷰",
     "view_or_night": "야경 또는 전경 (엔딩)",
+}
+# 비전 게이트(core.scraper)가 사진에 붙이는 태그 중, 각 역할에서 우선 매칭할 태그 (기본값)
+ROLE_DEFAULT_TAGS = {
+    "view": ["water_view", "mountain_view", "ocean_view", "exterior", "terrace"],
+    "pool": ["outdoor_pool", "infinity_pool", "jacuzzi"],
+    "facility": ["bbq", "cafe", "firepit", "lounge"],
+    "bedroom": ["bed", "room_interior"],
+    "bedroom_or_view": ["mountain_view", "ocean_view", "bed"],
+    "facility_or_night_view": ["firepit", "night", "sunset", "terrace", "bbq"],
+    "view_or_night": ["night", "water_view", "terrace"],
 }
 USP_ROLE_HINTS = {
     "pool": ["수영장", "풀", "자쿠지", "스파", "노천탕", "pool", "spa"],
-    "facility": ["라운지", "로비", "카페", "레스토랑", "바베큐", "바비큐", "정원", "사우나"],
+    "facility": ["라운지", "로비", "카페", "레스토랑", "바베큐", "바비큐", "정원", "사우나", "불멍"],
 }
 TRAVEL_MOTIONS = ["zoom_in", "pan_right", "zoom_out", "pan_left", "pan_down", "pan_up"]
 TRAVEL_CTA_VOICEOVER = "숙소 정보는 댓글에 '여행' 남겨주세요!"
 TRAVEL_CTA_SUBTITLE = "숙소 정보는 댓글에 '여행' 남겨주세요"
+
+# 7씬 황금 비율 (수영장 3 / 객실 2 / 부대시설 2, 약 20~25초)
+#   01~03 물 후킹 → 04~05 머물고 싶은 객실·뷰 → 06~07 시그니처 부대시설 + 엔딩 CTA
+GOLDEN7_SLOTS = [
+    {"role": "pool", "desc": "야외 온수풀·인피니티 풀 (첫 1초 강력 후킹)", "tags": ["infinity_pool", "outdoor_pool", "water_view"]},
+    {"role": "pool", "desc": "수영장 물빛·풀사이드 (후킹 유지)", "tags": ["outdoor_pool", "infinity_pool", "night"]},
+    {"role": "pool", "desc": "자쿠지·스파·물멍", "tags": ["jacuzzi", "spa", "indoor_pool", "water_view"]},
+    {"role": "bedroom", "desc": "감성 객실 내부·침실", "tags": ["bed", "room_interior", "living_room"]},
+    {"role": "bedroom_or_view", "desc": "객실 창밖 마운틴·오션 뷰 (머물고 싶은 욕구)", "tags": ["mountain_view", "ocean_view", "water_view", "bed"]},
+    {"role": "facility", "desc": "시그니처 바베큐·카페·불멍 등 독보적 부대시설", "tags": ["bbq", "cafe", "firepit", "lounge"]},
+    {"role": "facility_or_night_view", "desc": "불멍·바베큐 부대시설 또는 노을·야경 뷰 + 엔딩 댓글 CTA",
+     "tags": ["firepit", "night", "sunset", "terrace", "bbq"]},
+]
+TRAVEL_TEMPLATES = {
+    "golden7": {"name": "🏆 7씬 황금 비율 (수영장3·객실2·부대시설2, 20~25초)", "length": "20~25초", "scenes": len(GOLDEN7_SLOTS)},
+    "classic": {"name": "기본 6씬 (뷰·수영장·부대시설·객실, 15~18초)", "length": "15~18초", "scenes": 6},
+}
+DEFAULT_TRAVEL_TEMPLATE = "golden7"
+# 인벤토리 부족 시 대체 순서 (대체되면 대본도 대체 역할 기준으로 작성되어 사진과 어긋나지 않음)
+SLOT_FALLBACKS = {
+    "pool": ["view", "facility"],
+    "bedroom": ["bedroom_or_view", "view"],
+    "bedroom_or_view": ["view", "facility"],
+    "facility_or_night_view": ["view", "bedroom"],
+    "facility": ["view", "bedroom"],
+    "view": ["facility", "bedroom"],
+}
 
 
 def _available_roles(photo_inventory: Optional[Dict[str, int]], usp: str) -> set:
@@ -175,12 +216,57 @@ def _available_roles(photo_inventory: Optional[Dict[str, int]], usp: str) -> set
     return avail
 
 
-def build_visual_role_plan(
-    num_scenes: int,
+def build_travel_slots(
+    num_scenes: Optional[int] = None,
     photo_inventory: Optional[Dict[str, int]] = None,
-    usp: str = ""
-) -> List[str]:
-    """씬 수와 사진 인벤토리로 씬별 target_visual_role 목록을 만듭니다 (마지막 씬은 엔딩 CTA)."""
+    usp: str = "",
+    template: str = DEFAULT_TRAVEL_TEMPLATE
+) -> List[Dict[str, Any]]:
+    """
+    씬별 슬롯 계획: [{"role", "desc", "tags", "fallback_from"}].
+    - golden7: 7씬 황금 비율 고정 (num_scenes 무시). 사진이 부족한 카테고리는 SLOT_FALLBACKS로 대체
+    - classic: 기존 역할 순환 템플릿 (num_scenes개)
+    """
+    if template != "golden7":
+        return [{"role": r, "desc": ROLE_LABELS_KO.get(r, r), "tags": ROLE_DEFAULT_TAGS.get(r, []), "fallback_from": None}
+                for r in _build_classic_roles(num_scenes or 6, photo_inventory, usp)]
+
+    avail = _available_roles(photo_inventory, usp)
+    remaining = None
+    if photo_inventory and any(int(photo_inventory.get(r, 0) or 0) > 0 for r in PHOTO_ROLES):
+        remaining = {r: int(photo_inventory.get(r, 0) or 0) for r in PHOTO_ROLES}
+
+    def take(role: str) -> bool:
+        cats = {"bedroom_or_view": ("bedroom", "view"), "facility_or_night_view": ("facility", "view")}.get(role, (role,))
+        for cat in cats:
+            if cat not in avail:
+                continue
+            if remaining is not None:
+                if remaining.get(cat, 0) <= 0:
+                    continue
+                remaining[cat] -= 1
+            return True
+        return False
+
+    slots = []
+    for slot in GOLDEN7_SLOTS:
+        role = slot["role"]
+        if take(role):
+            slots.append({**slot, "fallback_from": None})
+            continue
+        sub = next((r for r in SLOT_FALLBACKS.get(role, []) if take(r)), None)
+        if sub is None:
+            # 사진 수보다 씬이 많으면 보유 카테고리를 반복 사용 (매칭 단계에서 서로 다른 사진이 선택됨)
+            sub = next((r for r in [role] + SLOT_FALLBACKS.get(role, []) if r in avail or r == "bedroom_or_view"), "view")
+        if sub == role:
+            slots.append({**slot, "fallback_from": None})
+        else:
+            slots.append({"role": sub, "desc": f"{ROLE_LABELS_KO.get(sub, sub)} (원래 '{slot['desc']}' 자리, 사진 부족으로 대체)",
+                          "tags": ROLE_DEFAULT_TAGS.get(sub, []), "fallback_from": role})
+    return slots
+
+
+def _build_classic_roles(num_scenes: int, photo_inventory: Optional[Dict[str, int]], usp: str) -> List[str]:
     total = max(int(num_scenes or 1), 1)
     avail = _available_roles(photo_inventory, usp)
     remaining = None
@@ -203,7 +289,6 @@ def build_visual_role_plan(
             roles.append(wanted)
             continue
         fallback = next((r for r in ROLE_FALLBACK_ORDER if take(r)), None)
-        # 사진 수보다 씬이 많으면 보유 카테고리를 반복 사용 (매칭 단계에서 서로 다른 사진이 선택됨)
         roles.append(fallback or next((r for r in ROLE_FALLBACK_ORDER if r in avail), "view"))
 
     if "view" in avail or "facility" in avail:
@@ -213,12 +298,22 @@ def build_visual_role_plan(
     return roles[:total]
 
 
+def build_visual_role_plan(
+    num_scenes: int,
+    photo_inventory: Optional[Dict[str, int]] = None,
+    usp: str = "",
+    template: str = "classic"
+) -> List[str]:
+    """씬별 target_visual_role 목록 (하위 호환용). 슬롯 상세는 build_travel_slots 사용."""
+    return [s["role"] for s in build_travel_slots(num_scenes, photo_inventory, usp, template)]
+
+
 def narrative_role_for(index: int, total: int, visual_role: str) -> str:
     if index == 0:
         return "hook"
     if index == total - 1:
         return "cta"
-    return {"bedroom": "room", "facility": "facility"}.get(visual_role, "feature")
+    return {"bedroom": "room", "bedroom_or_view": "room", "facility": "facility"}.get(visual_role, "feature")
 
 
 MOCK_TRAVEL_LINES = {
@@ -228,6 +323,7 @@ MOCK_TRAVEL_LINES = {
         "pool": "물놀이하기 정말 딱 좋은 수영장!",
         "facility": "분위기 좋은 공간에서 여유 한 잔!",
         "bedroom": "푹신한 침구에서 꿀잠 예약!",
+        "bedroom_or_view": "창밖 풍경 보며 늦잠 자고 싶은 방!",
         "view_or_night": "밤이 되면 더 예뻐지는 풍경!",
     },
     "experience": {
@@ -236,8 +332,16 @@ MOCK_TRAVEL_LINES = {
         "pool": "물놀이하다 보니 시간 가는 줄 몰랐어요!",
         "facility": "여기서 커피 마시니 세상 행복!",
         "bedroom": "체크아웃하기 진짜 싫었던 침구 맛집!",
+        "bedroom_or_view": "창밖 뷰 보다가 하루가 다 갔어요!",
         "view_or_night": "밤 풍경까지 완벽했던 하루!",
     },
+}
+# 황금 비율 슬롯별 Mock 대사 (같은 역할이 연속돼도 대사가 반복되지 않도록 슬롯 위치별로 구분)
+MOCK_GOLDEN7_LINES = {
+    "info": ["사계절 따뜻한 야외 온수풀!", "끝없이 이어지는 풀 뷰에 감탄!", "자쿠지에서 물멍하며 완벽 힐링!",
+             "감성 가득한 객실에서 하룻밤!", "창밖으로 펼쳐지는 그림 같은 뷰!", "밤엔 불멍하며 바베큐 파티!"],
+    "experience": ["온수풀 들어가자마자 입 떡 벌어짐!", "풀 뷰 보면서 사진만 백 장 찍음!", "자쿠지에서 물멍하다 시간 순삭!",
+                   "객실 들어가자마자 감성 폭발!", "창밖 뷰 보다가 늦잠까지 완벽!", "불멍하며 바베큐까지 꽉 찬 하루!"],
 }
 
 
@@ -247,21 +351,28 @@ def generate_mock_travel_storyboard(
     num_scenes: int = 6,
     tone_and_manner: str = "aggro",
     script_style: str = "info",
-    photo_inventory: Optional[Dict[str, int]] = None
+    photo_inventory: Optional[Dict[str, int]] = None,
+    template: str = DEFAULT_TRAVEL_TEMPLATE
 ) -> List[dict]:
     """
-    [여행 상품 모드 Mock 콘티 - Script-First 규격]
-    - 사진 인벤토리 기반 씬 역할 배정 (특정 숙소 고유 정보 미포함)
-    - 숙소 이름 철저 은닉 (Curiosity Gap)
-    - 엔딩 댓글 유도 CTA 자동 삽입
+    [숙소 제휴 Mock 콘티 - Script-First 규격]
+    - 템플릿(golden7/classic) + 사진 인벤토리 기반 씬 역할 배정 (특정 숙소 고유 정보 미포함)
+    - 숙소 이름 철저 은닉 (Curiosity Gap), 엔딩 댓글 유도 CTA 자동 삽입
     """
     lines = MOCK_TRAVEL_LINES.get(script_style, MOCK_TRAVEL_LINES["info"])
-    roles = build_visual_role_plan(num_scenes, photo_inventory, usp)
-    total = len(roles)
+    golden_lines = MOCK_GOLDEN7_LINES.get(script_style, MOCK_GOLDEN7_LINES["info"])
+    slots = build_travel_slots(num_scenes, photo_inventory, usp, template)
+    total = len(slots)
     scenes = []
-    for i, v_role in enumerate(roles):
+    for i, slot in enumerate(slots):
+        v_role = slot["role"]
         is_last = (i == total - 1)
-        text = TRAVEL_CTA_VOICEOVER if is_last else lines.get(v_role, lines["view"])
+        if is_last:
+            text = TRAVEL_CTA_VOICEOVER
+        elif template == "golden7" and not slot["fallback_from"] and i < len(golden_lines):
+            text = golden_lines[i]
+        else:
+            text = lines.get(v_role, lines["view"])
         scenes.append({
             "scene_index": i + 1,
             "scene_number": i + 1,
@@ -273,7 +384,8 @@ def generate_mock_travel_storyboard(
             "caption": text,
             "target_visual_role": v_role,
             "visual_keywords": list(ROLE_KEYWORDS.get(v_role, ROLE_KEYWORDS["view"])),
-            "visual_description": f"{ROLE_LABELS_KO.get(v_role, v_role)} 실사 컷",
+            "visual_tags": list(slot["tags"]),
+            "visual_description": slot["desc"],
             "image_prompt_en": "",
             "video_motion_prompt_en": TRAVEL_MOTIONS[i % len(TRAVEL_MOTIONS)],
             **({"focus_bottom": True} if i == 0 else {}),
@@ -295,7 +407,9 @@ def plan_storyboard(
     api_key: Optional[str] = None,
     mode: str = "commerce",
     script_style: str = "info",
-    photo_inventory: Optional[Dict[str, int]] = None
+    photo_inventory: Optional[Dict[str, int]] = None,
+    travel_template: str = DEFAULT_TRAVEL_TEMPLATE,
+    slot_photo_notes: Optional[List[Optional[str]]] = None
 ) -> List[dict]:
     """
     Step 1: 레퍼런스 영상 분석 및 씬별 콘티 역기획 실행.
@@ -306,12 +420,16 @@ def plan_storyboard(
         raise ValueError("사장님(owner) 모드는 core.planners.plan_owner_storyboard를 사용하세요 (트랙 A 제휴 플래너와 분리).")
     preset_info = DURATION_PRESETS.get(duration_preset, DURATION_PRESETS["15s"])
     target_total_sec = preset_info["target_sec"]
-    if num_scenes is None or num_scenes <= 0:
-        num_scenes = 6 if mode == "travel" else preset_info["default_scenes"]
+    if mode == "travel" and travel_template == "golden7":
+        num_scenes = len(GOLDEN7_SLOTS)   # 황금 비율은 7씬 고정
+    elif num_scenes is None or num_scenes <= 0:
+        num_scenes = TRAVEL_TEMPLATES["classic"]["scenes"] if mode == "travel" else preset_info["default_scenes"]
 
     tone_info = TONE_PRESETS.get(tone_and_manner, TONE_PRESETS["aggro"])
     # 여행 모드: 실제 사진 인벤토리 기반 씬별 시각 역할 계획 (특정 숙소 가정 없음)
-    role_plan = build_visual_role_plan(num_scenes, photo_inventory, usp) if mode == "travel" else []
+    slot_plan = build_travel_slots(num_scenes, photo_inventory, usp, travel_template) if mode == "travel" else []
+    role_plan = [sl["role"] for sl in slot_plan]
+    target_length = TRAVEL_TEMPLATES.get(travel_template, TRAVEL_TEMPLATES["classic"])["length"]
     logger.info(
         f"Step 1 시작 (모드={mode}): 제품명/여행지='{product_name}', USP='{usp}', 목표 씬={num_scenes}, "
         f"톤앤매너='{tone_info['name']}', 길이='{preset_info['name']}', 오디오='{audio_mode}', force={force}"
@@ -346,7 +464,8 @@ def plan_storyboard(
                 num_scenes=num_scenes,
                 tone_and_manner=tone_and_manner,
                 script_style=script_style,
-                photo_inventory=photo_inventory
+                photo_inventory=photo_inventory,
+                template=travel_template
             )
         else:
             scenes = generate_mock_storyboard(
@@ -391,7 +510,7 @@ def plan_storyboard(
         style_preset = SCRIPT_STYLE_PRESETS.get(script_style, SCRIPT_STYLE_PRESETS["info"])
         style_instruction = style_preset["instruction"]
 
-        # 여행 상품 모드: 숙소명 철저 은닉(Curiosity Gap), 15~18초 초압축(씬당 15~20자), 사진 에셋 1:1 매칭 (뷔페 언급 금지)
+        # 숙소 제휴 모드: 숙소명 철저 은닉(Curiosity Gap), 템플릿 길이(씬당 15~20자), 사진 에셋 1:1 매칭 (뷔페 언급 금지)
         system_instruction = (
             "당신은 인스타그램 릴스, 틱톡, 유튜브 쇼츠에서 수백만 조회수와 폭발적인 댓글 참여율을 이끌어내는 "
             "'대한민국 1등 여행/숙소 숏폼 크리에이티브 디렉터'입니다.\n\n"
@@ -399,9 +518,9 @@ def plan_storyboard(
             "다음 핵심 원칙을 철저히 준수해야 합니다:\n"
             f"1. [선택된 대본 기획 스타일 준수 ({style_preset['name']})]:\n"
             f"   {style_instruction}\n"
-            "2. [영상 길이 15~18초 규격 & 씬당 대본 15~20자 초압축 절대 준수]:\n"
+            f"2. [영상 길이 {target_length} 규격 & 씬당 대본 15~20자 초압축 절대 준수]:\n"
             "   - 각 씬의 voiceover(나레이션)는 반드시 '공백 포함 15~20자 이내'의 간결한 구어체 딱 한 줄로만 작성하세요!\n"
-            "   - 20자를 초과하면 TTS 재생 시간이 늘어나 전체 영상이 18초 규격을 초과하므로 절대 금지합니다.\n"
+            f"   - 20자를 초과하면 TTS 재생 시간이 늘어나 전체 영상이 {target_length} 규격을 초과하므로 절대 금지합니다.\n"
             "   - 문장 어미는 '즐겨보세요', '놓치면 손해입니다', '힐링해보세요', '딱 좋아요', '벌어졌어요' 등 짧고 경쾌한 숏폼 전용 구어체를 사용하세요.\n"
             "3. [대본과 실제 사진 에셋의 1:1 시각적 정합성 보장]:\n"
             "   - 각 씬은 사용자 프롬프트에 배정된 시각 역할의 '실제 숙소 사진'과 함께 송출됩니다.\n"
@@ -422,10 +541,12 @@ def plan_storyboard(
             inventory_text = ", ".join(f"{ROLE_LABELS_KO[r]} {int(photo_inventory.get(r, 0) or 0)}장" for r in PHOTO_ROLES)
         else:
             inventory_text = "사진 분류 정보 없음 (특장점(USP)에 명시된 시설만 언급 가능)"
+        notes = list(slot_photo_notes or [])
         scene_role_lines = "\n".join(
-            f"     * 씬 {i + 1} ({narrative_role_for(i, len(role_plan), r)}): target_visual_role='{r}' [{ROLE_LABELS_KO.get(r, r)}], "
-            f"visual_keywords={json.dumps(ROLE_KEYWORDS.get(r, []), ensure_ascii=False)}"
-            for i, r in enumerate(role_plan)
+            f"     * 씬 {i + 1} ({narrative_role_for(i, len(slot_plan), sl['role'])}): target_visual_role='{sl['role']}' [{sl['desc']}], "
+            f"visual_keywords={json.dumps(ROLE_KEYWORDS.get(sl['role'], []), ensure_ascii=False)}"
+            + (f"\n         → 이 씬에 실제로 나갈 사진: {notes[i]}" if i < len(notes) and notes[i] else "")
+            for i, sl in enumerate(slot_plan)
         )
         last_i = len(role_plan) - 1
         schema_example = json.dumps({
@@ -434,7 +555,7 @@ def plan_storyboard(
                 {
                     "scene_index": i + 1,
                     "role": narrative_role_for(i, len(role_plan), r),
-                    "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else f"<{ROLE_LABELS_KO.get(r, r)} 사진을 묘사하는 15~20자 대사>",
+                    "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else f"<{slot_plan[i]['desc']} 사진을 묘사하는 15~20자 대사>",
                     "subtitle": TRAVEL_CTA_SUBTITLE if i == last_i else "<voiceover와 동일>",
                     "target_visual_role": r,
                     "visual_keywords": ROLE_KEYWORDS.get(r, []),
@@ -456,20 +577,22 @@ def plan_storyboard(
 {style_instruction}
 - 선택된 톤앤매너: {tone_info['name']}
   * 지침: {tone_info['instruction']}
-- 목표 영상 길이: 약 15~18초 (총 {num_scenes}개 씬, 씬당 2.5초 배정)
+- 목표 영상 길이: 약 {target_length} (총 {num_scenes}개 씬, 템플릿: {TRAVEL_TEMPLATES.get(travel_template, TRAVEL_TEMPLATES['classic'])['name']})
 - 목표 씬 수: 총 {num_scenes}개 씬 (대본 선기획 -> 씬별 타겟 에셋 매칭용)
 - 포맷: 9:16 세로형 풀스크린 숏폼 영상 (TikTok, Reels, Shorts)
 - 오디오 모드: {audio_mode}
 
 [대본 선기획 작성 요구사항]
 1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "scenes": [...]}})으로 정확히 출력하세요.
-2. [15~18초 규격 준수 - 씬당 나레이션 15~20자 이내]:
+2. [{target_length} 규격 준수 - 씬당 나레이션 15~20자 이내]:
    - voiceover는 공백 포함 15~20자 이내의 짧고 통통 튀는 구어체 딱 한 문장으로 작성하세요.
    - 어미 예시: "즐겨보세요", "놓치면 손해입니다", "딱 좋아요", "힐링해보세요"
 3. [씬별 시각 역할은 아래 배정을 그대로 사용 (변경 금지)]:
 {scene_role_lines}
    - 각 씬의 voiceover는 그 씬에 배정된 사진 종류만 묘사하세요.
-   - 사진 구성과 특장점(USP)에 없는 시설·경관(수영장, 호수, 바다, 조식 등)은 절대 지어내지 마세요.
+   - '이 씬에 실제로 나갈 사진' 설명이 있는 씬은 그 설명에 있는 것만 묘사하세요. 슬롯 이름보다 실제 사진 설명이 우선입니다.
+     (예: 슬롯이 '자쿠지·스파'여도 실제 사진이 '실내 수영장'이면 실내 수영장을 묘사)
+   - 사진 설명과 특장점(USP)에 없는 시설·경관·속성(자쿠지, 온수, 인피니티, 호수, 바다, 조식 등)은 절대 지어내거나 단정하지 마세요.
 4. [정보 은닉 (Curiosity Gap) 강제]:
    - 크롤링된 숙소명('{product_name}')을 대본 나레이션 및 자막에 직접 언급하는 것을 엄격히 금지합니다.
 5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(10~15자)을 포함하세요! (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소')
@@ -608,11 +731,14 @@ JSON 출력 스키마 예시:
 
             if mode == "travel":
                 # 여행 상품 모드: 사진 인벤토리 기반 시각 역할 강제 (씬 수가 계획과 다르면 재계산)
-                if len(role_plan) != len(scenes):
-                    role_plan = build_visual_role_plan(len(scenes), photo_inventory, usp)
-                v_role = role_plan[idx]
+                if len(slot_plan) != len(scenes):
+                    slot_plan = build_travel_slots(len(scenes), photo_inventory, usp,
+                                                   travel_template if len(scenes) == len(GOLDEN7_SLOTS) else "classic")
+                v_role = slot_plan[idx]["role"]
                 sc["target_visual_role"] = v_role
                 sc["visual_keywords"] = list(ROLE_KEYWORDS.get(v_role, ROLE_KEYWORDS["view"]))
+                sc["visual_tags"] = list(slot_plan[idx]["tags"])
+                sc["visual_description"] = slot_plan[idx]["desc"]
                 sc["role"] = narrative_role_for(idx, len(scenes), v_role)
 
             if audio_mode == "silent":
@@ -662,7 +788,7 @@ JSON 출력 스키마 예시:
                         vo = "여기서 제대로 힐링해보세요!"
                         cap = "여기서 제대로 힐링해보세요"
 
-                # 3. 영상 15~18초 준수: 씬당 2.5초 배정 및 나레이션 15~20자 초압축
+                # 3. 템플릿 길이 준수: 씬당 2.5초 기준 배정 및 나레이션 15~20자 초압축 (실제 길이는 TTS 길이 기준)
                 sc["duration_sec"] = 2.5
                 if idx < len(scenes) - 1 and len(vo) > 22:
                     parts = re.split(r'[,.!?]\s*', vo)

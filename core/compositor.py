@@ -281,7 +281,6 @@ class AdCompositor:
         asset_manifest: List[Dict[str, Any]],
         output_filename: str = "final.mp4",
         fps: int = 24,
-        bgm_path: Optional[str] = None,
         audio_mode: str = "voice_and_sub",
         mode: str = "commerce",
         brand: Optional[BrandOverlay] = None,
@@ -290,7 +289,8 @@ class AdCompositor:
         """
         Step 3: 각 씬별 비디오와 오디오를 오디오 길이에 맞춰 컷팅하고,
         상단 후킹 바 및 런비 스타일 중앙 자막을 합성한 뒤 최종 광고 비디오 결합.
-        audio_mode가 'voice_and_bgm'이거나 bgm_path가 주어지면 15% 볼륨으로 BGM 동시 믹싱.
+        오디오는 AI 나레이션(VO)만 사용합니다. BGM은 엔진에서 합성하지 않습니다
+        (플랫폼 인앱 트렌딩 음원·자사 유통 음원을 업로드 단계에서 태그하는 정책).
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
@@ -404,26 +404,7 @@ class AdCompositor:
             logger.info(f"최종 비디오 타임라인 총 재생 시간: {total_duration:.2f}초 (인위적 subclip 절단 없이 전량 보존)")
             logger.info(f"최종 영상 총 재생 시간: {total_duration:.2f}초")
 
-            # 6. BGM 믹싱 처리 (voice_and_bgm 모드)
-            if (audio_mode == "voice_and_bgm" or bgm_path) and bgm_path and os.path.exists(bgm_path):
-                try:
-                    from moviepy.editor import CompositeAudioClip
-                    logger.info(f"배경음악(BGM) 믹싱 진행 (볼륨: 15% 덕킹): {bgm_path}")
-                    bgm_clip = AudioFileClip(bgm_path).volumex(0.15)
-                    if bgm_clip.duration < total_duration:
-                        # 반복 재생
-                        from moviepy.audio.fx.all import audio_loop
-                        bgm_clip = audio_loop(bgm_clip, duration=total_duration)
-                    else:
-                        bgm_clip = bgm_clip.subclip(0, total_duration)
-                    opened_clips.append(bgm_clip)
-                    
-                    mixed_audio = CompositeAudioClip([final_composite.audio, bgm_clip])
-                    opened_clips.append(mixed_audio)
-                    final_composite = final_composite.set_audio(mixed_audio)
-                    logger.info("BGM 오디오 믹싱 완료.")
-                except Exception as be:
-                    logger.warning(f"BGM 믹싱 실패: {be}. 나레이션 단독 오디오로 계속 진행합니다.")
+            # BGM은 넣지 않음: 업로드 시 인스타/유튜브 인앱 트렌딩 음원·자사 유통 음원을 플랫폼에서 태그 (정책)
 
             logger.info(f"최종 렌더링 시작 -> {final_output_path} (FPS: {fps}, Codec: libx264, Audio: aac)")
 

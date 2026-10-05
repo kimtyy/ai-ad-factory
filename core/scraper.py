@@ -136,74 +136,88 @@ def cdn_headers_for(image_url: str, referer: Optional[str] = None) -> Dict[str, 
 
 
 # -------------------------------------------------------------
-# [비전 검증 게이트]
+# [비전 게이트: 사진 풀 분류]
 # 텍스트 메타데이터만으로는 '로비'라는 제목의 자판기 사진, '외관'이라는 제목의 아파트형 외벽 사진을
-# 걸러낼 수 없으므로, 텍스트 점수 상위 후보를 실제 픽셀 기준으로 재판정합니다.
+# 걸러낼 수 없으므로, 사진 풀 후보를 실제 픽셀 기준으로 1회 분류(카테고리·광고 적합도·태그)하고
+# 그 결과로 (1) 대본 기획용 사진 인벤토리를 만들고 (2) 씬 슬롯 비율(예: 수영장3/객실2/부대시설2)에 맞춰 배정합니다.
+# 분류는 이미지 해시 기준으로 캐시되어 재선별·재기획 시 다시 호출하지 않습니다.
 # -------------------------------------------------------------
-VISION_MIN_FIT = 6          # 이 점수 미만은 탈락
-VISION_GOOD_FIT = 8         # 이 점수 이상이면 즉시 채택
-VISION_MAX_CHECKS = 8       # 씬당 최대 비전 판정 횟수
+VISION_MIN_FIT = 6            # 이 적합도 미만은 배정 대상에서 제외
+VISION_POOL_BUDGET = 24       # 최초 기획 시 사진 풀에서 비전 분류할 최대 장수
+VISION_REMATCH_BUDGET = 8     # 재선별 1회당 추가로 분류할 최대 장수
 
-ROLE_DESCRIPTIONS = {
-    "view": "숙소 외관/전경/경관 뷰 (첫 장면 후킹용, 시원하고 매력적인 풍경)",
-    "pool": "수영장/자쿠지/스파/물놀이 공간",
-    "facility": "라운지/로비/카페/레스토랑 등 분위기 좋은 부대시설",
-    "bedroom": "객실 내부 (침실/거실)",
-    "view_or_night": "엔딩용 야경 또는 감성적인 전경/테라스",
+VISION_TAGS = (
+    "outdoor_pool", "infinity_pool", "indoor_pool", "jacuzzi", "spa", "water_view", "mountain_view",
+    "ocean_view", "night", "sunset", "bed", "room_interior", "living_room", "bbq", "cafe", "firepit", "lounge",
+    "restaurant", "garden", "terrace", "exterior",
+)
+
+VISION_TAG_KO = {
+    "outdoor_pool": "야외 수영장", "infinity_pool": "인피니티 풀", "indoor_pool": "실내 수영장", "jacuzzi": "자쿠지",
+    "spa": "스파", "water_view": "물가 뷰", "mountain_view": "마운틴 뷰", "ocean_view": "오션 뷰", "night": "야경", "sunset": "노을",
+    "bed": "침대", "room_interior": "객실 내부", "living_room": "거실", "bbq": "바베큐", "cafe": "카페",
+    "firepit": "불멍", "lounge": "라운지", "restaurant": "레스토랑", "garden": "정원", "terrace": "테라스", "exterior": "외관",
 }
+CATEGORY_KO = {"pool": "수영장", "view": "전경·뷰", "facility": "부대시설", "bedroom": "객실"}
 
+
+def describe_photo_for_script(verdict: Optional[Dict[str, Any]]) -> Optional[str]:
+    """대본 작성용 사진 설명 (예: '수영장 사진: 실내 수영장 | Spacious indoor pool with glass atrium')"""
+    if not verdict or verdict.get("category") not in CATEGORY_KO:
+        return None
+    tags = ", ".join(VISION_TAG_KO.get(t, t) for t in verdict.get("tags", []))
+    return f"{CATEGORY_KO[verdict['category']]} 사진: {tags or '특징 태그 없음'} | {verdict.get('reason', '')}".strip(" |")
+
+
+# 슬롯 역할 → 허용 카테고리
 ROLE_ACCEPTED_CATEGORIES = {
     "view": {"view"},
     "pool": {"pool"},
     "facility": {"facility"},
     "bedroom": {"bedroom"},
+    "bedroom_or_view": {"bedroom", "view"},
+    "facility_or_night_view": {"facility", "view"},
     "view_or_night": {"view", "facility"},
 }
+# 카테고리 목표 수를 계산할 때 슬롯 역할이 소비하는 대표 카테고리
+ROLE_PRIMARY_CATEGORY = {"bedroom_or_view": "bedroom", "view_or_night": "view", "facility_or_night_view": "facility"}
+# 역할별로 특정 카테고리를 '조건부'로만 허용: 엔딩 슬롯의 뷰 사진은 노을/야경/테라스일 때만 (평범한 낮 풍경 제외)
+ROLE_CATEGORY_REQUIRED_TAGS = {"facility_or_night_view": {"view": {"night", "sunset", "terrace"}}}
+ROLE_CATEGORY_REQUIRED_TEXT = {"facility_or_night_view": {"view": ("야경", "노을", "석양", "테라스", "루프탑", "night", "sunset")}}
 
-VISION_VERDICT_PROMPT = (
-    "You are screening photos for a short-form accommodation ad.\n"
-    "The scene needs: {role_desc}. Script keywords: {keywords}.\n"
-    "1) Classify the photo into exactly one category:\n"
-    "   - 'pool': swimming pool, jacuzzi, spa, water play area\n"
-    "   - 'view': building exterior that looks attractive, panoramic landscape, lake/ocean/mountain view, terrace, night view\n"
-    "   - 'facility': lounge, lobby, cafe, restaurant, garden, fitness, kids zone\n"
+VISION_CLASSIFY_PROMPT = (
+    "You are curating real photos for a short-form (Reels/Shorts) accommodation ad.\n"
+    "1) category - exactly one of:\n"
+    "   - 'pool': swimming pool (outdoor/indoor/infinity), jacuzzi, spa, open-air bath, water play area\n"
+    "   - 'view': attractive building exterior, panoramic landscape, lake/ocean/mountain view, terrace, night view\n"
+    "   - 'facility': lounge, lobby, cafe, restaurant, BBQ area, fire pit, garden, fitness, kids zone\n"
     "   - 'bedroom': guest room interior, bed, living room\n"
     "   - 'reject': anything that ruins the mood. ALWAYS reject: vending machines, convenience store or kiosk corners, "
     "parking lots, corridors, stairs, elevators, toilets, plain concrete or apartment-like facades with no scenery, "
     "construction, maps, floor plans, signboards, text-heavy images, blurry or dark photos.\n"
-    "2) Rate 'fit' 0-10: how well this photo matches the needed scene and how appealing it is in an ad.\n"
-    'Respond with JSON only: {{"category": "...", "fit": 0, "reason": "short reason"}}'
+    "2) fit - 0..10: how strong this photo is as an ad cut (wow factor, composition, sharpness, lighting).\n"
+    f"3) tags - up to 4 that clearly apply, chosen ONLY from: {', '.join(VISION_TAGS)}.\n"
+    'Respond with JSON only: {"category": "...", "fit": 0, "tags": ["..."], "reason": "short reason"}'
 )
 
 
-def verify_scene_photo_with_vision(
-    img_bytes: bytes,
-    target_role: str,
-    keywords: List[str],
-    client: Any,
-    cache: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
+def classify_photo_with_vision(img_bytes: bytes, client: Any, cache: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
-    Gemini Flash 비전으로 사진의 실제 내용을 판정합니다.
-    반환: {"category", "fit", "reason"} / 비전 사용 불가 또는 호출 실패 시 None.
-    판정 결과는 (이미지 해시, 역할) 기준으로 cache에 저장되어 재선별 시 재호출하지 않습니다.
+    Gemini Flash 비전으로 사진 1장을 분류합니다. 반환: {"category", "fit", "tags", "reason"} / 실패 시 None.
+    결과는 이미지 해시 기준으로 cache에 저장됩니다 (역할과 무관하게 1회만 호출).
     """
     if client is None:
         return None
-    cache_key = f"{hashlib.md5(img_bytes).hexdigest()}:{target_role}"
+    cache_key = f"{hashlib.md5(img_bytes).hexdigest()}:classify"
     if cache is not None and cache_key in cache:
         return cache[cache_key]
     try:
         from google.genai import types
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img.thumbnail((512, 512))
-        prompt = VISION_VERDICT_PROMPT.format(
-            role_desc=ROLE_DESCRIPTIONS.get(target_role, target_role),
-            keywords=", ".join(keywords) if keywords else "-"
-        )
         res = client.models.generate_content(
             model=validate_model_call("gemini-3.6-flash", category="llm"),
-            contents=[img, prompt],
+            contents=[img, VISION_CLASSIFY_PROMPT],
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0)
         )
         data = json.loads(res.text)
@@ -212,186 +226,15 @@ def verify_scene_photo_with_vision(
         verdict = {
             "category": str(data.get("category", "reject")).lower().strip(),
             "fit": int(float(data.get("fit", 0))),
+            "tags": [t for t in (data.get("tags") or []) if t in VISION_TAGS][:4],
             "reason": str(data.get("reason", ""))[:160],
         }
     except Exception as e:
-        logger.warning(f"비전 판정 실패 (텍스트 점수로 대체): {e}")
+        logger.warning(f"비전 분류 실패: {e}")
         return None
     if cache is not None:
         cache[cache_key] = verdict
     return verdict
-
-
-def classify_photo_with_gemini_vision(
-    image_url: str,
-    api_key: Optional[str] = None
-) -> str:
-    """Gemini Flash 멀티모달 비전 모델로 숙소 사진을 pool / view / facility / bedroom 중 하나로 초고속 분류 (방안 B)"""
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return "unknown"
-    try:
-        from google import genai
-        from PIL import Image
-
-        resp = requests.get(image_url, headers=cdn_headers_for(image_url), timeout=8)
-        if resp.status_code != 200 or len(resp.content) < 5000:
-            return "unknown"
-
-        img = Image.open(io.BytesIO(resp.content))
-        img.thumbnail((512, 512))
-
-        model_name = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        client = genai.Client(api_key=api_key)
-        prompt = (
-            "Classify this accommodation photo into exactly one category:\n"
-            "- 'pool': Swimming pool (outdoor or indoor), jacuzzi, water play area, spa\n"
-            "- 'view': Exterior building, panoramic landscape, lake/ocean view, terrace, night view\n"
-            "- 'facility': Lounge, lobby, restaurant, cafe, garden, fitness center, kids zone\n"
-            "- 'bedroom': Hotel room interior, bed, living room\n"
-            "Respond with only the category word (pool, view, facility, or bedroom)."
-        )
-        res = client.models.generate_content(
-            model=model_name,
-            contents=[img, prompt]
-        )
-        raw_cat = res.text.strip().lower()
-        for cat in ["pool", "view", "facility", "bedroom"]:
-            if cat in raw_cat:
-                logger.info(f"[Gemini Vision 분류 성공] {image_url[:50]}... -> {cat}")
-                print(f"[Scraper] [Gemini Vision] {image_url[:55]}... -> {cat}")
-                return cat
-        return "unknown"
-    except Exception as e:
-        logger.debug(f"Gemini Vision 분류 예외: {e}")
-        return "unknown"
-
-
-def select_balanced_travel_gallery(
-    candidates: List[Dict[str, Any]],
-    target_count: int = 7,
-    api_key: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    [황금 비율 카테고리별 분산 선별 로직]
-    총 6~7장의 최종 에셋을 선택할 때 아래 비율 강제:
-    ① 수영장 / 자쿠지 / 노천탕 / 물 관련 공간: 2장 이상 (핵심 후킹)
-    ② 외관 전경 / 야경 / 오션·마운틴 뷰 / 테라스: 2장 이상
-    ③ 시그니처 부대시설 (라운지, 로비, 레스토랑, 바베큐장 등): 1~2장
-    ④ 객실 내부 (침실/거실): 최대 1~2장으로 엄격 제한 (침실 독점 차단)
-    
-    숏폼 연출 최적 시퀀싱:
-    Cut 1: 외관 전경/호수 뷰 (view) - 후킹 & 호기심 유발 (상단 로고 은닉 크롭 적용)
-    Cut 2: 야외 수영장 (pool) - 2~3초 시점 강력한 비주얼 후킹
-    Cut 3: 실내 수영장 / 자쿠지 (pool) - 사계절 힐링 물놀이 공간
-    Cut 4: 시그니처 라운지 / 로비 (facility) - 5성급 럭셔리 공간감
-    Cut 5: 아늑한 럭셔리 침실 (bedroom) - 단 1장만 배치
-    Cut 6: 루프탑 테라스 / 산책로 / 야경 전경 (view/facility) - 엔딩 무드 & CTA
-    Cut 7 (선택 시): 추가 테라스/외관/야경(view) 또는 추가 수영장(pool)
-    """
-    # 1. 1차 메타데이터 분류
-    pools = [c for c in candidates if c.get("category") == "pool"]
-    views = [c for c in candidates if c.get("category") == "view"]
-    facs = [c for c in candidates if c.get("category") == "facility"]
-    rooms = [c for c in candidates if c.get("category") == "bedroom"]
-    unknowns = [c for c in candidates if c.get("category") == "unknown"]
-
-    print(f"[Scraper] [1차 메타 분류] Pool={len(pools)}장, View={len(views)}장, Fac={len(facs)}장, Bedroom={len(rooms)}장, Unknown={len(unknowns)}장")
-
-    # 2. 필수 카테고리(pool >= 2, view >= 2) 부족 시 Gemini Vision 분류 가동 (방안 B)
-    if (len(pools) < 2 or len(views) < 2) and (unknowns or facs):
-        print("[Scraper] [Gemini Vision 가동] 수영장 또는 전경/뷰 컷 보충을 위해 멀티모달 비전 분류를 진행합니다...")
-        vision_candidates = unknowns + facs
-        for c in vision_candidates[:10]:
-            if len(pools) >= 2 and len(views) >= 2:
-                break
-            v_cat = classify_photo_with_gemini_vision(c["url"], api_key=api_key)
-            if v_cat in ["pool", "view", "facility", "bedroom"]:
-                c["category"] = v_cat
-                if v_cat == "pool" and c not in pools:
-                    pools.append(c)
-                elif v_cat == "view" and c not in views:
-                    views.append(c)
-
-    # 시각적 임팩트 및 후킹 최적화를 위한 카테고리 내부 정렬
-    # - pool: 야외 수영장, 인피니티풀 등 임팩트 큰 컷을 1순위로
-    pools.sort(key=lambda x: 0 if any(k in f"{x.get('title','')} {x['url']}".lower() for k in ["야외", "인피니티", "outdoor", "infinity"]) else 1)
-    # - view: 대표 사진/외관을 1순위로, 테라스/야경을 2순위로
-    views.sort(key=lambda x: 0 if any(k in f"{x.get('title','')} {x['url']}".lower() for k in ["대표", "외관", "exterior"]) else 1)
-    # - facs: 시그니처 라운지/로비를 1순위로
-    facs.sort(key=lambda x: 0 if any(k in f"{x.get('title','')} {x['url']}".lower() for k in ["라운지", "로비", "lounge", "lobby"]) else 1)
-
-    print(f"[Scraper] [비전 보정 후] Pool={len(pools)}장, View={len(views)}장, Fac={len(facs)}장, Bedroom={len(rooms)}장")
-
-    final_selected = []
-    used_urls = set()
-
-    def add_candidate(cand: Dict[str, Any]) -> bool:
-        if cand and cand["url"] not in used_urls:
-            final_selected.append(cand)
-            used_urls.add(cand["url"])
-            return True
-        return False
-
-    # [황금 시퀀싱 배치]
-    # Cut 1: 외관 전경 / 호수 전경 (view)
-    if views:
-        add_candidate(views[0])
-    elif facs:
-        add_candidate(facs[0])
-
-    # Cut 2: 메인 야외 수영장 (pool - 핵심 후킹)
-    if pools:
-        add_candidate(pools[0])
-
-    # Cut 3: 실내 수영장 또는 서브 온수풀 / 자쿠지 (pool)
-    if len(pools) > 1:
-        add_candidate(pools[1])
-    elif len(views) > 1:
-        add_candidate(views[1])
-
-    # Cut 4: 시그니처 라운지 / 로비 / 부대시설 (facility)
-    for f in facs:
-        if add_candidate(f):
-            break
-
-    # Cut 5: 럭셔리 침실 (bedroom - 침실 독점 차단을 위해 단 1장만 배치!)
-    if rooms:
-        add_candidate(rooms[0])
-
-    # Cut 6: 루프탑 테라스 / 산책로 / 야경 전경 (view 또는 facility)
-    added_cut6 = False
-    for v in views:
-        if add_candidate(v):
-            added_cut6 = True
-            break
-    if not added_cut6:
-        for f in facs:
-            if add_candidate(f):
-                added_cut6 = True
-                break
-
-    # Cut 7 (선택 시): 6~7장 규격 충족용 (수영장, 전경, 부대시설 순으로 보충, 침실은 추가 배제)
-    if len(final_selected) < target_count:
-        for pool_cand in pools:
-            if len(final_selected) >= target_count:
-                break
-            add_candidate(pool_cand)
-        for view_cand in views:
-            if len(final_selected) >= target_count:
-                break
-            add_candidate(view_cand)
-        for fac_cand in facs:
-            if len(final_selected) >= target_count:
-                break
-            add_candidate(fac_cand)
-
-    print(f"[Scraper] [황금 비율 선별 완료] 총 {len(final_selected)}장 선정:")
-    for order, c in enumerate(final_selected, 1):
-        print(f"  - 씬 {order}: [{c.get('category', 'unknown').upper()}] {c.get('title', '')} | {c['url']}")
-
-    return final_selected
 
 
 def is_space_photo_url(url: str) -> bool:
@@ -700,11 +543,14 @@ def scrape_product_info(
 
 
 # =============================================================================
-# [Step 3. 핀포인트 타겟 에셋 다운로드]
-# 기획된 씬의 태그/키워드와 이미지 풀을 대조하여 텍스트 점수로 후보를 정렬하고,
-# 상위 후보를 비전 검증 게이트로 실제 픽셀 기준 재판정한 뒤 씬별로 1장씩 다운로드합니다 (100KB+ 검증).
+# [Step 3. 사진 풀 비전 분류 + 슬롯 비율 배정]
+#   classify_image_pool      : 필요한 카테고리 위주로 후보를 골라 다운로드(100KB+) + 비전 분류 (해시 캐시)
+#   vision_inventory          : 대본 기획용 카테고리별 '실제로 쓸 수 있는' 사진 수
+#   download_targeted_scene_assets : 씬 슬롯(역할+선호 태그)에 사진을 1:1 배정 (희소한 슬롯부터, 중복 없음)
 # =============================================================================
 MIN_ASSET_BYTES = 100000
+CATEGORIES = ("pool", "view", "facility", "bedroom")
+DEFAULT_CATEGORY_QUOTA = {"pool": 3, "bedroom": 2, "facility": 2, "view": 1}   # 7씬 황금 비율 + 대체용 뷰 1
 
 
 def _scene_number(scene: Dict[str, Any], default: int) -> int:
@@ -719,7 +565,7 @@ def _scene_keywords(scene: Dict[str, Any]) -> List[str]:
 
 
 def score_candidate_for_scene(cand: Dict[str, Any], target_role: str, keywords: List[str]) -> int:
-    """텍스트 메타데이터 기반 1차 점수 (비전 게이트 전 후보 정렬용)"""
+    """텍스트 메타데이터 기반 점수 (비전 분류할 후보 선정 및 비전 미사용 시 배정에 사용)"""
     cand_cat = str(cand.get("category") or "unknown").lower()
     cand_title = str(cand.get("title") or "").lower()
     cand_alt = str(cand.get("alt") or "").lower()
@@ -741,21 +587,158 @@ def score_candidate_for_scene(cand: Dict[str, Any], target_role: str, keywords: 
         elif kw in cand_url:
             score += 8
 
-    if target_role in ("view", "view_or_night"):
-        if any(k in combined_text for k in ["호수", "바다", "물멍", "오션", "하늘", "전경", "외관", "exterior", "lake", "ocean"]):
+    if target_role in ("view", "view_or_night", "bedroom_or_view"):
+        if any(k in combined_text for k in ["호수", "바다", "물멍", "오션", "하늘", "전경", "외관", "마운틴", "exterior", "lake", "ocean"]):
             score += 40
-        if any(k in combined_text for k in ["대표", "메인", "main"]):
-            score += 20
     if target_role == "facility":
-        if any(k in combined_text for k in ["카페", "라운지", "통창", "소파", "테이블", "cafe", "lounge", "lobby", "레스토랑", "restaurant", "로비"]):
+        if any(k in combined_text for k in ["카페", "라운지", "통창", "바베큐", "바비큐", "불멍", "cafe", "lounge", "bbq", "레스토랑", "로비"]):
             score += 40
     if target_role == "pool":
-        if any(k in combined_text for k in ["야외", "인피니티", "outdoor", "infinity", "온수"]):
+        if any(k in combined_text for k in ["야외", "인피니티", "자쿠지", "outdoor", "infinity", "온수"]):
             score += 40
     if "night" in target_role or any(k in ("야경", "night") for k in keywords):
         if any(k in combined_text for k in ["야경", "night", "dusk", "sunset", "조명"]):
             score += 40
     return score
+
+
+def _usable_url(cand: Dict[str, Any], excluded: set) -> bool:
+    url = cand.get("url")
+    return bool(url) and url not in excluded and cand.get("category") != "negative" \
+        and not is_negative_image(f"{cand.get('title', '')} {cand.get('alt', '')}", url)
+
+
+def _vision_ok(cand: Dict[str, Any]) -> bool:
+    v = cand.get("vision")
+    return bool(v) and v.get("category") in CATEGORIES and int(v.get("fit", 0)) >= VISION_MIN_FIT \
+        and not cand.get("duplicate_of") and bool(cand.get("local_path")) and os.path.exists(cand["local_path"])
+
+
+def candidate_category(cand: Dict[str, Any]) -> str:
+    """비전 분류 결과가 있으면 그것을, 없으면 텍스트 메타 카테고리를 사용"""
+    v = cand.get("vision")
+    if v:
+        return v.get("category", "reject")
+    return str(cand.get("category") or "unknown")
+
+
+def vision_inventory(image_pool: List[Dict[str, Any]]) -> Dict[str, int]:
+    """대본 기획용 사진 인벤토리. 비전 분류된 후보가 있으면 '적합도 통과 사진' 기준, 없으면 텍스트 메타 기준"""
+    counts = {c: 0 for c in CATEGORIES}
+    if any(c.get("vision") for c in image_pool):
+        for c in image_pool:
+            if _vision_ok(c):
+                counts[c["vision"]["category"]] += 1
+        counts["source"] = "vision"
+    else:
+        for c in image_pool:
+            if c.get("category") in counts:
+                counts[c["category"]] += 1
+        counts["source"] = "text"
+    return counts
+
+
+def _create_client(api_key: Optional[str]):
+    if not api_key:
+        return None
+    try:
+        from google import genai
+        return genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.warning(f"Gemini 클라이언트 초기화 실패, 비전 분류 없이 진행: {e}")
+        return None
+
+
+def _select_for_classification(image_pool, excluded, quota, budget):
+    """분류할 후보 선정: 카테고리별 목표 수 x3 만큼 텍스트 점수 상위 후보를 라운드로빈으로 섞고, 남는 예산은 미분류(unknown)로 채움"""
+    fresh = [c for c in image_pool if not c.get("vision_checked") and _usable_url(c, excluded)]
+    queues = []
+    for cat, need in quota.items():
+        if need <= 0:
+            continue
+        ranked = sorted(fresh, key=lambda c: score_candidate_for_scene(c, cat, []), reverse=True)
+        queues.append(ranked[: need * 3])
+    picked, seen = [], set()
+    while len(picked) < budget and any(queues):
+        for q in queues:
+            while q and q[0]["url"] in seen:
+                q.pop(0)
+            if q and len(picked) < budget:
+                c = q.pop(0)
+                picked.append(c)
+                seen.add(c["url"])
+    for c in fresh:
+        if len(picked) >= budget:
+            break
+        if c["url"] not in seen:
+            picked.append(c)
+            seen.add(c["url"])
+    return picked
+
+
+def classify_image_pool(
+    image_pool: List[Dict[str, Any]],
+    output_dir: Optional[str] = None,
+    api_key: Optional[str] = None,
+    vision_cache: Optional[Dict[str, Any]] = None,
+    exclude_urls: Optional[set] = None,
+    quota: Optional[Dict[str, int]] = None,
+    budget: int = VISION_POOL_BUDGET,
+) -> Dict[str, int]:
+    """
+    사진 풀 후보를 다운로드(100KB+)하고 비전 분류 결과를 후보 dict에 기록합니다 (vision, local_path, image_hash).
+    image_pool의 dict를 직접 갱신하므로 세션에 보관된 풀에 결과가 누적됩니다. 반환: vision_inventory.
+    """
+    if not output_dir:
+        raise ValueError("output_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
+    client = _create_client(api_key)
+    if client is None:
+        return vision_inventory(image_pool)
+    pool_dir = os.path.join(output_dir, "pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    excluded = set(exclude_urls or set())
+    seen_hashes = {c["image_hash"]: c["url"] for c in image_pool if c.get("image_hash") and not c.get("duplicate_of")}
+    targets = _select_for_classification(image_pool, excluded, quota or DEFAULT_CATEGORY_QUOTA, budget)
+    print(f"[AssetManager] [비전 분류] 사진 풀 {len(image_pool)}개 중 {len(targets)}개 분류 시작 (목표 {quota or DEFAULT_CATEGORY_QUOTA})")
+
+    for cand in targets:
+        cand["vision_checked"] = True
+        try:
+            resp = requests.get(cand["url"], headers=cdn_headers_for(cand["url"], cand.get("referer")), timeout=12)
+            content = resp.content if resp.status_code == 200 else b""
+        except Exception as e:
+            logger.warning(f"후보 다운로드 예외 ({cand['url']}): {e}")
+            continue
+        if len(content) < MIN_ASSET_BYTES:
+            cand["vision"] = {"category": "reject", "fit": 0, "tags": [], "reason": f"100KB 미만 ({len(content):,} bytes)"}
+            continue
+        h = hashlib.md5(content).hexdigest()
+        cand["image_hash"] = h
+        if h in seen_hashes and seen_hashes[h] != cand["url"]:
+            cand["duplicate_of"] = seen_hashes[h]   # 같은 사진의 다른 해상도/URL 변형
+            continue
+        seen_hashes[h] = cand["url"]
+        local = os.path.join(pool_dir, f"{h}.jpg")
+        if not os.path.exists(local):
+            with open(local, "wb") as f:
+                f.write(content)
+        cand["local_path"] = local
+        verdict = classify_photo_with_vision(content, client, vision_cache)
+        if verdict:
+            cand["vision"] = verdict
+            print(f"[AssetManager]   - [{verdict['category']}/{verdict['fit']}] {verdict['tags']} {cand.get('title', '')} | {verdict['reason']}")
+
+    inv = vision_inventory(image_pool)
+    print(f"[AssetManager] [비전 분류 완료] 사용 가능 인벤토리: {inv}")
+    return inv
+
+
+def _slot_score(cand: Dict[str, Any], role: str, tags: List[str], keywords: List[str]) -> float:
+    v = cand.get("vision")
+    if v:
+        return int(v.get("fit", 0)) * 10 + 15 * len(set(v.get("tags", [])) & set(tags)) \
+            + score_candidate_for_scene(cand, role, keywords) / 20
+    return 50 + score_candidate_for_scene(cand, role, keywords) / 2
 
 
 def download_targeted_scene_assets(
@@ -767,40 +750,24 @@ def download_targeted_scene_assets(
     vision_cache: Optional[Dict[str, Any]] = None
 ) -> List[str]:
     """
-    [Step 3. 핀포인트 타겟 에셋 다운로드 엔진]
+    [씬 슬롯 비율 배정 엔진]
     - 전달된 씬만 처리합니다 (단일 씬 재선별 가능). 결과는 각 scene dict에 키로 기록됩니다:
-      image_path, matched_image_url, asset_status('matched'|'missing'), vision_verdict
-    - exclude_urls: 사용자가 거부한 URL 및 다른 씬이 이미 사용 중인 URL (재선별 시 같은 사진 반복 방지)
-    - api_key가 있으면 텍스트 상위 후보를 Gemini 비전으로 재판정하여 reject/저적합 사진을 탈락시킵니다.
-      비전 판정을 통과한 사진이 없으면 그 씬은 'missing'으로 남기고 억지로 아무 사진이나 채우지 않습니다.
+      image_path, matched_image_url, asset_status('matched'|'missing'), vision_verdict, asset_fallback
+    - api_key가 있으면 사진 풀을 비전 분류(캐시)한 뒤, 슬롯 역할(target_visual_role)에 맞는 카테고리 중
+      적합도 + 선호 태그(visual_tags) 점수가 가장 높은 사진을 배정합니다. 후보가 가장 적은 슬롯부터 배정해
+      수영장3/객실2/부대시설2 같은 비율이 희소 사진 경쟁으로 깨지지 않게 합니다.
+    - 해당 카테고리 사진이 없으면 analyzer와 같은 대체 순서로 채우고 asset_fallback에 표시, 그래도 없으면 'missing'.
+    - exclude_urls: 사용자가 거부한 URL 및 다른 씬이 이미 사용 중인 URL
     """
     if not output_dir:
         raise ValueError("output_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
     os.makedirs(output_dir, exist_ok=True)
     excluded = set(exclude_urls or set())
-    used_urls = set()
-    used_hashes = set()
-    downloaded_paths = []
 
-    client = None
-    if api_key:
-        try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-        except Exception as e:
-            logger.warning(f"Gemini 클라이언트 초기화 실패, 비전 검증 없이 진행: {e}")
-    if client is None:
-        print("[AssetManager] [경고] API 키가 없어 비전 검증 게이트를 건너뜁니다 (텍스트 점수만 사용).")
-
-    print(f"\n[AssetManager] [Step 3 시작] {len(scenes)}개 씬 타겟 에셋 매칭 (풀 {len(image_pool)}개, 제외 {len(excluded)}개, 비전={'ON' if client else 'OFF'})")
-
+    # 0. 이 씬들의 이전 결과 및 파생 캐시만 삭제 (다른 씬 파일은 건드리지 않음)
     for s_idx, scene in enumerate(scenes, 1):
         s_num = _scene_number(scene, s_idx)
-        target_role = str(scene.get("target_visual_role") or "view").lower().strip()
-        keywords = _scene_keywords(scene)
-
-        # 0. 이 씬의 이전 결과 및 파생 캐시만 삭제 (다른 씬 파일은 건드리지 않음)
-        for key in ("image_path", "matched_image_url", "vision_verdict", "media"):
+        for key in ("image_path", "matched_image_url", "vision_verdict", "media", "asset_fallback"):
             scene.pop(key, None)
         scene["asset_status"] = "missing"
         for suffix in (".jpg", ".png", ".mp4", ".mp4.json", "_thumb.jpg"):
@@ -811,76 +778,116 @@ def download_targeted_scene_assets(
                 except Exception:
                     pass
 
-        print(f"[AssetManager] 씬 {s_num} 매칭 탐색: target_role='{target_role}', keywords={keywords}")
+    # 1. 필요한 카테고리 수 계산 → 비전 분류 (이미 분류된 사진은 캐시 재사용)
+    need = {}
+    for scene in scenes:
+        role = str(scene.get("target_visual_role") or "view").lower().strip()
+        cat = ROLE_PRIMARY_CATEGORY.get(role, role)
+        need[cat] = need.get(cat, 0) + 1
+    # 이미 분류된 사용 가능 사진으로 충분한 카테고리는 다시 분류하지 않음 (부족분만 추가 분류)
+    have = {}
+    for c in image_pool:
+        if _vision_ok(c) and _usable_url(c, excluded):
+            have[c["vision"]["category"]] = have.get(c["vision"]["category"], 0) + 1
+    shortage = {cat: n - have.get(cat, 0) for cat, n in need.items() if n - have.get(cat, 0) > 0}
+    if shortage:
+        budget = VISION_POOL_BUDGET if len(scenes) > 1 else VISION_REMATCH_BUDGET
+        classify_image_pool(image_pool, output_dir, api_key, vision_cache, excluded, shortage, budget)
+    use_vision = any(c.get("vision") for c in image_pool)
 
-        scored_candidates = []
+    def eligible(scene, roles_ok, used_urls, used_hashes):
+        out = []
         for cand in image_pool:
-            url = cand.get("url")
-            if not url or url in used_urls or url in excluded:
+            if not _usable_url(cand, excluded) or cand["url"] in used_urls or cand.get("image_hash") in used_hashes:
                 continue
-            if cand.get("category") == "negative" or is_negative_image(f"{cand.get('title', '')} {cand.get('alt', '')}", url):
-                continue
-            scored_candidates.append((score_candidate_for_scene(cand, target_role, keywords), cand))
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+            role_i = str(scene.get("target_visual_role") or "").lower().strip()
+            if use_vision:
+                if _vision_ok(cand) and cand["vision"]["category"] in roles_ok:
+                    need_tags = ROLE_CATEGORY_REQUIRED_TAGS.get(role_i, {}).get(cand["vision"]["category"])
+                    if not need_tags or need_tags & set(cand["vision"].get("tags", [])):
+                        out.append(cand)
+            elif candidate_category(cand) in roles_ok:
+                need_text = ROLE_CATEGORY_REQUIRED_TEXT.get(role_i, {}).get(candidate_category(cand))
+                if not need_text or any(t in f"{cand.get('title', '')} {cand.get('url', '')}".lower() for t in need_text):
+                    out.append(cand)
+        return out
 
-        accepted_cats = ROLE_ACCEPTED_CATEGORIES.get(target_role, {target_role})
-        best = None  # (fit, text_score, cand, content, verdict)
-        vision_checks = 0
+    # 2. 희소한 슬롯부터 배정
+    pending = list(enumerate(scenes, 1))
+    used_urls, used_hashes, downloaded_paths = set(), set(), []
+    print(f"\n[AssetManager] [슬롯 배정] {len(scenes)}개 씬 (비전={'ON' if use_vision else 'OFF'}, 제외 {len(excluded)}개)")
+    while pending:
+        infos = []
+        for s_idx, scene in pending:
+            role = str(scene.get("target_visual_role") or "view").lower().strip()
+            accepted = ROLE_ACCEPTED_CATEGORIES.get(role, {role})
+            tags_i, kw_i = list(scene.get("visual_tags") or []), _scene_keywords(scene)
+            infos.append((s_idx, scene, role, accepted, tags_i, kw_i, eligible(scene, accepted, used_urls, used_hashes)))
+        # 후보가 0~1장인 슬롯을 먼저 확정(희소 카테고리 보호), 그 외에는 전체 (슬롯, 사진) 쌍 중 최고 점수부터 배정
+        forced = [i for i in infos if len(i[6]) <= 1]
+        if forced:
+            s_idx, scene, role, accepted, tags, keywords, cands = min(forced, key=lambda i: (len(i[6]), i[0]))
+        else:
+            best = max(((_slot_score(c, i[2], i[4], i[5]), -i[0], k, j) for k, i in enumerate(infos) for j, c in enumerate(i[6])))
+            s_idx, scene, role, accepted, tags, keywords, cands = infos[best[2]]
+            cands = [cands[best[3]]] + [c for j, c in enumerate(cands) if j != best[3]]
+        pending = [(i, s) for i, s in pending if i != s_idx]
+        s_num = _scene_number(scene, s_idx)
 
-        for score, cand in scored_candidates:
-            if client is not None and vision_checks >= VISION_MAX_CHECKS:
-                break
-            img_u = cand["url"]
-            try:
-                resp = requests.get(img_u, headers=cdn_headers_for(img_u, cand.get("referer")), timeout=12)
-            except Exception as e:
-                logger.warning(f"후보 다운로드 예외 ({img_u}): {e}")
-                continue
-            content = resp.content if resp.status_code == 200 else b""
-            if len(content) < MIN_ASSET_BYTES:
-                continue
-            if hashlib.md5(content).hexdigest() in used_hashes:
-                continue  # 같은 사진의 다른 해상도/URL 변형
+        fallback_cat = None
+        if not cands:
+            # 대체: core.analyzer.SLOT_FALLBACKS와 같은 순서 (수영장→뷰→부대시설 등)
+            for fb in {"pool": ["view", "facility"], "bedroom": ["view"], "bedroom_or_view": ["facility"],
+                       "facility": ["view", "bedroom"], "view": ["facility", "bedroom"], "view_or_night": ["bedroom"],
+                       "facility_or_night_view": ["bedroom"]}.get(role, []):
+                cands = eligible(scene, {fb}, used_urls, used_hashes)
+                if cands:
+                    fallback_cat = fb
+                    break
+        if fallback_cat or forced:
+            cands.sort(key=lambda c: _slot_score(c, role, tags, keywords), reverse=True)
+        else:
+            cands = cands[:1] + sorted(cands[1:], key=lambda c: _slot_score(c, role, tags, keywords), reverse=True)
 
-            if client is None:
-                best = (None, score, cand, content, None)
-                break
+        chosen, content = None, None
+        for cand in cands:
+            if cand.get("local_path") and os.path.exists(cand["local_path"]):
+                with open(cand["local_path"], "rb") as f:
+                    content = f.read()
+            else:   # 비전 미사용(API 키 없음): 배정 시점에 다운로드 + 크기/중복 검증
+                try:
+                    resp = requests.get(cand["url"], headers=cdn_headers_for(cand["url"], cand.get("referer")), timeout=12)
+                    content = resp.content if resp.status_code == 200 else b""
+                except Exception:
+                    content = b""
+                if len(content) < MIN_ASSET_BYTES or hashlib.md5(content).hexdigest() in used_hashes:
+                    used_urls.add(cand["url"])
+                    continue
+                cand["image_hash"] = hashlib.md5(content).hexdigest()
+            chosen = cand
+            break
 
-            vision_checks += 1
-            verdict = verify_scene_photo_with_vision(content, target_role, keywords, client, vision_cache)
-            if verdict is None:
-                # 비전 호출 실패 시 텍스트 점수 1순위로 대체하되 미검증 표시
-                best = best or (None, score, cand, content, None)
-                continue
-            ok = verdict["category"] in accepted_cats and verdict["fit"] >= VISION_MIN_FIT
-            print(f"[AssetManager]   - 비전 판정 [{verdict['category']}/{verdict['fit']}] {'채택후보' if ok else '탈락'}: {cand.get('title', '')} | {verdict['reason']}")
-            if not ok:
-                continue
-            if best is None or best[0] is None or verdict["fit"] > best[0]:
-                best = (verdict["fit"], score, cand, content, verdict)
-            if verdict["fit"] >= VISION_GOOD_FIT:
-                break
-
-        if best is None:
-            print(f"[AssetManager] [매칭 실패] 씬 {s_num}: 적합한 사진이 없습니다. 수동 교체 또는 업로드가 필요합니다.")
+        if chosen is None:
+            print(f"[AssetManager] [매칭 실패] 씬 {s_num} ({role}): 적합한 사진이 없습니다. 수동 교체 또는 업로드가 필요합니다.")
             continue
 
-        _, score, cand, content, verdict = best
         save_path = os.path.abspath(os.path.join(output_dir, f"scene_{s_num:02d}.jpg"))
         with open(save_path, "wb") as f:
             f.write(content)
-
-        used_urls.add(cand["url"])
-        used_hashes.add(hashlib.md5(content).hexdigest())
+        used_urls.add(chosen["url"])
+        used_hashes.add(chosen.get("image_hash") or hashlib.md5(content).hexdigest())
         scene["image_path"] = save_path
-        scene["matched_image_url"] = cand["url"]
+        scene["matched_image_url"] = chosen["url"]
         scene["asset_status"] = "matched"
-        scene["vision_verdict"] = verdict
+        scene["vision_verdict"] = chosen.get("vision")
+        if fallback_cat:
+            scene["asset_fallback"] = fallback_cat
         downloaded_paths.append(save_path)
-        v_tag = f"vision {verdict['category']}/{verdict['fit']}" if verdict else "vision 미검증"
-        print(f"[AssetManager] [다운로드 성공] 씬 {s_num}: [{str(cand.get('category', 'unknown')).upper()}] {cand.get('title', '')} (text {score}, {v_tag}) -> {save_path} ({len(content)/1024:.1f} KB)")
+        v = chosen.get("vision") or {}
+        print(f"[AssetManager] [배정] 씬 {s_num} [{role}{' → ' + fallback_cat if fallback_cat else ''}] "
+              f"{v.get('category', candidate_category(chosen))}/{v.get('fit', '-')} {v.get('tags', [])} (선호 {tags}) <- {chosen.get('title', '')}")
 
-    print(f"[AssetManager] [Step 3 완료] {len(downloaded_paths)}/{len(scenes)}개 씬 매칭 완료\n")
+    print(f"[AssetManager] [슬롯 배정 완료] {len(downloaded_paths)}/{len(scenes)}개 씬\n")
     return downloaded_paths
 
 

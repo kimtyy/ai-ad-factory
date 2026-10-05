@@ -109,7 +109,7 @@ def main():
     parser.add_argument("--scenes", type=int, default=None, help="목표 씬 개수 (미지정 시 영상 길이에 맞춰 자동 계산)")
     parser.add_argument("--tone", type=str, choices=["aggro", "expert", "review", "speed15"], default="aggro", help="대본 톤앤매너 프리셋")
     parser.add_argument("--duration", type=str, choices=["10s", "15s", "30s", "60s"], default="15s", help="영상 길이 프리셋")
-    parser.add_argument("--audio-mode", type=str, choices=["voice_and_sub", "silent", "voice_and_bgm"], default="voice_and_sub", help="오디오 모드")
+    parser.add_argument("--audio-mode", type=str, choices=["voice_and_sub", "silent"], default="voice_and_sub", help="오디오 모드")
     parser.add_argument("--actor", type=str, choices=["female_20s", "female_30s", "male_20s", "male_30s"], default="female_20s", help="AI 성우 프로필")
     parser.add_argument(
         "--step",
@@ -196,6 +196,14 @@ def main():
                         sc["media"] = {"type": "video", "path": os.path.abspath(path), "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
                     else:
                         sc["image_path"] = os.path.abspath(path)
+            elif args.mode == "travel" and image_pool:
+                # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
+                from core.planners.travel import plan_travel_storyboard
+                scenes, photo_inventory = plan_travel_storyboard(
+                    product_name=args.product, usp=args.usp, image_pool=image_pool, assets_dir=job.assets_dir,
+                    api_key=keys.get("GEMINI_API_KEY"), mock=args.mock, tone_and_manner=args.tone,
+                    duration_preset=args.duration, audio_mode=args.audio_mode, output_plan_path=job.plan_path,
+                )
             else:
                 # 트랙 A: 제휴(숙소/쇼핑) 대본 선기획
                 scenes = plan_storyboard(
@@ -213,15 +221,7 @@ def main():
                     mode=args.mode,
                     photo_inventory=photo_inventory
                 )
-            # 여행 모드: 씬별 실물 사진 매칭 (비전 검증) 후 결과(image_path)를 기획 파일에 함께 저장
-            if args.mode == "travel" and image_pool:
-                from core.scraper import download_targeted_scene_assets
-                download_targeted_scene_assets(
-                    scenes=scenes,
-                    image_pool=image_pool,
-                    output_dir=job.assets_dir,
-                    api_key=keys.get("GEMINI_API_KEY")
-                )
+            # 숙소 제휴 모드는 plan_travel_storyboard에서 사진 배정까지 끝난 상태로 저장
             job.save_plan(scenes)
             display_storyboard_table(scenes)
             console.print(f"[bold green][OK] Step 1 완료![/bold green] 기획안 저장: [underline]{job.plan_path}[/underline]\n")
