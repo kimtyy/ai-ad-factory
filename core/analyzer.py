@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 
 from core.guardrail import validate_model_call
+from core.script_guard import shorten_line, find_unsupported_claim, safe_line_for
 
 logger = logging.getLogger("ad_factory.analyzer")
 
@@ -338,10 +339,10 @@ MOCK_TRAVEL_LINES = {
 }
 # 황금 비율 슬롯별 Mock 대사 (같은 역할이 연속돼도 대사가 반복되지 않도록 슬롯 위치별로 구분)
 MOCK_GOLDEN7_LINES = {
-    "info": ["사계절 따뜻한 야외 온수풀!", "끝없이 이어지는 풀 뷰에 감탄!", "자쿠지에서 물멍하며 완벽 힐링!",
-             "감성 가득한 객실에서 하룻밤!", "창밖으로 펼쳐지는 그림 같은 뷰!", "밤엔 불멍하며 바베큐 파티!"],
-    "experience": ["온수풀 들어가자마자 입 떡 벌어짐!", "풀 뷰 보면서 사진만 백 장 찍음!", "자쿠지에서 물멍하다 시간 순삭!",
-                   "객실 들어가자마자 감성 폭발!", "창밖 뷰 보다가 늦잠까지 완벽!", "불멍하며 바베큐까지 꽉 찬 하루!"],
+    "info": ["물빛부터 다른 수영장 실화?", "끝없이 이어지는 풀 뷰에 감탄!", "물멍하며 완벽하게 힐링!",
+             "감성 가득한 객실에서 하룻밤!", "창밖으로 펼쳐지는 그림 같은 뷰!", "분위기 끝내주는 공간까지!"],
+    "experience": ["수영장 보자마자 입 떡 벌어짐!", "풀 뷰 보면서 사진만 백 장 찍음!", "물멍하다 보니 시간 순삭!",
+                   "객실 들어가자마자 감성 폭발!", "창밖 뷰 보다가 늦잠까지 완벽!", "마지막까지 꽉 찬 하루!"],
 }
 
 
@@ -770,8 +771,10 @@ JSON 출력 스키마 예시:
                     if len(word_clean) >= 2 and word_clean not in generic_words:
                         forbidden_tokens.add(word_clean)
 
-            # 2. 미보유 부대시설(뷔페, 조식 등) 허위 언급 차단 및 공간 뷰 치환
-            unverified_facility_words = ["뷔페", "조식", "레스토랑", "식사", "다이닝", "디너", "런치"]
+            # 2. 근거 없는 주장 차단: 그 씬에 실제 배정된 사진 설명 또는 USP에 근거가 없는 시설·속성·가격 표현은
+            #    사진 중립 문구로 교체 (예: 실내 수영장 사진에 '온수', 근거 없는 '침대 추가')
+            photo_notes = list(slot_photo_notes or [])
+            replaced = 0
 
             for idx, sc in enumerate(scenes):
                 vo = sc.get("voiceover", "")
@@ -783,24 +786,22 @@ JSON 출력 스키마 예시:
                     if token and token in cap:
                         cap = cap.replace(token, "비밀 힐링 스팟")
 
-                for w in unverified_facility_words:
-                    if w in vo or w in cap:
-                        vo = "여기서 제대로 힐링해보세요!"
-                        cap = "여기서 제대로 힐링해보세요"
+                note = photo_notes[idx] if idx < len(photo_notes) else None
+                if idx < len(scenes) - 1:
+                    claim = find_unsupported_claim(vo, [note], usp)
+                    if claim:
+                        logger.info(f"[근거 없는 주장 차단] 씬 {idx + 1}: '{claim}' (대사: {vo}) → 사진 중립 문구로 교체")
+                        vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
+                        replaced += 1
+                    hook = sc.get("hook_title") or ""
+                    if idx == 0 and hook and find_unsupported_claim(hook, [note], usp):
+                        sc["hook_title"] = "여기 진짜 한국 맞아요?"
 
-                # 3. 템플릿 길이 준수: 씬당 2.5초 기준 배정 및 나레이션 15~20자 초압축 (실제 길이는 TTS 길이 기준)
+                # 3. 템플릿 길이 준수: 씬당 2.5초 기준, 나레이션은 어절 경계에서 15~20자로 (실제 길이는 TTS 길이 기준)
                 sc["duration_sec"] = 2.5
-                if idx < len(scenes) - 1 and len(vo) > 22:
-                    parts = re.split(r'[,.!?]\s*', vo)
-                    condensed = parts[0].strip()
-                    if len(condensed) < 10 and len(parts) > 1:
-                        condensed = f"{parts[0]} {parts[1]}".strip()
-                    if len(condensed) > 20:
-                        condensed = condensed[:20].rstrip() + "!"
-                    vo = condensed
-
-                if len(cap) > 20:
-                    cap = cap[:20].rstrip()
+                if idx < len(scenes) - 1:
+                    vo = shorten_line(vo)
+                cap = vo   # 자막 = 나레이션 (앱에서도 동일하게 동기화)
 
                 sc["voiceover"] = vo
                 sc["caption"] = cap

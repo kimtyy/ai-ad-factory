@@ -12,8 +12,9 @@ import io
 import json
 import logging
 import os
-import re
 from typing import Any, Dict, List, Optional
+
+from core.script_guard import find_unsupported_claim, shorten_line
 
 logger = logging.getLogger("ad_factory.planners.owner")
 
@@ -39,8 +40,7 @@ MOCK_LINES = {
              "interior": "천천히 둘러보기 좋은 공간!", "detail": "디테일까지 꼼꼼하게 골랐어요!", "service": "친절하게 안내해 드릴게요!"},
 }
 
-# 사장님이 입력하지 않은 수치/혜택/순위 주장은 허위·과장 광고 위험이 있어 차단
-CLAIM_PATTERNS = [r"\d+\s*%", r"\d[\d,]*\s*원", "할인", "무료", "공짜", "최저가", "1위", "일등", "최고급", "특가", "이벤트", "증정"]
+# 사장님이 입력하지 않은 수치/혜택/순위 주장 차단 규칙은 core.script_guard.PRICE_CLAIM_PATTERNS에서 관리
 
 
 def owner_cta(search_keyword: str) -> str:
@@ -55,11 +55,8 @@ def _roles_for(business_type: str, count: int) -> List[str]:
 
 
 def _unsupported_claim(text: str, usp: str) -> Optional[str]:
-    for pat in CLAIM_PATTERNS:
-        m = re.search(pat, text)
-        if m and m.group(0) not in (usp or ""):
-            return m.group(0)
-    return None
+    # 사장님 모드는 Gemini가 사진을 직접 보고 쓰므로 시설 묘사는 허용, 가격·할인·순위는 USP에 적힌 것만 허용
+    return find_unsupported_claim(text, usp=usp, check_amenities=False)
 
 
 def _media_preview_image(path: str, thumb_dir: Optional[str]):
@@ -134,8 +131,7 @@ def plan_owner_storyboard(
             if claim:
                 logger.info(f"[허위 차단] 씬 {i + 1}: USP에 없는 표현 '{claim}' → 템플릿 대사로 교체")
                 text = lines.get(role, lines["exterior"])
-            if len(text) > 22:
-                text = text[:21].rstrip() + "!"
+            text = shorten_line(text)
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
             role = llm[i]["role"]
         hook = ""
