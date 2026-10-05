@@ -1,0 +1,29 @@
+# 비밀 정보 (API 키)
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 생성 산출물 / 대용량 미디어 (크롤링 사진, 업로드 원본, 렌더링 결과)
+outputs/
+scratch/
+sessions/
+storyboard_plan.json
+*TEMP_MPY*
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# 폰트는 실행 시 자동 다운로드 (core/compositor.py)
+fonts/
