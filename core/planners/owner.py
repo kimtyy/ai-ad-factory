@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import find_unsupported_claim, shorten_line
+from core.script_guard import COPY_TONE_RULES, find_promo_tone, find_unsupported_claim, shorten_line
 from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.planners.owner")
@@ -33,7 +33,7 @@ ROLE_LABELS_KO = {
 }
 
 MOCK_LINES = {
-    "stay": {"exterior": "도착하자마자 설레는 우리 숙소!", "room": "아늑한 객실에서 푹 쉬어가세요!",
+    "stay": {"exterior": "도착하자마자 설레는 우리 숙소!", "room": "객실 들어오면 다들 일단 눕고 봐요!",
              "facility": "놀 거리 가득한 부대시설까지!", "view": "창밖 풍경만 봐도 힐링돼요!", "detail": "작은 것 하나까지 신경 썼어요!"},
     "food": {"exterior": "골목 안 숨은 맛집, 여기예요!", "signature": "이게 바로 저희 대표 메뉴!",
              "cooking": "주문 즉시 바로 만들어 드려요!", "interior": "편하게 머물다 가는 공간이에요!", "detail": "재료부터 정성껏 준비해요!"},
@@ -133,6 +133,10 @@ def plan_owner_storyboard(
             if claim:
                 logger.info(f"[허위 차단] 씬 {i + 1}: USP에 없는 표현 '{claim}' → 템플릿 대사로 교체")
                 text = lines.get(role, lines["exterior"])
+            promo = find_promo_tone(text)
+            if promo:
+                logger.info(f"[홍보 어투 차단] 씬 {i + 1}: {promo} (대사: {text}) → 템플릿 대사로 교체")
+                text = lines.get(role, lines["exterior"])
             text = shorten_line(text)
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
             role = llm[i]["role"]
@@ -187,7 +191,10 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
    미디어가 없는 씬은 업종 기본 구성({role_hint})을 따르세요.
 2. 각 voiceover는 공백 포함 15~20자 구어체 한 문장. 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
 3. 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
-4. 씬 1의 hook_title은 스크롤을 멈추게 하는 10~15자 헤드라인 (상호명 포함 가능).
+4. 씬 1의 hook_title은 스크롤을 멈추게 하는 10~15자 헤드라인 (상호명 포함 가능). 씬 1 voiceover는 화면에 헤드라인과 함께
+   붙어 나가므로 헤드라인을 받아 사진 속 장면으로 이어지게 쓰세요.
+{COPY_TONE_RULES.replace("친구에게 비밀 장소 자랑하듯", "사장님이 단골에게 자랑하듯")}
+   (사장님 말투 예: '저녁 되면 마당 불멍존에 다들 모여요', '창문 열면 계곡 물소리가 그대로 들어와요')
 {hook_hints.prompt_block if hook_hints else ""}
 5. 마지막 씬 {n}의 voiceover는 정확히: "{cta_line}"
 6. role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")

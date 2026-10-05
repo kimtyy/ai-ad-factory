@@ -6,7 +6,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from moviepy.editor import (
     VideoFileClip,
@@ -22,8 +22,13 @@ from core.render.brand import BrandOverlay
 
 logger = logging.getLogger("ad_factory.compositor")
 
-# 화면 중앙(46%) 자막 + 후킹 바 동시 노출 스타일을 쓰는 모드 (실사 공간 영상)
+# 하단 단일 자막 블록 스타일을 쓰는 모드 (실사 공간 영상: 수영장·객실 등 사진 핵심을 가리지 않음)
+#   씬 1 후킹 헤드라인과 나레이션 자막을 한 블록(반투명 다크 필)으로 묶어 화면 하단 30~35% 지점에 배치 → 시선 분열 제거
+#   커머스 모드는 씬 2 제품 누끼가 화면 62% 지점에 합성되므로 기존 레이아웃(상단 후킹 바 / 62% 자막) 유지
 CENTER_CAPTION_MODES = ("travel", "owner")
+CAPTION_BLOCK_BOTTOM = 0.745     # 블록 아래 끝 (높이 비율). 그 아래 약 25%는 쇼츠·릴스 제목/버튼 UI가 덮는 영역
+CAPTION_PILL_FILL = (12, 12, 14, 150)
+HOOK_HEADLINE_COLOR = (255, 214, 10)
 
 
 class AdCompositor:
@@ -140,6 +145,66 @@ class AdCompositor:
             lines.append(current_line)
         return lines
 
+    def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int) -> np.ndarray:
+        """
+        travel/owner 공통 하단 단일 자막 블록:
+        - [씬 1] 노란 후킹 헤드라인(크게) + 흰 나레이션 자막을 한 덩어리로 쌓아 시선을 한곳에 모음
+        - [일반 씬] 흰 나레이션 자막만
+        - 블록 뒤 반투명 다크 필 + 부드러운 그림자, 글자는 Pretendard-Black + 얇은 외곽선 (밝은 하늘·바다 위에서도 선명)
+        """
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        def font(size):
+            try:
+                return ImageFont.truetype(self.font_path, size)
+            except Exception:
+                return ImageFont.load_default()
+
+        groups = []   # (줄 목록, 폰트, 글자색, 줄 높이)
+        if hook_title and hook_title.strip():
+            hf = font(int(width * 0.084))
+            lines = self._wrap_text(hook_title.strip(), draw, hf, max_width=int(width * 0.80))
+            if lines:
+                groups.append((lines, hf, HOOK_HEADLINE_COLOR + (255,), int(hf.size * 1.22)))
+        if caption_text and caption_text.strip():
+            cf = font(int(width * 0.062))
+            lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * 0.82))
+            if lines:
+                groups.append((lines, cf, (255, 255, 255, 255), int(cf.size * 1.3)))
+        if not groups:
+            return np.array(img)
+
+        gap = int(width * 0.022) if len(groups) > 1 else 0
+        text_h = sum(len(ls) * lh for ls, _, _, lh in groups) + gap
+        text_w = max(draw.textbbox((0, 0), ln, font=f)[2] - draw.textbbox((0, 0), ln, font=f)[0]
+                     for ls, f, _, _ in groups for ln in ls)
+        pad_x, pad_y = int(width * 0.05), int(width * 0.034)
+        bottom = int(height * CAPTION_BLOCK_BOTTOM)
+        box = (max(int(width * 0.04), (width - text_w) // 2 - pad_x), bottom - text_h - 2 * pad_y,
+               min(width - int(width * 0.04), (width + text_w) // 2 + pad_x), bottom)
+        radius = int(width * 0.04)
+
+        # 부드러운 그림자 → 반투명 다크 필
+        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle((box[0], box[1] + 10, box[2], box[3] + 10), radius=radius, fill=(0, 0, 0, 110))
+        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(int(width * 0.02))))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle(box, radius=radius, fill=CAPTION_PILL_FILL)
+
+        y = box[1] + pad_y
+        for gi, (lines, f, color, lh) in enumerate(groups):
+            if gi:
+                y += gap
+            for ln in lines:
+                bb = draw.textbbox((0, 0), ln, font=f)
+                x = (width - (bb[2] - bb[0])) // 2 - bb[0]
+                # 줄 높이 안에서 글자 세로 중앙 정렬 (폰트 상단 여백 보정)
+                ty = y + (lh - (bb[3] - bb[1])) // 2 - bb[1]
+                draw.text((x, ty), ln, font=f, fill=color, stroke_width=2, stroke_fill=(0, 0, 0, 200))
+                y += lh
+        return np.array(img)
+
     def create_overlay_image(
         self,
         caption_text: Optional[str],
@@ -150,15 +215,14 @@ class AdCompositor:
         **kwargs
     ) -> np.ndarray:
         """
-        숏폼 전용 고가독성 자막 오버레이 시스템:
-        - [여행 상품 모드 - 런비(Learnbee) 스타일]:
-          * 자막 위치: 시선이 가장 집중되는 화면 중앙 (상단 기준 46%, 45%~48% 범위)
-          * 폰트 및 스타일: Pretendard-Black, 순백색 텍스트 + 두꺼운 검은색 외곽선(Stroke 6px) + 반투명 라운드 필 (밝은 배경에서도 100% 가독성 보장)
-          * 씬 1 후킹 바가 존재할 경우: 상단 17% 지점에 형광 옐로우 후킹 바를 노출하고, 중앙 46%에는 런비 나레이션 자막 동시 노출
+        숏폼 전용 고가독성 자막 오버레이:
+        - [여행/사장님 모드]: _caption_block - 후킹 헤드라인 + 자막을 하단 30~35% 지점 단일 블록으로
         - [일반 커머스 모드]:
           * 씬 1 (hook_title 존재 시): 상단 17% 지점 후킹 바 단독 노출
           * 일반 씬: 하단 62% 지점(쇼츠 UI 세이프존)에 볼드 자막 노출
         """
+        if mode in CENTER_CAPTION_MODES:
+            return self._caption_block(caption_text, hook_title, width, height)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
@@ -210,25 +274,17 @@ class AdCompositor:
                         stroke_fill=(0, 0, 0)
                     )
 
-            if mode not in CENTER_CAPTION_MODES:
-                # 커머스 모드는 씬 1에서 후킹 바 단독 노출
-                return np.array(img)
+            # 커머스 모드는 씬 1에서 후킹 바 단독 노출
+            return np.array(img)
 
         # -------------------------------------------------------------
-        # Case 2: 나레이션 자막 (여행 상품 모드: 중앙 46% 런비 스타일 / 커머스 모드: 하단 62%)
+        # Case 2: 커머스 나레이션 자막 (하단 62%)
         # -------------------------------------------------------------
         if caption_text and caption_text.strip():
             sub_text = caption_text.strip()
-
-            if mode in CENTER_CAPTION_MODES:
-                # [여행/사장님 공통 런비 스타일]: 시선 집중 중앙(46% 지점), 순백색(#FFFFFF) + 굵은 검은색 테두리(5px) + 드롭 섀도우
-                sub_font_size = int(width * 0.072)
-                center_y_sub = int(height * 0.46)
-                stroke_width = 5
-            else:
-                sub_font_size = int(width * 0.064)
-                center_y_sub = int(height * 0.62)
-                stroke_width = 5
+            sub_font_size = int(width * 0.064)
+            center_y_sub = int(height * 0.62)
+            stroke_width = 5
 
             try:
                 sub_font = ImageFont.truetype(self.font_path, sub_font_size)
@@ -343,7 +399,7 @@ class AdCompositor:
                 w, h = synced_video.size
                 if caption_text or hook_title or brand:
                     if mode in CENTER_CAPTION_MODES:
-                        logger.info(f"씬 {scene_num} [런비 스타일] 중앙 자막 오버레이 렌더링 (화면 46%): '{caption_text}'")
+                        logger.info(f"씬 {scene_num} 하단 단일 자막 블록 렌더링 (하단 30~35%){' + 후킹 헤드라인' if hook_title else ''}: '{caption_text}'")
                     elif hook_title and hook_title.strip():
                         logger.info(f"씬 {scene_num} 상단 후킹 바 단독 렌더링 (모바일 세이프존 17%): '{hook_title}'")
                     else:

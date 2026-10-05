@@ -28,6 +28,34 @@ logger = logging.getLogger("ad_factory.asset_generator")
 # 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장 사진은 허위광고)
 REAL_MEDIA_MODES = ("travel", "owner")
 
+# Ken Burns 모션 강도: 줌 1.0 ↔ 1.20배 (기존 1.12배 계획이 5초 클립 중 앞 3초만 노출돼 실제 약 1.07배로 정지 화면처럼 보였음)
+KB_ZOOM = 1.20
+KB_PAN_ZOOM = 1.06          # 패닝 중 함께 밀고 들어가는 줌 (평면 슬라이드 느낌 제거)
+KB_PAN_MARGIN_X = 1.32      # 좌우 패닝 이동 폭 (프레임 폭 대비 원본 여유)
+KB_PAN_MARGIN_Y = 1.25      # 상하 패닝 이동 폭
+
+
+def kb_ease(t: float) -> float:
+    """ease-out (2차): 시작 속도가 가장 빠르고 끝에서 안착 → 씬 시작 순간부터 움직임이 보임"""
+    t = min(max(t, 0.0), 1.0)
+    return 1.0 - (1.0 - t) ** 2
+
+
+def _audio_seconds(path: str) -> Optional[float]:
+    """오디오 길이(초). ffmpeg 출력의 Duration을 읽음 (없거나 실패하면 None)"""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        res = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-i", path], capture_output=True, text=True,
+                             encoding="utf-8", errors="ignore", timeout=20)
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", res.stderr or "")
+        if m:
+            sec = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+            return sec if sec > 0 else None
+    except Exception as e:
+        logger.debug(f"오디오 길이 확인 실패 ({path}): {e}")
+    return None
+
 
 def num_to_sino_korean(num: int) -> str:
     """숫자를 광고 구어체에 적합한 한자어 발음으로 변환 (예: 48 -> 사십팔, 3 -> 삼)"""
@@ -454,32 +482,33 @@ class AssetGenerator:
         out_path: str,
         fps: int = 24,
         motion_type: str = "zoom_in",
-        focus_bottom: bool = False
+        focus_bottom: bool = False,
+        motion_sec: Optional[float] = None
     ) -> str:
         """
         Pillow, OpenCV, ffmpeg를 사용해 2D 키프레임 이미지를 역동적인 9:16 세로형(1080x1920)
         Ken Burns(팬앤줌: 줌인, 줌아웃, 상하/좌우 패닝) MP4 클립으로 합성.
+        - motion_sec: 모션이 끝까지 진행되는 시간 (= 실제 화면에 나가는 시간). 그 뒤 프레임은 끝 구도 유지.
+          클립을 넉넉히 렌더해도 모션이 화면 노출 시간 안에 다 보이도록 해, 줌 폭이 잘려 정지 화면처럼 보이지 않게 함
+        - 줌인/줌아웃은 1.0 ↔ KB_ZOOM(1.20)배, 패닝은 이동하면서 KB_PAN_ZOOM(1.06)배까지 밀고 들어가 깊이감 추가
+        - ease-out 곡선: 첫 프레임부터 빠르게 움직이고 끝에서 안착 (씬 전환 직후 정체감 제거)
         focus_bottom=True일 경우 건물 상단의 간판/로고가 프레임 밖으로 벗어나도록 하단 중심 크롭 적용.
         """
         img = Image.open(image_path).convert("RGB")
         target_w, target_h = 1080, 1920
         orig_w, orig_h = img.size
-        orig_ratio = orig_w / orig_h
-        target_ratio = target_w / target_h
+        motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
 
-        # 1080x1920 (9:16) 프레임을 가로/세로 여백 없이 꽉 채우면서 원본 가로 비율을 100% 보존하는 커버 스케일 계산
+        # 1080x1920 (9:16) 프레임을 여백 없이 채우면서 모션에 필요한 여유 폭을 확보하는 커버 스케일
         if focus_bottom:
             # 씬 1 건물 외관 상단의 간판 로고는 프레임 밖으로 나가도록 세로 높이를 25% 추가 확보
-            scale = max((target_h * 1.25) / orig_h, (target_w * 1.15) / orig_w)
+            scale = max((target_h * max(1.25, KB_ZOOM)) / orig_h, (target_w * KB_ZOOM) / orig_w)
         elif motion_type in ["pan_left", "pan_right"]:
-            # 가로 패닝: 높이는 최소 target_h(1920)를 만족하고, 가로는 최소 target_w * 1.25(1350) 이상 확보
-            scale = max(target_h / orig_h, (target_w * 1.25) / orig_w)
+            scale = max(target_h / orig_h, (target_w * KB_PAN_MARGIN_X) / orig_w)
         elif motion_type in ["pan_down", "pan_up"]:
-            # 세로 패닝: 가로는 최소 target_w(1080)를 만족하고, 높이는 최소 target_h * 1.20(2304) 이상 확보
-            scale = max(target_w / orig_w, (target_h * 1.20) / orig_h)
+            scale = max(target_w / orig_w, (target_h * KB_PAN_MARGIN_Y) / orig_h)
         else:
-            # zoom_in / zoom_out: 9:16 프레임 대비 최소 15% 이상 확장된 여백 확보
-            scale = max((target_w * 1.15) / orig_w, (target_h * 1.15) / orig_h)
+            scale = max((target_w * KB_ZOOM) / orig_w, (target_h * KB_ZOOM) / orig_h)
 
         mw = int(round(orig_w * scale))
         mh = int(round(orig_h * scale))
@@ -500,60 +529,29 @@ class AssetGenerator:
         writer.send(None)
 
         for i in range(total_frames):
-            t = i / float(total_frames) if total_frames > 1 else 0.0
+            t = min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0
+            e = kb_ease(t)
 
-            if motion_type == "zoom_in":
-                # 1.0 -> 1.12 확대
-                cur_zoom = 1.0 + 0.12 * t
-                crop_w = int(round((target_w * 1.15) / cur_zoom))
-                crop_h = int(round((target_h * 1.15) / cur_zoom))
-                cx, cy = mw // 2, mh // 2
-                x1 = cx - crop_w // 2
-                y1 = cy - crop_h // 2
-            elif motion_type == "zoom_out":
-                # 1.12 -> 1.0 축소
-                cur_zoom = 1.12 - 0.12 * t
-                crop_w = int(round((target_w * 1.15) / cur_zoom))
-                crop_h = int(round((target_h * 1.15) / cur_zoom))
-                cx, cy = mw // 2, mh // 2
-                x1 = cx - crop_w // 2
-                y1 = cy - crop_h // 2
-            elif motion_type == "pan_right":
-                crop_w = target_w
-                crop_h = target_h
-                cy = mh // 2
-                max_shift_x = mw - crop_w
-                x1 = int(round(max_shift_x * t))
-                y1 = cy - crop_h // 2
-            elif motion_type == "pan_left":
-                crop_w = target_w
-                crop_h = target_h
-                cy = mh // 2
-                max_shift_x = mw - crop_w
-                x1 = int(round(max_shift_x * (1.0 - t)))
-                y1 = cy - crop_h // 2
-            elif motion_type == "pan_down":
-                crop_w = target_w
-                crop_h = target_h
-                cx = mw // 2
-                max_shift_y = mh - crop_h
-                y1 = int(round(max_shift_y * t))
-                x1 = cx - crop_w // 2
-            elif motion_type == "pan_up":
-                crop_w = target_w
-                crop_h = target_h
-                cx = mw // 2
-                max_shift_y = mh - crop_h
-                y1 = int(round(max_shift_y * (1.0 - t)))
-                x1 = cx - crop_w // 2
+            if motion_type in ("pan_right", "pan_left", "pan_down", "pan_up"):
+                z = 1.0 + (KB_PAN_ZOOM - 1.0) * e
+                crop_w = int(round(target_w / z))
+                crop_h = int(round(target_h / z))
+                p = e if motion_type in ("pan_right", "pan_down") else 1.0 - e
+                if motion_type in ("pan_right", "pan_left"):
+                    x1 = int(round((mw - crop_w) * p))
+                    y1 = (mh - crop_h) // 2
+                else:
+                    x1 = (mw - crop_w) // 2
+                    y1 = int(round((mh - crop_h) * p))
             else:
-                cur_zoom = 1.0 + 0.10 * t
-                crop_w = int(round((target_w * 1.15) / cur_zoom))
-                crop_h = int(round((target_h * 1.15) / cur_zoom))
-                cx, cy = mw // 2, mh // 2
-                x1 = cx - crop_w // 2
-                y1 = cy - crop_h // 2
+                # zoom_in: 1.0 → KB_ZOOM / zoom_out: KB_ZOOM → 1.0 (확대 배율 = 기준 크롭 / 현재 크롭)
+                z = 1.0 + (KB_ZOOM - 1.0) * (1.0 - e if motion_type == "zoom_out" else e)
+                crop_w = int(round((target_w * KB_ZOOM) / z))
+                crop_h = int(round((target_h * KB_ZOOM) / z))
+                x1 = mw // 2 - crop_w // 2
+                y1 = mh // 2 - crop_h // 2
 
+            crop_w, crop_h = min(crop_w, mw), min(crop_h, mh)
             x1 = max(0, min(mw - crop_w, x1))
             if focus_bottom:
                 # 씬 1 건물 외관 상단 간판 로고 배제: Y 좌표를 하단 중심(85% 지점)으로 배치하여 상단 영역을 화면 밖으로 완전히 배제
@@ -564,7 +562,8 @@ class AssetGenerator:
             y2 = y1 + crop_h
 
             cropped_frame = base_np[y1:y2, x1:x2]
-            resized_frame = cv2.resize(cropped_frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+            resized_frame = cv2.resize(cropped_frame, (target_w, target_h), interpolation=cv2.INTER_AREA
+                                       if crop_w > target_w else cv2.INTER_LINEAR)
             writer.send(resized_frame.tobytes())
 
         writer.close()
@@ -588,13 +587,20 @@ class AssetGenerator:
 
         if not force and self.is_cached(out_path):
             img_mtime = os.path.getmtime(image_path) if os.path.exists(image_path) else 0
+            voice_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp3")
+            voice_mtime = os.path.getmtime(voice_path) if os.path.exists(voice_path) else 0
             vid_mtime = os.path.getmtime(out_path)
-            if vid_mtime >= img_mtime:
+            # 사진이나 나레이션(모션 길이 기준)이 바뀌었으면 다시 렌더
+            if vid_mtime >= max(img_mtime, voice_mtime):
                 logger.info(f"[Cache Hit] 씬 {scene_num} 비디오 이미 존재: {out_path}")
                 return out_path
 
-        # 오디오 및 엔딩 테일 마진(+1.0초) 동안 부드러운 카메라 모션이 계속 유지되도록 넉넉한 길이(최소 5.0초)로 렌더링
-        duration_sec = max(float(scene.get("duration_sec", 3.0)) + 2.0, 5.0)
+        # 모션은 실제 화면 노출 시간(나레이션 길이 + 컴포지터 테일 0.2초) 안에 끝까지 진행되도록 하고,
+        # 클립은 마지막 씬 테일(+1.0초)까지 덮도록 조금 더 길게 렌더 (넘는 부분은 끝 구도 유지)
+        audio_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp3")
+        voice_sec = _audio_seconds(audio_path)
+        motion_sec = (voice_sec or float(scene.get("duration_sec", 2.5))) + 0.2
+        duration_sec = motion_sec + 1.0
 
         # 씬 번호 및 모션 프롬프트에 따라 부드러운 줌인, 줌아웃, 상하/좌우 패닝 교차 배정
         motion_prompt = str(scene.get("video_motion_prompt_en", "")).lower()
@@ -615,7 +621,8 @@ class AssetGenerator:
             patterns = ["zoom_in", "pan_right", "zoom_out", "pan_left", "pan_down", "pan_up"]
             motion_type = patterns[(scene_num - 1) % len(patterns)]
 
-        logger.info(f"[Local Video Gen] 씬 {scene_num} 2D Ken Burns 모션 합성 시작 (모션: {motion_type}, 길이: {duration_sec:.1f}초, 원본: {image_path})")
+        logger.info(f"[Local Video Gen] 씬 {scene_num} 2D Ken Burns 모션 합성 시작 (모션: {motion_type}, 모션 {motion_sec:.1f}초 / "
+                    f"클립 {duration_sec:.1f}초, 원본: {image_path})")
         # 제휴(travel) 모드만 씬 1 상단 간판을 프레임 밖으로 밀어 숙소명을 숨김. 사장님(owner) 모드는 간판 노출이 목적
         is_focus_bottom = bool(scene.get("focus_bottom") or (self.mode == "travel" and scene_num == 1))
         self._create_ken_burns_video(
@@ -624,7 +631,8 @@ class AssetGenerator:
             out_path=out_path,
             fps=24,
             motion_type=motion_type,
-            focus_bottom=is_focus_bottom
+            focus_bottom=is_focus_bottom,
+            motion_sec=motion_sec
         )
         logger.info(f"씬 {scene_num} Ken Burns 비디오 렌더링 완료 -> {out_path}")
         return out_path

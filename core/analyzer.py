@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 from core.guardrail import validate_model_call
-from core.script_guard import shorten_line, find_unsupported_claim, safe_line_for
+from core.script_guard import COPY_TONE_RULES, shorten_line, find_promo_tone, find_unsupported_claim, safe_line_for
 from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.analyzer")
@@ -37,7 +37,7 @@ class ScenePlan(BaseModel):
 TONE_PRESETS = {
     "aggro": {
         "name": "🔥 어그로 / 손실회피형",
-        "instruction": "🔥 [어그로 / 손실회피형]: 시청자의 결핍과 손실을 강력하게 자극하는 도발적 후킹 ('아직도 OO 쓰시나요?', '모르면 평생 손해', '절대 그냥 지나치지 마세요'). 위기감 조성 후 즉각적인 반전과 제품 해결책 제시."
+        "instruction": "🔥 [어그로 / 손실회피형]: 시청자의 결핍과 손실을 강력하게 자극하는 도발적 후킹 ('아직도 OO 쓰시나요?', '이거 모르고 예약하면 손해', '다들 여기만 몰래 감'). 위기감 조성 후 즉각적인 반전과 해결책 제시."
     },
     "expert": {
         "name": "👩‍⚕️ 전문가 / 신뢰형",
@@ -117,7 +117,7 @@ SCRIPT_STYLE_PRESETS = {
         "instruction": (
             "📢 [정보·후킹형 (기본 런비 스타일)]:\n"
             "- 시청자의 호기심(Curiosity Gap)을 극대화하고 숙소의 핵심 비주얼과 특장점을 직격으로 추천하는 타격형 카피로 작성하세요.\n"
-            "- 예시: '모르면 평생 손해 보는 호수 뷰!', '사계절 내내 따뜻한 야외 온수풀 놓치지 마세요!', '아이들과 물놀이하기 정말 딱 좋아요!'"
+            "- 예시: '호수 뷰가 객실 통창에 그대로 걸려 있음', '한겨울에도 김 모락모락 나는 야외 온수풀', '애들이 수영장에서 나올 생각을 안 함'"
         )
     },
     "experience": {
@@ -322,7 +322,7 @@ MOCK_TRAVEL_LINES = {
     "info": {
         "hook_title": "여기 진짜 한국 맞아요?",
         "view": "문 열자마자 펼쳐지는 역대급 뷰!",
-        "pool": "물놀이하기 정말 딱 좋은 수영장!",
+        "pool": "물놀이 시작하면 시간 순삭되는 수영장",
         "facility": "분위기 좋은 공간에서 여유 한 잔!",
         "bedroom": "푹신한 침구에서 꿀잠 예약!",
         "bedroom_or_view": "창밖 풍경 보며 늦잠 자고 싶은 방!",
@@ -524,7 +524,8 @@ def plan_storyboard(
             f"2. [영상 길이 {target_length} 규격 & 씬당 대본 15~20자 초압축 절대 준수]:\n"
             "   - 각 씬의 voiceover(나레이션)는 반드시 '공백 포함 15~20자 이내'의 간결한 구어체 딱 한 줄로만 작성하세요!\n"
             f"   - 20자를 초과하면 TTS 재생 시간이 늘어나 전체 영상이 {target_length} 규격을 초과하므로 절대 금지합니다.\n"
-            "   - 문장 어미는 '즐겨보세요', '놓치면 손해입니다', '힐링해보세요', '딱 좋아요', '벌어졌어요' 등 짧고 경쾌한 숏폼 전용 구어체를 사용하세요.\n"
+            "   - 문장은 친구에게 비밀 장소를 자랑하듯 감각을 툭 던지는 구어체 평서문으로 쓰세요. "
+            "'~해보세요', '~마세요', '~딱!' 같은 권유·강요형 홍보 어미는 전면 금지입니다 (아래 [카피 톤] 참조).\n"
             "3. [대본과 실제 사진 에셋의 1:1 시각적 정합성 보장]:\n"
             "   - 각 씬은 사용자 프롬프트에 배정된 시각 역할의 '실제 숙소 사진'과 함께 송출됩니다.\n"
             "   - 대사는 그 씬 사진에 실제로 보이는 공간만 묘사하세요. 확보된 사진 구성과 특장점(USP)에 없는 시설·경관(수영장, 호수, 바다, 라운지 등)을 지어내면 허위광고가 됩니다.\n"
@@ -537,7 +538,8 @@ def plan_storyboard(
             "     * voiceover: \"숙소 정보는 댓글에 '여행' 남겨주세요!\"\n"
             "     * caption/subtitle: \"숙소 정보는 댓글에 '여행' 남겨주세요\"\n"
             "6. [2D Ken Burns 풍경 카메라 모션 교차 배정]:\n"
-            "   - 각 씬마다 부드러운 줌인, 줌아웃, 상하/좌우 패닝을 교차 배정하세요. (zoom_in, pan_right, zoom_out, pan_left, pan_down, pan_up)"
+            "   - 각 씬마다 부드러운 줌인, 줌아웃, 상하/좌우 패닝을 교차 배정하세요. (zoom_in, pan_right, zoom_out, pan_left, pan_down, pan_up)\n\n"
+            + COPY_TONE_RULES
         )
 
         if photo_inventory and any(int(photo_inventory.get(r, 0) or 0) > 0 for r in PHOTO_ROLES):
@@ -589,8 +591,9 @@ def plan_storyboard(
 [대본 선기획 작성 요구사항]
 1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "scenes": [...]}})으로 정확히 출력하세요.
 2. [{target_length} 규격 준수 - 씬당 나레이션 15~20자 이내]:
-   - voiceover는 공백 포함 15~20자 이내의 짧고 통통 튀는 구어체 딱 한 문장으로 작성하세요.
-   - 어미 예시: "즐겨보세요", "놓치면 손해입니다", "딱 좋아요", "힐링해보세요"
+   - voiceover는 공백 포함 15~20자 이내의 짧은 구어체 한 문장으로 작성하세요.
+   - '~해보세요', '~마세요', '~딱!', '~딱 좋아요' 어미 금지. 직접 가본 사람이 본 장면·느낀 감각을 말하듯 쓰세요.
+     (예: "수영장이랑 바다 경계가 그냥 사라집니다", "침대에 누워서 바로 일출 직관 가능한 룸 컨디션")
 3. [씬별 시각 역할은 아래 배정을 그대로 사용 (변경 금지)]:
 {scene_role_lines}
    - 각 씬의 voiceover는 그 씬에 배정된 사진 종류만 묘사하세요.
@@ -600,6 +603,8 @@ def plan_storyboard(
 4. [정보 은닉 (Curiosity Gap) 강제]:
    - 크롤링된 숙소명('{product_name}')을 대본 나레이션 및 자막에 직접 언급하는 것을 엄격히 금지합니다.
 5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(10~15자)을 포함하세요! (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소')
+   - 씬 1의 hook_title과 voiceover는 화면 한 곳에 위아래로 붙어 함께 나갑니다. voiceover는 헤드라인을 받아 사진 속 장면으로
+     이어지는 한 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해', '아직도 여기 모르면')로 따로 놀지 않게 하세요.
 {hook_hint_block}
 6. 마지막 씬 {num_scenes} (엔딩 CTA 강제):
    - 마지막 씬 voiceover는 반드시 정확히: "{TRAVEL_CTA_VOICEOVER}"
@@ -800,6 +805,11 @@ JSON 출력 스키마 예시:
                     hook = sc.get("hook_title") or ""
                     if idx == 0 and hook and find_unsupported_claim(hook, [note], usp):
                         sc["hook_title"] = "여기 진짜 한국 맞아요?"
+                    promo = find_promo_tone(vo)
+                    if promo:
+                        logger.info(f"[홍보 어투 차단] 씬 {idx + 1}: {promo} (대사: {vo}) → 감각 묘사 문구로 교체")
+                        vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
+                        replaced += 1
                     if idx == 0 and hook_hints:
                         copied = copies_reference(sc.get("hook_title", ""), hook_hints)
                         if copied:
