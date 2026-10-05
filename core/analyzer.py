@@ -13,6 +13,7 @@ from google.genai import types
 
 from core.guardrail import validate_model_call
 from core.script_guard import shorten_line, find_unsupported_claim, safe_line_for
+from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.analyzer")
 
@@ -410,7 +411,8 @@ def plan_storyboard(
     script_style: str = "info",
     photo_inventory: Optional[Dict[str, int]] = None,
     travel_template: str = DEFAULT_TRAVEL_TEMPLATE,
-    slot_photo_notes: Optional[List[Optional[str]]] = None
+    slot_photo_notes: Optional[List[Optional[str]]] = None,
+    hook_hints: Optional[HookHints] = None
 ) -> List[dict]:
     """
     Step 1: 레퍼런스 영상 분석 및 씬별 콘티 역기획 실행.
@@ -543,6 +545,7 @@ def plan_storyboard(
         else:
             inventory_text = "사진 분류 정보 없음 (특장점(USP)에 명시된 시설만 언급 가능)"
         notes = list(slot_photo_notes or [])
+        hook_hint_block = ("   " + hook_hints.prompt_block.replace("\n", "\n   ")) if hook_hints else ""
         scene_role_lines = "\n".join(
             f"     * 씬 {i + 1} ({narrative_role_for(i, len(slot_plan), sl['role'])}): target_visual_role='{sl['role']}' [{sl['desc']}], "
             f"visual_keywords={json.dumps(ROLE_KEYWORDS.get(sl['role'], []), ensure_ascii=False)}"
@@ -597,6 +600,7 @@ def plan_storyboard(
 4. [정보 은닉 (Curiosity Gap) 강제]:
    - 크롤링된 숙소명('{product_name}')을 대본 나레이션 및 자막에 직접 언급하는 것을 엄격히 금지합니다.
 5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(10~15자)을 포함하세요! (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소')
+{hook_hint_block}
 6. 마지막 씬 {num_scenes} (엔딩 CTA 강제):
    - 마지막 씬 voiceover는 반드시 정확히: "{TRAVEL_CTA_VOICEOVER}"
    - 마지막 씬 subtitle은 반드시 정확히: "{TRAVEL_CTA_SUBTITLE}"
@@ -796,6 +800,18 @@ JSON 출력 스키마 예시:
                     hook = sc.get("hook_title") or ""
                     if idx == 0 and hook and find_unsupported_claim(hook, [note], usp):
                         sc["hook_title"] = "여기 진짜 한국 맞아요?"
+                    if idx == 0 and hook_hints:
+                        copied = copies_reference(sc.get("hook_title", ""), hook_hints)
+                        if copied:
+                            logger.info(f"[후킹 원문 복제 차단] '{sc['hook_title']}' ≈ 참고 영상 원문 '{copied}' → 기본 후킹")
+                            sc["hook_title"] = "여기 진짜 한국 맞아요?"
+                        if copies_reference(vo, hook_hints):
+                            vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
+                            replaced += 1
+                        sc["hook_reference"] = hook_hints.summary()
+                        used = hook_hints.pattern_used(sc.get("hook_pattern_used"))
+                        sc["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
+                                                   "pattern_template": used["pattern_template"]} if used else None
 
                 # 3. 템플릿 길이 준수: 씬당 2.5초 기준, 나레이션은 어절 경계에서 15~20자로 (실제 길이는 TTS 길이 기준)
                 sc["duration_sec"] = 2.5

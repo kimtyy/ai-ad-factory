@@ -15,6 +15,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from core.script_guard import find_unsupported_claim, shorten_line
+from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.planners.owner")
 
@@ -98,6 +99,7 @@ def plan_owner_storyboard(
     mock: bool = False,
     thumb_dir: Optional[str] = None,
     output_plan_path: Optional[str] = None,
+    hook_hints: Optional[HookHints] = None,
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -117,7 +119,7 @@ def plan_owner_storyboard(
     if api_key and not mock:
         try:
             llm = _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
-                                    tone_instruction, api_key, thumb_dir)
+                                    tone_instruction, api_key, thumb_dir, hook_hints)
         except Exception as e:
             logger.warning(f"사장님 플래너 Gemini 호출 실패, 업종 템플릿으로 대체: {e}")
 
@@ -139,7 +141,18 @@ def plan_owner_storyboard(
             hook = str((llm[0].get("hook_title") if llm else "") or "").strip() or default_hook
             if _unsupported_claim(hook, usp):
                 hook = default_hook
+            if hook_hints:
+                if copies_reference(hook, hook_hints):
+                    logger.info(f"[후킹 원문 복제 차단] '{hook}' → 기본 후킹")
+                    hook = default_hook
+                if copies_reference(text, hook_hints):
+                    text = lines.get(role, lines["exterior"])
         scenes.append(_scene(i, "cta" if is_last else role, text, hook))
+        if i == 0 and hook_hints:
+            scenes[0]["hook_reference"] = hook_hints.summary()
+            used = hook_hints.pattern_used((llm[0] if llm else {}).get("hook_pattern_used"))
+            scenes[0]["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
+                                              "pattern_template": used["pattern_template"]} if used else None
 
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
@@ -148,7 +161,8 @@ def plan_owner_storyboard(
     return scenes
 
 
-def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir):
+def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
+                      hook_hints=None):
     from google import genai
     from google.genai import types
     from core.guardrail import validate_model_call
@@ -174,6 +188,7 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
 2. 각 voiceover는 공백 포함 15~20자 구어체 한 문장. 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
 3. 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
 4. 씬 1의 hook_title은 스크롤을 멈추게 하는 10~15자 헤드라인 (상호명 포함 가능).
+{hook_hints.prompt_block if hook_hints else ""}
 5. 마지막 씬 {n}의 voiceover는 정확히: "{cta_line}"
 6. role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")
 

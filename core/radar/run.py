@@ -46,67 +46,94 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run(args) -> int:
+def execute(vertical: str = "stay", days: int = 14, keywords=None, pages: int = 1, min_ratio: float = 5.0,
+            min_subs: int = 1_000, min_views: int = 30_000, hooks: int = 5, budget: int = 3000,
+            dry_run: bool = False, db_path=None):
+    """
+    레이더 1회 실행 (CLI·Streamlit 공용). 반환: {"mode", "db_path", "notice", "verticals": [요약...]}
+    YOUTUBE_API_KEY가 없으면 자동으로 dry-run(가짜 데이터, 별도 DB)으로 전환합니다.
+    """
     load_dotenv()
     yt_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    dry_run = args.dry_run or not yt_key
-    if not args.dry_run and not yt_key:
-        print("⚠️  YOUTUBE_API_KEY가 .env에 없어 dry-run(가짜 데이터)으로 실행합니다. 실 수집은 키 설정 후 다시 실행하세요.")
-
-    db_path = args.db or (store.DRYRUN_DB if dry_run else store.DEFAULT_DB)
+    auto_dry = not dry_run and not yt_key
+    dry_run = dry_run or not yt_key
+    db_path = db_path or (store.DRYRUN_DB if dry_run else store.DEFAULT_DB)
     conn = store.connect(db_path)
-    filters = RadarFilters(min_ratio=args.min_ratio, min_subscribers=args.min_subs, min_views=args.min_views)
-    verticals = list(VERTICAL_KEYWORDS) if args.vertical == "all" else [args.vertical]
-    client = MockYouTubeClient(budget_units=args.budget) if dry_run else YouTubeClient(yt_key, budget_units=args.budget)
+    filters = RadarFilters(min_ratio=min_ratio, min_subscribers=min_subs, min_views=min_views)
+    verticals = list(VERTICAL_KEYWORDS) if vertical == "all" else [vertical]
+    client = MockYouTubeClient(budget_units=budget) if dry_run else YouTubeClient(yt_key, budget_units=budget)
+    result = {"mode": client.mode, "db_path": db_path, "verticals": [],
+              "notice": "YOUTUBE_API_KEY가 .env에 없어 dry-run(가짜 데이터)으로 실행했습니다." if auto_dry else ""}
+    try:
+        for v in verticals:
+            if isinstance(keywords, str) and keywords.strip():
+                kws = [k.strip() for k in keywords.split(",") if k.strip()]
+            else:
+                kws = list(keywords) if keywords else keywords_for(v)
+            run_id = store.start_run(conn, client.mode, v, days, kws)
+            t0 = time.time()
+            units_before = client.used_units
+            records, stats = collect(client, v, kws, days=days, pages=pages, filters=filters)
+            store.save_records(conn, run_id, records)
+            top = rank(records)
+            hooked = 0
+            for rec in top:
+                if hooked >= hooks:
+                    break
+                if store.has_hook(conn, rec.video_id):
+                    continue
+                hook = try_extract_hook(rec.video_id, rec.title, gemini_key, dry_run)
+                if hook:
+                    store.save_hook(conn, rec.video_id, hook)
+                    hooked += 1
+            used = client.used_units - units_before
+            rejects = {}
+            for r in records:
+                if r.reject_reason:
+                    key = r.reject_reason.split(" (")[0]
+                    rejects[key] = rejects.get(key, 0) + 1
+            store.finish_run(conn, run_id, used, len(records), len(top),
+                             note=f"budget_stopped={stats.get('budget_stopped', 0)} rejects={rejects}")
+            result["verticals"].append({
+                "vertical": v, "keywords": kws, "searched_keywords": stats["searched_keywords"],
+                "search_calls": stats["search_calls"], "candidates": len(records), "outliers": len(top),
+                "quota_used": used, "hooks_extracted": hooked, "rejects": rejects,
+                "budget_stopped": bool(stats.get("budget_stopped")), "seconds": round(time.time() - t0, 1),
+            })
+    finally:
+        conn.close()
+    return result
 
-    print(f"📡 쇼츠 레이더 [{'DRY-RUN' if dry_run else 'LIVE'}] 최근 {args.days}일 · 배수 ≥ {args.min_ratio}x · "
-          f"구독자 ≥ {args.min_subs:,} · 조회수 ≥ {args.min_views:,} · 쿼터 예산 {args.budget} units · DB {db_path}")
-    total_outliers = 0
-    for vertical in verticals:
-        kws = [k.strip() for k in args.keywords.split(",")] if args.keywords else keywords_for(vertical)
-        run_id = store.start_run(conn, client.mode, vertical, args.days, kws)
-        t0 = time.time()
-        units_before = client.used_units
-        records, stats = collect(client, vertical, kws, days=args.days, pages=args.pages, filters=filters)
-        store.save_records(conn, run_id, records)
-        top = rank(records)
 
-        hooked = 0
-        for rec in top:
-            if hooked >= args.hooks:
-                break
-            if store.has_hook(conn, rec.video_id):
-                continue
-            hook = try_extract_hook(rec.video_id, rec.title, gemini_key, dry_run)
-            if hook:
-                store.save_hook(conn, rec.video_id, hook)
-                hooked += 1
-
-        used = client.used_units - units_before
-        rejects = {}
-        for r in records:
-            if r.reject_reason:
-                key = r.reject_reason.split(" (")[0]
-                rejects[key] = rejects.get(key, 0) + 1
-        store.finish_run(conn, run_id, used, len(records), len(top),
-                         note=f"budget_stopped={stats.get('budget_stopped', 0)} rejects={rejects}")
-        total_outliers += len(top)
-
-        print(f"\n{VERTICAL_LABELS[vertical]}  키워드 {stats['searched_keywords']}/{len(kws)}개 · 검색 {stats['search_calls']}회 · "
-              f"후보 {len(records)}개 → 떡상 {len(top)}개 · 쿼터 {used} units · 후킹 추출 {hooked}건 · {time.time() - t0:.1f}s")
-        if rejects:
-            print("   탈락 사유: " + ", ".join(f"{k} {v}" for k, v in rejects.items()))
-        if stats.get("budget_stopped"):
-            print("   ⚠️  쿼터 예산 도달로 일부 키워드를 건너뛰었습니다 (--budget 조정).")
-        for i, row in enumerate(store.recent_outliers(conn, vertical, args.days, args.min_ratio, args.top), 1):
-            hook = f" | 후킹[{HOOK_TYPE_KO.get(row['hook_type'], '-')}] {row['pattern_template'] or ''}" if row.get("hook_type") else ""
-            print(f"   {i:>2}. {row['outlier_ratio']:>5.1f}x  조회 {row['views']:>9,} / 구독 {row['subscribers']:>8,}  "
-                  f"{row['title'][:34]}{hook}")
-        summary = store.hook_type_summary(conn, vertical)
-        if summary:
-            print("   후킹 유형 분포: " + ", ".join(f"{HOOK_TYPE_KO.get(s['hook_type'], s['hook_type'])} {s['n']}건(평균 {s['avg_ratio']}x)" for s in summary))
-    conn.close()
+def run(args) -> int:
+    res = execute(vertical=args.vertical, days=args.days, keywords=args.keywords, pages=args.pages,
+                  min_ratio=args.min_ratio, min_subs=args.min_subs, min_views=args.min_views, hooks=args.hooks,
+                  budget=args.budget, dry_run=args.dry_run, db_path=args.db)
+    if res["notice"]:
+        print(f"⚠️  {res['notice']} 실 수집은 키 설정 후 다시 실행하세요.")
+    print(f"📡 쇼츠 레이더 [{res['mode'].upper()}] 최근 {args.days}일 · 배수 ≥ {args.min_ratio}x · "
+          f"구독자 ≥ {args.min_subs:,} · 조회수 ≥ {args.min_views:,} · 쿼터 예산 {args.budget} units · DB {res['db_path']}")
+    conn = store.connect(res["db_path"])
+    try:
+        for v in res["verticals"]:
+            print()
+            print(f"{VERTICAL_LABELS[v['vertical']]}  키워드 {v['searched_keywords']}/{len(v['keywords'])}개 · 검색 {v['search_calls']}회 · "
+                  f"후보 {v['candidates']}개 → 떡상 {v['outliers']}개 · 쿼터 {v['quota_used']} units · 후킹 추출 {v['hooks_extracted']}건 · {v['seconds']}s")
+            if v["rejects"]:
+                print("   탈락 사유: " + ", ".join(f"{k} {n}" for k, n in v["rejects"].items()))
+            if v["budget_stopped"]:
+                print("   ⚠️  쿼터 예산 도달로 일부 키워드를 건너뛰었습니다 (--budget 조정).")
+            for i, row in enumerate(store.recent_outliers(conn, v["vertical"], args.days, args.min_ratio, args.top), 1):
+                hook = f" | 후킹[{HOOK_TYPE_KO.get(row['hook_type'], '-')}] {row['pattern_template'] or ''}" if row.get("hook_type") else ""
+                print(f"   {i:>2}. {row['outlier_ratio']:>5.1f}x  조회 {row['views']:>9,} / 구독 {row['subscribers']:>8,}  "
+                      f"{row['title'][:34]}{hook}")
+            summary = store.hook_type_summary(conn, v["vertical"])
+            if summary:
+                print("   후킹 유형 분포: " + ", ".join(
+                    f"{HOOK_TYPE_KO.get(s['hook_type'], s['hook_type'])} {s['n']}건(평균 {s['avg_ratio']}x)" for s in summary))
+    finally:
+        conn.close()
     return 0
 
 

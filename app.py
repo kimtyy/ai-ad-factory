@@ -48,6 +48,9 @@ from core.job import JobContext
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.planners import BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE, plan_owner_storyboard
 from core.planners.travel import plan_travel_storyboard
+from core.radar.hints import load_hook_hints, vertical_for
+from core.radar.hooks import HOOK_TYPE_KO
+from ui.radar_page import render_radar_page, RADAR_PERSIST_KEYS, init_radar_state, hints_enabled, allow_dryrun_hints
 from core.planners.owner import ROLE_LABELS_KO as OWNER_ROLE_LABELS
 from core.media.normalize import DEFAULT_TRIM_START
 from core.render.brand import BrandOverlay, EndCard
@@ -231,14 +234,30 @@ pipeline_mode = st.session_state.production_mode
 
 # Streamlit은 이번 실행에 그려지지 않은 위젯의 상태를 지우므로, 다른 모드를 잠깐 다녀오면 사장님 입력값이 사라짐.
 # 매 실행 시작에 키를 재할당해 정리 대상에서 제외 (Streamlit 공식 권장 방식)
+for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", True), ("brand_end_card", True),
+                     ("page_switch", "make")):
+    st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
+init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp",
-           "brand_watermark", "brand_end_card", "brand_position", "brand_sub"):
+           "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
 
 is_owner_mode = pipeline_mode == "owner"
 is_travel_mode = pipeline_mode == "travel"
 uses_scene_media = pipeline_mode in ("owner", "travel")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드
+
+# ==============================================================================
+# 상단 헤더 + 화면 전환 (영상 만들기 / 실시간 떡상 레이더)
+# ==============================================================================
+PAGES = {"make": "🎬 영상 만들기", "radar": "🔥 실시간 떡상 레이더"}
+st.title("🎬 AI 광고 공장")
+st.caption("내 가게 홍보 영상부터 숙소·쇼핑 제휴 쇼츠까지, 9:16 세로 영상을 만듭니다.")
+page = st.segmented_control("화면", list(PAGES), key="page_switch", format_func=PAGES.get,
+                            label_visibility="collapsed", width="stretch") or "make"
+if page == "radar":
+    render_radar_page()
+    st.stop()
 
 # ==============================================================================
 # 사이드바: 기획 및 제작 설정 패널
@@ -331,8 +350,8 @@ with st.sidebar:
     if is_owner_mode:
         st.markdown("---")
         st.markdown("#### 🏷️ 브랜드 오버레이")
-        watermark_on = st.checkbox("상호명 워터마크", value=True, key="brand_watermark")
-        end_card_on = st.checkbox("네이버 검색 유도 엔딩 카드", value=True, key="brand_end_card")
+        watermark_on = st.checkbox("상호명 워터마크", key="brand_watermark")
+        end_card_on = st.checkbox("네이버 검색 유도 엔딩 카드", key="brand_end_card")
         brand_logo_file = st.file_uploader("로고 (PNG 권장, 선택)", type=["png", "jpg", "jpeg"], key="brand_logo")
         brand_position = st.radio("워터마크 위치", ["top_right", "top_left"], horizontal=True, key="brand_position",
                                   format_func=lambda x: "우측 상단" if x == "top_right" else "좌측 상단")
@@ -351,10 +370,8 @@ with st.sidebar:
 
 
 # ==============================================================================
-# 메인 헤더 + 제작 모드 스위처
+# 제작 모드 스위처
 # ==============================================================================
-st.title("🎬 AI 광고 공장")
-st.caption("내 가게 홍보 영상부터 숙소·쇼핑 제휴 쇼츠까지, 9:16 세로 영상을 만듭니다.")
 st.segmented_control(
     "제작 모드", list(MODES), key="mode_switch", on_change=_on_mode_change, width="stretch",
     help="🏠 사장님 매장 홍보: 내 폰 사진·영상으로 상호명과 네이버 검색 유도가 들어간 홍보 영상\n"
@@ -451,7 +468,6 @@ if is_owner_mode:
         product_name = st.text_input("🏢 상호명 (영상에 그대로 노출)", key="owner_name", placeholder="예: 성수 불판 성수점")
     with o2:
         business_type = st.selectbox("업종", list(BUSINESS_TYPES), key="owner_type",
-                                     index=list(BUSINESS_TYPES).index(DEFAULT_BUSINESS_TYPE),
                                      format_func=lambda k: BUSINESS_TYPES[k]["label"])
     o3, o4 = st.columns([1, 2])
     with o3:
@@ -534,7 +550,16 @@ st.markdown("### 📝 2. AI 스토리보드 기획 및 대본 실시간 편집")
 col_plan_btn, col_plan_desc = st.columns([1, 3])
 with col_plan_btn:
     generate_plan_btn = st.button("🚀 스토리보드 자동 기획", use_container_width=True)
+# 레이더 후킹 패턴 → 씬 1 후킹 힌트 (숙소 제휴 / 사장님 숙소·음식점)
+hook_vertical = vertical_for(pipeline_mode, business_type)
+hook_hints = load_hook_hints(hook_vertical, allow_dryrun=allow_dryrun_hints()) if (hints_enabled() and hook_vertical) else None
 with col_plan_desc:
+    if hook_hints:
+        avg = sum(r["outlier_ratio"] for r in hook_hints.references) / len(hook_hints.references)
+        st.caption(f"🔥 레이더 후킹 패턴 {len(hook_hints.references)}개를 씬 1 힌트로 사용 (평균 {avg:.1f}배)"
+                   + (" · ⚠️ Dry-run 테스트 데이터" if hook_hints.is_dryrun else ""))
+    elif hook_vertical and hints_enabled():
+        st.caption("🔥 레이더 패턴 없음 → 기본 후킹 규칙으로 기획 (🔥 실시간 떡상 레이더 화면에서 수집)")
     if is_owner_mode:
         st.caption(f"모드: **{production_mode}** | 올린 미디어 **{len(st.session_state.uploaded_paths)}개** 기준으로 씬 구성 | 성우: **{selected_actor_label}**")
     else:
@@ -566,6 +591,7 @@ if generate_plan_btn:
                     mock=mock_mode,
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
+                    hook_hints=hook_hints,
                 )
             elif travel_photo_first:
                 # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
@@ -585,6 +611,7 @@ if generate_plan_btn:
                         audio_mode=selected_audio_mode,
                         script_style=selected_script_style,
                         output_plan_path=current_job().plan_path,
+                        hook_hints=hook_hints,
                     )
             else:
                 # 트랙 A: 제휴(숙소/쇼핑) 대본 선기획
@@ -601,7 +628,8 @@ if generate_plan_btn:
                     script_style=selected_script_style,
                     photo_inventory=photo_inventory,
                     output_plan_path=current_job().plan_path,
-                    travel_template=travel_template
+                    travel_template=travel_template,
+                    hook_hints=hook_hints if is_travel_mode else None
                 )
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
@@ -625,6 +653,12 @@ if generate_plan_btn:
 
 # 스토리보드 실시간 편집기 (st.data_editor)
 if st.session_state.storyboard:
+    _ref = (st.session_state.storyboard[0] or {}).get("hook_reference") if st.session_state.storyboard else None
+    if _ref:
+        _used = st.session_state.storyboard[0].get("hook_pattern_used")
+        st.caption("🔥 씬 1 후킹: " + (f"레이더 패턴 적용 [{HOOK_TYPE_KO.get(_used['hook_type'], _used['hook_type'])}] {_used['pattern_template']}"
+                                     if _used else "레이더 패턴 참고했으나 사실에 맞는 패턴이 없어 기본 규칙 적용")
+                   + " · 참고 " + ", ".join(f"{HOOK_TYPE_KO.get(r['hook_type'], r['hook_type'])} {r['outlier_ratio']:.1f}배" for r in _ref))
     st.markdown("💡 *아래 표에서 대사(voiceover), 화면 자막(subtitle), 후킹 타이틀(hook_title), 비주얼 키워드 등을 직접 클릭하여 수정할 수 있습니다:*")
     
     df_scenes = pd.DataFrame(st.session_state.storyboard)
