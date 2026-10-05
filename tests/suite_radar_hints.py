@@ -63,10 +63,20 @@ for vid, title, ratio, *_ in refs:
 store.save_records(conn, rid, recs)
 for vid, title, ratio, htype, tpl, why in refs:
     store.save_hook(conn, vid, {"source": "gemini:gemini-3.6-flash", "spoken_line": title, "on_screen_text": title,
-                                "visual_hook": "", "hook_type": htype, "pattern_template": tpl, "why_it_works": why})
+                                "visual_hook": "", "hook_type": htype, "pattern_template": tpl, "why_it_works": why,
+                                "relevant": True, "content_type": "review"})
+# 배수는 가장 높지만 연예인 토크 클립(도메인 부적합) → 힌트에서 제외되어야 함
+celeb = VideoRecord(video_id="celeb", title="연예인이 말해주는 호캉스 꿀팁", channel_id="cc", channel_title="clip",
+                    published_at=now - timedelta(days=1), duration_sec=30, views=990_000, likes=0, comments=0,
+                    subscribers=10_000, subscribers_hidden=False, keyword="숙소 추천", vertical="stay")
+store.save_records(conn, rid, [score(celeb, RadarFilters(), now)])
+store.save_hook(conn, "celeb", {"source": "gemini:gemini-3.6-flash", "spoken_line": "연예인 토크", "on_screen_text": "",
+                                "visual_hook": "", "hook_type": "superlative", "pattern_template": "{인물}이 말해주는 {주제}",
+                                "why_it_works": "", "relevant": False, "content_type": "celebrity_talk"})
 conn.close()
 hints = load_hook_hints("stay", db_path=live_db)
 check(len(hints.references) == 3 and not hints.is_dryrun and hints.references[0]["outlier_ratio"] == 32.6, "실데이터 패턴 3개 로드 (배수순)")
+check(all(r["video_id"] != "celeb" for r in hints.references), "배수 99배라도 도메인 부적합(연예인 토크) 후킹은 힌트에서 제외")
 block = hints.prompt_block
 check("이 가격에 {대상}이 나온다고?" in block and "베끼지" in block and "이 가격에 이 뷰가 나온다고?" not in block,
       "힌트 블록: 구조 템플릿만 포함, 원문 대사는 미포함")

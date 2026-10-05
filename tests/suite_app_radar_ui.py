@@ -9,6 +9,10 @@ from streamlit.testing.v1 import AppTest
 
 import core.radar.store as radar_store
 
+# .env에 실제 YOUTUBE_API_KEY가 있어도 테스트가 실 API(쿼터·과금)를 호출하지 않도록 키를 비움
+# (load_dotenv는 이미 설정된 환경 변수를 덮어쓰지 않으므로 빈 값이 유지됨)
+os.environ["YOUTUBE_API_KEY"] = ""
+
 # 레이더 DB를 임시 폴더로 돌려 사용자의 실제 outputs/radar/ 데이터를 건드리지 않음
 _DB_DIR = tmp("radar_ui_db_")
 radar_store.DEFAULT_DB = os.path.join(_DB_DIR, "radar.db")
@@ -51,6 +55,25 @@ try:
     check(not at.exception and any("떡상" in s.value and "DRY-RUN" in s.value for s in at.success), "실행 버튼 → Dry-run 수집 완료 메시지")
     check("요즘 먹히는 후킹 유형" in txt and txt.count("🔥") >= 5 and "🪝" in txt, "후킹 유형 요약 + 떡상 카드(배수·후킹 패턴) 표시")
     check("Session State API" not in txt, "위젯 기본값 + 세션 재할당 경고 없음 (레이더 화면)")
+    check(at.slider(key="radar_days").value == 30, "기본 수집 기간 30일")
+
+    # 도메인 부적합 판정 영상: 카드 기본 숨김, 체크박스로 펼쳐보기
+    conn = radar_store.connect(DRY_DB)
+    n_cards = sum("**🔥" in (m.value or "") for m in at.markdown)
+    victim = radar_store.recent_outliers(conn, "stay", 30, 5.0, 24)[0]
+    radar_store.save_hook(conn, victim["video_id"], {"source": "gemini:test", "spoken_line": "", "on_screen_text": "",
+                                                     "visual_hook": "", "hook_type": "other", "pattern_template": "",
+                                                     "why_it_works": "", "relevant": False, "content_type": "animation"})
+    conn.close()
+    at.run()
+    txt = all_text(at)
+    cb = at.checkbox(key="radar_show_irrelevant")
+    check("🚫" not in txt and sum("**🔥" in (m.value or "") for m in at.markdown) == n_cards - 1 and "비적합 1개 숨김" in txt
+          and cb.value is False and "(1개)" in cb.label, "부적합 영상 카드 기본 숨김 + 숨김 개수 표시")
+    cb.check().run()
+    txt = all_text(at)
+    check("🚫 힌트 제외" in txt and sum("**🔥" in (m.value or "") for m in at.markdown) == n_cards and "(animation)" in txt and "숨김" not in txt, "'제외된 비적합 영상 보기' 체크 → 🚫 카드 펼침")
+    at.checkbox(key="radar_show_irrelevant").uncheck().run()
     exp = [e.label for e in at.expander]
     check(any("사용 가능한 패턴 없음" in l for l in exp), f"Dry-run 데이터만 있을 때 힌트 미리보기 = 패턴 없음 (가짜 패턴 차단) {exp}")
     at.toggle(key="radar_allow_dryrun").set_value(True).run()

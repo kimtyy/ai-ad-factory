@@ -28,14 +28,14 @@ CREATE TABLE IF NOT EXISTS channels (
   channel_id TEXT PRIMARY KEY, title TEXT, subscribers INTEGER, hidden INTEGER, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS videos (
   video_id TEXT PRIMARY KEY, vertical TEXT, keyword TEXT, title TEXT, channel_id TEXT, published_at TEXT,
-  duration_sec INTEGER, url TEXT, first_seen TEXT, last_seen TEXT);
+  duration_sec INTEGER, url TEXT, first_seen TEXT, last_seen TEXT, category_id TEXT);
 CREATE TABLE IF NOT EXISTS snapshots (
   video_id TEXT, run_id INTEGER, captured_at TEXT, views INTEGER, likes INTEGER, comments INTEGER,
   subscribers INTEGER, outlier_ratio REAL, velocity_per_day REAL, passed INTEGER, reject_reason TEXT,
   PRIMARY KEY (video_id, run_id));
 CREATE TABLE IF NOT EXISTS hooks (
   video_id TEXT PRIMARY KEY, extracted_at TEXT, source TEXT, spoken_line TEXT, on_screen_text TEXT,
-  visual_hook TEXT, hook_type TEXT, pattern_template TEXT, why_it_works TEXT);
+  visual_hook TEXT, hook_type TEXT, pattern_template TEXT, why_it_works TEXT, relevant INTEGER, content_type TEXT);
 CREATE INDEX IF NOT EXISTS idx_snap_ratio ON snapshots(outlier_ratio);
 CREATE INDEX IF NOT EXISTS idx_videos_vertical ON videos(vertical);
 """
@@ -45,11 +45,21 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# 기존 DB에 나중에 추가된 컬럼 (CREATE TABLE IF NOT EXISTS는 기존 테이블을 바꾸지 않으므로 ALTER로 보강)
+MIGRATIONS = {"videos": {"category_id": "TEXT"}, "hooks": {"relevant": "INTEGER", "content_type": "TEXT"}}
+
+
 def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, typ in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    conn.commit()
     return conn
 
 
@@ -73,16 +83,24 @@ def save_records(conn, run_id: int, records: Iterable[VideoRecord]):
                         ON CONFLICT(channel_id) DO UPDATE SET title=excluded.title, subscribers=excluded.subscribers,
                         hidden=excluded.hidden, updated_at=excluded.updated_at""",
                      (r.channel_id, r.channel_title, r.subscribers, int(r.subscribers_hidden), now))
-        conn.execute("""INSERT INTO videos (video_id, vertical, keyword, title, channel_id, published_at, duration_sec, url, first_seen, last_seen)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, last_seen=excluded.last_seen""",
+        conn.execute("""INSERT INTO videos (video_id, vertical, keyword, title, channel_id, published_at, duration_sec, url,
+                        first_seen, last_seen, category_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, last_seen=excluded.last_seen,
+                        category_id=excluded.category_id""",
                      (r.video_id, r.vertical, r.keyword, r.title, r.channel_id,
-                      r.published_at.strftime("%Y-%m-%dT%H:%M:%SZ"), r.duration_sec, r.url, now, now))
+                      r.published_at.strftime("%Y-%m-%dT%H:%M:%SZ"), r.duration_sec, r.url, now, now, r.category_id))
         conn.execute("""INSERT OR REPLACE INTO snapshots (video_id, run_id, captured_at, views, likes, comments, subscribers,
                         outlier_ratio, velocity_per_day, passed, reject_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                      (r.video_id, run_id, now, r.views, r.likes, r.comments, r.subscribers, r.outlier_ratio,
                       r.velocity_per_day, int(r.reject_reason is None), r.reject_reason))
     conn.commit()
+
+
+def delete_hooks(conn, video_ids: List[str]) -> int:
+    """잘못 수집된 후킹 패턴 삭제 (영상·스냅샷 이력은 유지)"""
+    cur = conn.executemany("DELETE FROM hooks WHERE video_id = ?", [(v,) for v in video_ids])
+    conn.commit()
+    return cur.rowcount
 
 
 def has_hook(conn, video_id: str) -> bool:
@@ -91,9 +109,10 @@ def has_hook(conn, video_id: str) -> bool:
 
 def save_hook(conn, video_id: str, hook: Dict[str, Any]):
     conn.execute("""INSERT OR REPLACE INTO hooks (video_id, extracted_at, source, spoken_line, on_screen_text, visual_hook,
-                    hook_type, pattern_template, why_it_works) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    hook_type, pattern_template, why_it_works, relevant, content_type) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                  (video_id, _now(), hook.get("source"), hook.get("spoken_line"), hook.get("on_screen_text"),
-                  hook.get("visual_hook"), hook.get("hook_type"), hook.get("pattern_template"), hook.get("why_it_works")))
+                  hook.get("visual_hook"), hook.get("hook_type"), hook.get("pattern_template"), hook.get("why_it_works"),
+                  int(bool(hook.get("relevant"))), hook.get("content_type")))
     conn.commit()
 
 
@@ -101,9 +120,10 @@ def recent_outliers(conn, vertical: Optional[str] = None, days: int = 14, min_ra
                     limit: int = 20) -> List[Dict[str, Any]]:
     """최근 업로드된 떡상 영상 (영상별 최신 스냅샷 기준) + 후킹 구조"""
     q = """
-    SELECT v.video_id, v.vertical, v.keyword, v.title, v.url, v.published_at, v.duration_sec, c.title AS channel,
+    SELECT v.video_id, v.vertical, v.keyword, v.title, v.url, v.published_at, v.duration_sec, v.category_id, c.title AS channel,
            s.views, s.subscribers, s.outlier_ratio, s.velocity_per_day, s.captured_at,
-           h.hook_type, h.pattern_template, h.spoken_line, h.on_screen_text, h.visual_hook, h.why_it_works, h.source AS hook_source
+           h.hook_type, h.pattern_template, h.spoken_line, h.on_screen_text, h.visual_hook, h.why_it_works, h.source AS hook_source,
+           h.relevant AS hook_relevant, h.content_type AS hook_content_type
     FROM videos v
     JOIN snapshots s ON s.video_id = v.video_id
      AND s.run_id = (SELECT MAX(run_id) FROM snapshots s2 WHERE s2.video_id = v.video_id)
@@ -125,7 +145,7 @@ def hook_type_summary(conn, vertical: Optional[str] = None) -> List[Dict[str, An
     q = """SELECT h.hook_type, COUNT(*) AS n, ROUND(AVG(s.outlier_ratio), 1) AS avg_ratio
            FROM hooks h JOIN videos v ON v.video_id = h.video_id
            JOIN snapshots s ON s.video_id = v.video_id AND s.run_id = (SELECT MAX(run_id) FROM snapshots s2 WHERE s2.video_id = v.video_id)
-           WHERE s.passed = 1"""
+           WHERE s.passed = 1 AND h.relevant = 1"""
     args: List[Any] = []
     if vertical:
         q += " AND v.vertical = ?"

@@ -62,7 +62,7 @@ def vertical_for(mode: str, business_type: Optional[str] = None) -> Optional[str
     return MODE_TO_VERTICAL.get(mode)
 
 
-def load_hook_hints(vertical: Optional[str], days: int = 14, min_ratio: float = 5.0, limit: int = 4,
+def load_hook_hints(vertical: Optional[str], days: int = 30, min_ratio: float = 5.0, limit: int = 4,
                     allow_dryrun: bool = False, db_path: Optional[str] = None) -> HookHints:
     """후킹 패턴이 추출된 최근 고배수 영상 상위 limit개 (같은 템플릿/유형 중복은 줄여 다양하게)"""
     if not vertical:
@@ -78,7 +78,9 @@ def load_hook_hints(vertical: Optional[str], days: int = 14, min_ratio: float = 
             rows = store.recent_outliers(conn, vertical, days, min_ratio, limit=50)
         finally:
             conn.close()
-        rows = [r for r in rows if r.get("pattern_template") and (allow_dryrun or r.get("hook_source") != "mock")]
+        # 업종 적합성 판정을 통과한 후킹만 (예능·애니 클립, 판정 이전 레거시 행은 제외)
+        rows = [r for r in rows if r.get("pattern_template") and r.get("hook_relevant")
+                and (allow_dryrun or r.get("hook_source") != "mock")]
         picked, seen_tpl, type_count = [], set(), {}
         for r in rows:
             key = _norm(r["pattern_template"])

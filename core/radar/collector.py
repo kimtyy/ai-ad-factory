@@ -71,6 +71,7 @@ def collect(
             comments=int(st.get("commentCount", 0) or 0),
             subscribers=None if hidden else int(ch.get("subscriberCount", 0) or 0) or None,
             subscribers_hidden=hidden, keyword=first_keyword[v["id"]], vertical=vertical,
+            category_id=str(sn.get("categoryId")) if sn.get("categoryId") else None,
         )
         records.append(score(rec, filters, now))
     stats["outliers"] = len(rank(records))

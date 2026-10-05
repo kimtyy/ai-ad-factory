@@ -135,9 +135,10 @@ class MockYouTubeClient(YouTubeClient):
             title = f"[{keyword}] " + self._rng.choice([
                 "여기 진짜 한국 맞아요?", "이 가격에 이게 된다고?", "현지인만 아는 곳 공개", "웨이팅 2시간 실화",
                 "모르면 손해 보는 곳", "POV: 문 열자마자", "3초 만에 예약 마감된 이유"])
+            category = self._rng.choice(["19", "19", "22", "22", "26", "24"])   # 약 1/6은 엔터테인먼트(클립성)
             self._videos[vid] = {
                 "id": vid,
-                "snippet": {"title": title, "channelId": ch, "channelTitle": f"채널{ch[-4:]}",
+                "snippet": {"title": title, "channelId": ch, "channelTitle": f"채널{ch[-4:]}", "categoryId": category,
                             "publishedAt": published.strftime("%Y-%m-%dT%H:%M:%SZ"), "description": "#shorts"},
                 "statistics": {"viewCount": str(int(subs * ratio)), "likeCount": str(int(subs * ratio * 0.04)),
                                "commentCount": str(int(subs * ratio * 0.002))},

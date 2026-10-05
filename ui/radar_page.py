@@ -13,16 +13,18 @@ import streamlit as st
 from core.radar import store
 from core.radar.hints import load_hook_hints
 from core.radar.hooks import HOOK_TYPE_KO
-from core.radar.keywords import VERTICAL_KEYWORDS, VERTICAL_LABELS
+from core.radar.keywords import DEFAULT_DAYS, VERTICAL_KEYWORDS, VERTICAL_LABELS
+from core.radar.youtube import QUOTA_COST
 from core.radar.run import execute
 
 # 화면을 옮겨 다녀도 값이 유지되어야 하는 위젯 키 (app.py에서 매 실행 재할당)
 RADAR_PERSIST_KEYS = ("radar_hints_on", "radar_allow_dryrun", "radar_vertical", "radar_days", "radar_min_ratio",
-                      "radar_hooks", "radar_source", "radar_view_vertical")
+                      "radar_hooks", "radar_source", "radar_view_vertical", "radar_show_irrelevant")
 
 
-RADAR_DEFAULTS = {"radar_hints_on": True, "radar_allow_dryrun": False, "radar_vertical": "stay", "radar_days": 14,
-                  "radar_min_ratio": 5.0, "radar_hooks": 5, "radar_view_vertical": "stay"}
+RADAR_DEFAULTS = {"radar_hints_on": True, "radar_allow_dryrun": False, "radar_vertical": "stay", "radar_days": DEFAULT_DAYS,
+                  "radar_min_ratio": 5.0, "radar_hooks": 5, "radar_view_vertical": "stay",
+                  "radar_show_irrelevant": False}
 
 
 def init_radar_state():
@@ -69,8 +71,9 @@ def render_radar_page():
             min_ratio = st.number_input("최소 배수", 2.0, 100.0, step=1.0, key="radar_min_ratio")
         with c4:
             hooks = st.number_input("후킹 추출 수", 0, 20, key="radar_hooks", help="상위 영상 중 몇 개의 첫 3초를 분석할지 (Gemini 호출 수)")
-        st.caption(f"검색 키워드: {', '.join(sum((VERTICAL_KEYWORDS[v] for v in (VERTICAL_KEYWORDS if vertical == 'all' else [vertical])), []))} "
-                   f"· 예상 YouTube 쿼터 약 {505 * (len(VERTICAL_KEYWORDS) if vertical == 'all' else 1)} units")
+        kws = sum((VERTICAL_KEYWORDS[v] for v in (VERTICAL_KEYWORDS if vertical == "all" else [vertical])), [])
+        # 키워드당 search 1회 + videos/channels 배치(키워드당 약 1~2 units)
+        st.caption(f"검색 키워드: {', '.join(kws)} · 예상 YouTube 쿼터 약 {len(kws) * (QUOTA_COST['search'] + 2)} units")
         label = "📡 레이더 실행 (수집)" if has_key else "📡 레이더 실행 (Dry-run)"
         if st.button(label, type="primary", use_container_width=True, key="radar_run"):
             with st.spinner("최근 쇼츠를 수집하고 후킹 구조를 추출하는 중..."):
@@ -85,7 +88,9 @@ def render_radar_page():
         if last:
             for v in last["verticals"]:
                 msg = (f"{VERTICAL_LABELS[v['vertical']]} [{last['mode'].upper()}] 후보 {v['candidates']}개 → 떡상 {v['outliers']}개 · "
-                       f"후킹 추출 {v['hooks_extracted']}건 · 쿼터 {v['quota_used']} units")
+                       f"후킹 추출 {v['hooks_extracted']}건"
+                       + (f" (도메인 부적합 {v['hooks_irrelevant']}건 제외)" if v.get("hooks_irrelevant") else "")
+                       + f" · 쿼터 {v['quota_used']} units")
                 (st.warning if v["budget_stopped"] else st.success)(msg + (" · 쿼터 예산 도달로 일부 키워드 생략" if v["budget_stopped"] else ""))
 
     # ---------------------------------------------------------------- 결과 보기
@@ -109,6 +114,8 @@ def render_radar_page():
             rows = store.recent_outliers(conn, view_v, int(days), float(min_ratio), limit=24)
         finally:
             conn.close()
+        # Gemini가 도메인 부적합(예능·애니·밈·반려동물 클립)으로 판정한 영상은 기본 숨김
+        hidden = [r for r in rows if r.get("hook_type") and not r.get("hook_relevant")]
 
         if summary:
             st.markdown("##### 요즘 먹히는 후킹 유형")
@@ -117,7 +124,12 @@ def render_radar_page():
                 col.metric(HOOK_TYPE_KO.get(s["hook_type"], s["hook_type"]), f"평균 {s['avg_ratio']}배", f"{s['n']}개 영상",
                            delta_color="off")
 
-        st.markdown(f"##### 최근 {int(days)}일 떡상 쇼츠 ({len(rows)}개, {float(min_ratio):g}배 이상)")
+        show_hidden = st.checkbox(f"제외된 비적합 영상 보기 ({len(hidden)}개)", key="radar_show_irrelevant",
+                                  disabled=not hidden, help="실제 숙소·맛집 리뷰가 아니라고 판정되어 힌트에서 빠진 영상")
+        if not show_hidden:
+            rows = [r for r in rows if r not in hidden]
+        st.markdown(f"##### 최근 {int(days)}일 떡상 쇼츠 ({len(rows)}개, {float(min_ratio):g}배 이상)"
+                    + (f" · 비적합 {len(hidden)}개 숨김" if hidden and not show_hidden else ""))
         if not rows:
             st.caption("조건에 맞는 영상이 없습니다. 기간·배수 조건을 완화하거나 레이더를 다시 실행해 보세요.")
         per_row = 3
@@ -130,7 +142,9 @@ def render_radar_page():
                         st.image(f"https://i.ytimg.com/vi/{r['video_id']}/hqdefault.jpg", use_container_width=True)
                     st.markdown(f"**🔥 {r['outlier_ratio']:.1f}배** · 조회 {r['views']:,} · 구독 {r['subscribers']:,}")
                     st.markdown(_plain(r["title"]))
-                    if r.get("hook_type"):
+                    if r.get("hook_type") and not r.get("hook_relevant"):
+                        st.caption(f"🚫 힌트 제외: 실제 숙소·맛집 리뷰가 아님 ({_plain(r.get('hook_content_type') or '')})")
+                    elif r.get("hook_type"):
                         st.markdown(f"🪝 **{HOOK_TYPE_KO.get(r['hook_type'], r['hook_type'])}** · {_plain(r['pattern_template'])}")
                         if r.get("why_it_works"):
                             st.caption(_plain(r["why_it_works"]))

@@ -21,13 +21,27 @@ HOOK_TYPE_KO = {
     "emotion": "감정 리액션형", "other": "기타",
 }
 
-HOOK_PROMPT = f"""
+# 업종별 '진짜 리뷰' 판정 기준 (예능·연예인 토크·애니 짜깁기 클립은 후킹 구조가 캐릭터/유명인 덕분이라 광고에 재사용 불가)
+RELEVANCE_CRITERIA = {
+    "stay": "a real accommodation/travel content: hotel, pension, pool villa, resort or space review, room tour, or travel vlog "
+            "showing the actual place. Pet-friendly stays (e.g. a dog-friendly pension or pool villa) ARE relevant when the "
+            "video clearly reviews or tours the accommodation space itself, even if a pet appears",
+    "food": "a real restaurant/cafe/food content: actual food or venue review, mukbang at a real place, or cafe/restaurant vlog",
+}
+
+HOOK_PROMPT = """
 You are analyzing ONLY the first 3 seconds of a viral YouTube Short (Korean market).
+First decide relevance: is this {criteria}?
+NOT relevant: celebrity talk-show or TV variety clips, animation/cartoon clips, memes, pet-centered clips where the
+animal (snacks, tricks, cute moments) is the subject rather than the place,
+compilations of broadcast footage, or anything where the hook works only because of a famous person or character.
 Return JSON only with these keys:
+- "relevant": true or false (by the rule above)
+- "content_type": one of review, room_tour, vlog, food_review, tv_clip, celebrity_talk, animation, meme, pets, other
 - "spoken_line": the exact narration/speech in the first 3 seconds (Korean as spoken; "" if none)
 - "on_screen_text": text overlays visible in the first 3 seconds ("" if none)
 - "visual_hook": what is shown in Korean, one short phrase (e.g. "문 열자마자 인피니티 풀 공개")
-- "hook_type": one of {", ".join(HOOK_TYPES)}
+- "hook_type": one of {hook_types}
 - "pattern_template": a REUSABLE Korean template generalized from the hook with placeholders like {{장소}}, {{숫자}}, {{가격}}, {{대상}}.
    Do not copy distinctive phrases verbatim; keep only the structure.
 - "why_it_works": one Korean sentence on why it stops the scroll
@@ -38,8 +52,9 @@ def to_watch_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
-def extract_hook(video_id: str, api_key: str, model: str = "gemini-3.6-flash", seconds: int = 3) -> Dict[str, Any]:
-    """Gemini로 공개 영상의 0~seconds초 구간을 분석"""
+def extract_hook(video_id: str, api_key: str, model: str = "gemini-3.6-flash", seconds: int = 3,
+                 vertical: str = "stay") -> Dict[str, Any]:
+    """Gemini로 공개 영상의 0~seconds초 구간을 분석 (+ 업종 적합성 판정)"""
     from google import genai
     from google.genai import types
     from core.guardrail import validate_model_call
@@ -50,7 +65,8 @@ def extract_hook(video_id: str, api_key: str, model: str = "gemini-3.6-flash", s
         contents=types.Content(parts=[
             types.Part(file_data=types.FileData(file_uri=to_watch_url(video_id)),
                        video_metadata=types.VideoMetadata(start_offset="0s", end_offset=f"{seconds}s")),
-            types.Part(text=HOOK_PROMPT),
+            types.Part(text=HOOK_PROMPT.format(criteria=RELEVANCE_CRITERIA.get(vertical, RELEVANCE_CRITERIA["stay"]),
+                                               hook_types=", ".join(HOOK_TYPES))),
         ]),
         config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
     )
@@ -77,7 +93,7 @@ def mock_hook(title: str) -> Dict[str, Any]:
         htype = "other"
     template = re.sub(r"\d+\s*(시간|분|초|만원|원|곳|가지)?", lambda m: "{숫자}" + (m.group(1) or ""), t)
     return _normalize({"spoken_line": "", "on_screen_text": t, "visual_hook": "(dry-run: 제목 기반 추정)",
-                       "hook_type": htype, "pattern_template": template,
+                       "hook_type": htype, "pattern_template": template, "relevant": True, "content_type": "mock",
                        "why_it_works": "(dry-run: 실제 영상 분석 아님)"}, source="mock")
 
 
@@ -90,15 +106,18 @@ def _normalize(data: Dict[str, Any], source: str) -> Dict[str, Any]:
         "hook_type": htype if htype in HOOK_TYPES else "other",
         "pattern_template": str(data.get("pattern_template", "") or "")[:160],
         "why_it_works": str(data.get("why_it_works", "") or "")[:200],
+        "relevant": data.get("relevant") is True or str(data.get("relevant")).lower() == "true",
+        "content_type": str(data.get("content_type", "other") or "other")[:30],
         "source": source,
     }
 
 
-def try_extract_hook(video_id: str, title: str, api_key: Optional[str], dry_run: bool) -> Optional[Dict[str, Any]]:
+def try_extract_hook(video_id: str, title: str, api_key: Optional[str], dry_run: bool,
+                     vertical: str = "stay") -> Optional[Dict[str, Any]]:
     if dry_run or not api_key:
         return mock_hook(title)
     try:
-        return extract_hook(video_id, api_key)
+        return extract_hook(video_id, api_key, vertical=vertical)
     except Exception as e:
         logger.warning(f"후킹 추출 실패 ({video_id}): {e}")
         return None
