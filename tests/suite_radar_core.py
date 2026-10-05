@@ -42,6 +42,9 @@ check(DEFAULT_DAYS == 30 and inspect.signature(_run_mod.execute).parameters["day
 check("dog-friendly pension" in RELEVANCE_CRITERIA["stay"] and "rather than the place" in HOOK_PROMPT,
       "적합성 기준: 반려견 동반 숙소 리뷰는 통과, 반려동물 중심 클립은 제외")
 check(keywords_for("food") == ["맛집 추천", "가성비 맛집", "숨은 맛집", "웨이팅 맛집", "카페 추천"], "food 기본 키워드 5개")
+from core.radar.keywords import PLANNER_VERTICALS
+check(keywords_for("viral") == ["꿀팁", "비밀", "이유", "방법", "절대"] and "viral" in VERTICAL_KEYWORDS
+      and "viral" not in PLANNER_VERTICALS, "viral 트리거 키워드 5개 (기획 직접 연결 업종은 stay/food만)")
 
 # ---------------------------------------------------------------- scoring
 check([parse_iso_duration(x) for x in ("PT45S", "PT1M5S", "PT3M", "PT1H2M3S", "P0D", "")] == [45, 65, 180, 3723, 0, 0], "ISO 8601 길이 파싱")
@@ -65,6 +68,24 @@ check("클립성 카테고리 (엔터테인먼트)" in rec(category_id="24").rej
       and "영화/애니메이션" in rec(category_id="1").reject_reason, "엔터테인먼트(24)·영화/애니메이션(1) → 수집 단계 제외")
 check(rec(category_id="19").reject_reason is None and rec(category_id="22").reject_reason is None, "여행(19)·인물/블로그(22) → 통과")
 check("조회수 부족" in rec(subscribers=2_000, views=20_000).reject_reason, "조회 2만 → 조회수 부족")
+from core.radar.scoring import filters_for, min_ratio_for
+
+
+def vrec(**kw):
+    base = dict(video_id="v", title="t", channel_id="c", channel_title="ch", published_at=now - timedelta(days=2),
+                duration_sec=30, views=200_000, likes=0, comments=0, subscribers=10_000, subscribers_hidden=False,
+                keyword="k", vertical="viral")
+    base.update(kw)
+    return score(VideoRecord(**base), filters_for("viral"), now)
+
+
+check(vrec(category_id="24").reject_reason is None and vrec(category_id="20").reject_reason is None
+      and "음악" in vrec(category_id="10").reject_reason, "viral: 엔터·게임 허용, 음악(10)만 제외")
+check(vrec(views=150_000).reject_reason is None and "배수 미달" in vrec(views=149_000).reject_reason,
+      "viral: 15배 통과, 14.9배 배수 미달")
+check(min_ratio_for("viral", 5.0) == 15.0 and min_ratio_for("viral", 30.0) == 30.0 and min_ratio_for("stay", 5.0) == 5.0
+      and filters_for("stay").excluded_categories == RadarFilters().excluded_categories,
+      "viral 배수 하한 15배 (더 높은 값은 존중), stay 필터 불변")
 check("배수 미달" in rec(views=49_000).reject_reason, "4.9배 → 배수 미달")
 r_list = [rec(video_id="a", views=60_000), rec(video_id="b", views=300_000), rec(video_id="c", views=60_000, published_at=now - timedelta(hours=5))]
 check([r.video_id for r in rank(r_list)] == ["b", "c", "a"], "정렬: 배수 → 같은 배수면 속도(최근 업로드) 우선")
@@ -158,6 +179,33 @@ row1 = next(r for r in store.recent_outliers(conn, "stay", 14, 5.0, 50) if r["vi
 check(row1["hook_relevant"] == 0 and row1["hook_content_type"] == "celebrity_talk", "조회 결과에 적합성·콘텐츠 유형 포함")
 check(store.delete_hooks(conn, [top[1].video_id]) == 1 and not store.has_hook(conn, top[1].video_id), "잘못 수집된 후킹 패턴 삭제")
 
+# 같은 영상이 stay(엔터 카테고리 → 탈락)와 viral(통과)에 동시에 걸리는 경우
+xdb = os.path.join(tempfile.mkdtemp(), "x.db")
+xc = store.connect(xdb)
+shared = dict(video_id="dual", title="김호영이 말해주는 호캉스 꿀팁", channel_id="cx", channel_title="clip",
+              published_at=now - timedelta(days=1), duration_sec=40, views=300_000, likes=0, comments=0, subscribers=10_000,
+              subscribers_hidden=False, category_id="24")
+rs = store.start_run(xc, "live", "stay", 30, ["호캉스"])
+store.save_records(xc, rs, [score(VideoRecord(**shared, keyword="호캉스", vertical="stay"), filters_for("stay"), now)])
+rv = store.start_run(xc, "live", "viral", 30, ["꿀팁"])
+store.save_records(xc, rv, [score(VideoRecord(**shared, keyword="꿀팁", vertical="viral"), filters_for("viral"), now)])
+stay_rows = store.recent_outliers(xc, "stay", 30, 5.0, 10)
+viral_rows = store.recent_outliers(xc, "viral", 30, 15.0, 10)
+check(not stay_rows and len(viral_rows) == 1 and viral_rows[0]["vertical"] == "viral" and viral_rows[0]["keyword"] == "꿀팁",
+      "업종 소속은 실행 기준: stay에선 엔터 카테고리로 탈락, viral에선 통과 (키워드도 viral 것)")
+store.save_hook(xc, "dual", dict(mock_hook("x"), relevant=False, content_type="celebrity_talk"), "stay")
+store.save_hook(xc, "dual", dict(mock_hook("x", "viral"), relevant=True, content_type="tips"), "viral")
+check(store.has_hook(xc, "dual", "stay") and store.has_hook(xc, "dual", "viral")
+      and xc.execute("SELECT COUNT(*) FROM hooks WHERE video_id='dual'").fetchone()[0] == 2,
+      "후킹은 (영상, 업종)마다 따로 저장 (stay 부적합 판정이 viral 판정을 덮어쓰지 않음)")
+vr = store.recent_outliers(xc, "viral", 30, 15.0, 10)[0]
+check(vr["hook_relevant"] == 1 and vr["hook_content_type"] == "tips"
+      and [s["n"] for s in store.hook_type_summary(xc, "viral")] == [1] and store.hook_type_summary(xc, "stay") == [],
+      "조회·유형 요약도 업종별 후킹으로 결합")
+store.delete_hooks(xc, ["dual"], "stay")
+check(not store.has_hook(xc, "dual", "stay") and store.has_hook(xc, "dual", "viral"), "업종 지정 삭제는 해당 업종 후킹만")
+xc.close()
+
 # 기존(구 스키마) DB를 열면 새 컬럼이 자동 추가되고 기존 행은 보존
 import sqlite3
 old_db = os.path.join(tempfile.mkdtemp(), "old.db")
@@ -166,7 +214,9 @@ oc.executescript("""CREATE TABLE videos (video_id TEXT PRIMARY KEY, vertical TEX
   published_at TEXT, duration_sec INTEGER, url TEXT, first_seen TEXT, last_seen TEXT);
 CREATE TABLE hooks (video_id TEXT PRIMARY KEY, extracted_at TEXT, source TEXT, spoken_line TEXT, on_screen_text TEXT,
   visual_hook TEXT, hook_type TEXT, pattern_template TEXT, why_it_works TEXT);
-INSERT INTO hooks (video_id, hook_type) VALUES ('legacy', 'question');""")
+INSERT INTO hooks (video_id, hook_type) VALUES ('legacy', 'question');
+INSERT INTO videos (video_id, vertical) VALUES ('foodvid', 'food');
+INSERT INTO hooks (video_id, hook_type, pattern_template) VALUES ('foodvid', 'reveal', '{대상} 공개');""")
 oc.commit()
 oc.close()
 mc_ = store.connect(old_db)
@@ -174,11 +224,41 @@ hook_cols = {r["name"] for r in mc_.execute("PRAGMA table_info(hooks)")}
 check({"relevant", "content_type"} <= hook_cols and "category_id" in {r["name"] for r in mc_.execute("PRAGMA table_info(videos)")}
       and mc_.execute("SELECT hook_type FROM hooks WHERE video_id='legacy'").fetchone()[0] == "question",
       "구 스키마 DB 자동 마이그레이션 (컬럼 추가, 기존 행 보존)")
+pk = sorted((r["pk"], r["name"]) for r in mc_.execute("PRAGMA table_info(hooks)") if r["pk"])
+moved = {r["video_id"]: r["vertical"] for r in mc_.execute("SELECT video_id, vertical FROM hooks")}
+check(pk == [(1, "video_id"), (2, "vertical")] and moved == {"legacy": "stay", "foodvid": "food"}
+      and mc_.execute("SELECT pattern_template FROM hooks WHERE video_id='foodvid'").fetchone()[0] == "{대상} 공개"
+      and "hooks_legacy" not in {r[0] for r in mc_.execute("SELECT name FROM sqlite_master")},
+      "후킹 테이블 (영상, 업종) 복합 키 전환: 기존 행은 영상의 업종으로 이관, 임시 테이블 정리")
+mc_.close()
+mc_ = store.connect(old_db)   # 두 번째 열기: 이미 전환된 DB는 그대로
+check(mc_.execute("SELECT COUNT(*) FROM hooks").fetchone()[0] == 2, "마이그레이션 재실행 안전 (멱등)")
 mc_.close()
 
 # ---------------------------------------------------------------- hooks (mock 규칙)
 check(mock_hook("[호캉스] 3초 만에 예약 마감된 이유")["pattern_template"] == "{숫자}초 만에 예약 마감된 이유", "mock 후킹: 숫자 → {숫자} 자리표시자")
 check(mock_hook("[x] POV: 문 열자마자")["hook_type"] == "pov" and mock_hook("[x] 이 가격에 이게 된다고?")["hook_type"] == "question", "mock 후킹 유형 규칙")
+from core.radar.hooks import HOOK_TYPES, HOOK_TYPE_KO, VIRAL_PLACEHOLDERS, _normalize, build_prompt, skeleton_problem
+check("reversal" in HOOK_TYPES and HOOK_TYPE_KO["reversal"] == "반전형" and '"reversal"' in build_prompt("stay")
+      and '"reversal"' in build_prompt("viral"), "후킹 유형에 반전형(reversal) 추가 (업종·viral 프롬프트 모두)")
+vp = build_prompt("viral")
+check("specific_terms" in vp and "{주체}" in vp and "{결과}" in vp and "Bleach" in vp and "a real accommodation" not in vp,
+      "viral 프롬프트: 소재 탈색 + 허용 변수 목록 + 고유명사 목록 요청 (숙소 적합성 기준 아님)")
+check(skeleton_problem("{주체}가 절대 {행동}하지 않는 이유", []) is None
+      and skeleton_problem("절대 하지 않는 이유", []) == "자리표시자 없음"
+      and "허용되지 않은 변수" in skeleton_problem("{게임}에서 {숫자}골", [])
+      and "원본 고유명사" in skeleton_problem("피파4에서 {숫자}초 만에 {결과}", ["피파4"]),
+      "스켈레톤 검증: 허용 변수만 · 1개 이상 · 원본 고유명사 금지")
+leak = _normalize({"relevant": True, "hook_type": "number", "pattern_template": "브롤스타즈 {숫자}초 만에 {결과}",
+                   "specific_terms": ["브롤스타즈"], "content_type": "game"}, "gemini:test", vertical="viral")
+ok_ = _normalize({"relevant": True, "hook_type": "reversal", "pattern_template": "{주체}가 절대 {행동}하지 않는 이유",
+                  "specific_terms": ["브롤스타즈"], "content_type": "game"}, "gemini:test", vertical="viral")
+check(leak["relevant"] is False and "브롤스타즈" in leak["note"] and ok_["relevant"] is True and ok_["note"] == ""
+      and ok_["hook_type"] == "reversal", "viral: 고유명사가 남은 템플릿은 부적합 처리(사유 기록), 탈색된 템플릿은 통과")
+check(_normalize({"relevant": True, "pattern_template": "이 가격에 {대상}이?"}, "x", vertical="stay")["relevant"] is True,
+      "stay 템플릿은 viral 변수 규칙 미적용 (기존 동작 유지)")
+mv = mock_hook("[이유] 3초 만에 예약 마감된 이유", "viral")
+check(skeleton_problem(mv["pattern_template"], []) is None and mv["relevant"], f"viral mock 후킹도 범용 스켈레톤 ({mv['pattern_template']})")
 
 # ---------------------------------------------------------------- 후킹 루프: 적합 N개 목표, 분석 상한 3N
 import core.radar.run as radar_run
@@ -204,8 +284,14 @@ tmpdb = os.path.join(tempfile.mkdtemp(), "cli.db")
 code = radar_main(["--vertical", "all", "--dry-run", "--db", tmpdb, "--top", "3"])
 c2 = store.connect(tmpdb)
 runs = c2.execute("SELECT vertical, mode, quota_used, outliers FROM runs ORDER BY run_id").fetchall()
-check(code == 0 and [r["vertical"] for r in runs] == ["stay", "food"] and all(r["mode"] == "dry-run" for r in runs),
-      f"CLI --vertical all --dry-run: 종료코드 0, 실행 2건 기록 {[dict(r) for r in runs]}")
+check(code == 0 and [r["vertical"] for r in runs] == ["stay", "food", "viral"] and all(r["mode"] == "dry-run" for r in runs),
+      f"CLI --vertical all --dry-run: 종료코드 0, 실행 3건 기록 {[dict(r) for r in runs]}")
+vrows = store.recent_outliers(c2, "viral", 30, 0.0, 100)
+vhooks = c2.execute("SELECT pattern_template FROM hooks WHERE vertical='viral'").fetchall()
+check(vrows and min(r["outlier_ratio"] for r in vrows) >= 15 and vhooks
+      and all(skeleton_problem(h[0], []) is None for h in vhooks),
+      f"viral 실행: 떡상 {len(vrows)}개 모두 15배 이상, 후킹 {len(vhooks)}건 모두 범용 스켈레톤")
+c2.close()
 check(store.DRYRUN_DB != store.DEFAULT_DB, "dry-run 기본 DB가 실 데이터 DB와 분리")
 
 # ---------------------------------------------------------------- Gemini 실호출: 공개 YouTube URL 0~3초 분석

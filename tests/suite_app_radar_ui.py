@@ -74,6 +74,22 @@ try:
     txt = all_text(at)
     check("🚫 힌트 제외" in txt and sum("**🔥" in (m.value or "") for m in at.markdown) == n_cards and "(animation)" in txt and "숨김" not in txt, "'제외된 비적합 영상 보기' 체크 → 🚫 카드 펼침")
     at.checkbox(key="radar_show_irrelevant").uncheck().run()
+
+    # Viral 리더보드: 전체 실행 후 '업종 보기'를 Viral로
+    at.selectbox(key="radar_vertical").select("all").run()
+    check("Viral은 최소 배수 15배" in all_text(at), "전체 실행 시 Viral 15배 하한 안내")
+    [b for b in at.button if "레이더 실행" in b.label][0].click().run()
+    check(not at.exception and sum("[DRY-RUN]" in s.value for s in at.success) == 3, "전체 실행 → stay·food·viral 3개 결과")
+    at.segmented_control(key="radar_view_vertical").set_value("viral").run()
+    txt = all_text(at)
+    check(not at.exception and "전체 떡상 랭킹 Top" in txt and "🥇" in txt and "🥈" in txt and "🦴" in txt and "#4" in txt,
+          "Viral 탭: 🏆 Top 랭킹 + 🥇🥈 순위 + 🦴 범용 템플릿")
+    ratios = [float(m.value.split("🔥 ")[1].split("배")[0]) for m in at.markdown if (m.value or "").startswith("**🔥")]
+    check(ratios and len(ratios) <= 10 and min(ratios) >= 15 and ratios == sorted(ratios, reverse=True),
+          f"리더보드 최대 10개, 모두 15배 이상, 배수 내림차순 {ratios}")
+    exp = [e.label for e in at.expander]
+    check(len(exp) == 2 and not any("Viral" in l for l in exp), f"씬 1 힌트 미리보기는 기획 업종(stay·food)만 {exp}")
+    at.segmented_control(key="radar_view_vertical").set_value("stay").run()
     exp = [e.label for e in at.expander]
     check(any("사용 가능한 패턴 없음" in l for l in exp), f"Dry-run 데이터만 있을 때 힌트 미리보기 = 패턴 없음 (가짜 패턴 차단) {exp}")
     at.toggle(key="radar_allow_dryrun").set_value(True).run()

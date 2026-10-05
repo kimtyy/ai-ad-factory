@@ -23,6 +23,20 @@ CATEGORY_NAMES = {"1": "영화/애니메이션", "2": "자동차", "10": "음악
 # 실제 리뷰·브이로그가 아닌 클립성 카테고리 (방송·애니 짜깁기, 코미디, 음악, 게임)
 CLIP_CATEGORIES = ("1", "10", "20", "23", "24")
 
+# 업종별 필터 기본값. viral은 원본 소재를 지우고 구조만 쓰므로 클립성 카테고리도 허용하되
+# 음악(10)은 노래·안무로 터져 추상화할 훅이 없어 제외. 배수는 15배 이상만 (사용자가 더 낮게 줘도 하한 유지)
+VERTICAL_FILTER_DEFAULTS = {"viral": {"min_ratio": 15.0, "excluded_categories": ("10",)}}
+
+
+def min_ratio_for(vertical: str, requested: float) -> float:
+    return max(float(requested), VERTICAL_FILTER_DEFAULTS.get(vertical, {}).get("min_ratio", 0.0))
+
+
+def filters_for(vertical: str, min_ratio: float = 5.0, min_subscribers: int = 300, min_views: int = 30_000) -> "RadarFilters":
+    d = VERTICAL_FILTER_DEFAULTS.get(vertical, {})
+    return RadarFilters(min_ratio=min_ratio_for(vertical, min_ratio), min_subscribers=min_subscribers, min_views=min_views,
+                        excluded_categories=d.get("excluded_categories", CLIP_CATEGORIES))
+
 
 @dataclass
 class RadarFilters:

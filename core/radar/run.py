@@ -25,7 +25,7 @@ from core.radar import store
 from core.radar.collector import collect
 from core.radar.hooks import HOOK_TYPE_KO, try_extract_hook
 from core.radar.keywords import DEFAULT_DAYS, VERTICAL_KEYWORDS, VERTICAL_LABELS, keywords_for
-from core.radar.scoring import RadarFilters, rank
+from core.radar.scoring import filters_for, min_ratio_for, rank
 from core.radar.youtube import MockYouTubeClient, YouTubeClient
 
 
@@ -60,7 +60,6 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
     dry_run = dry_run or not yt_key
     db_path = db_path or (store.DRYRUN_DB if dry_run else store.DEFAULT_DB)
     conn = store.connect(db_path)
-    filters = RadarFilters(min_ratio=min_ratio, min_subscribers=min_subs, min_views=min_views)
     verticals = list(VERTICAL_KEYWORDS) if vertical == "all" else [vertical]
     client = MockYouTubeClient(budget_units=budget) if dry_run else YouTubeClient(yt_key, budget_units=budget)
     result = {"mode": client.mode, "db_path": db_path, "verticals": [],
@@ -71,6 +70,7 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
                 kws = [k.strip() for k in keywords.split(",") if k.strip()]
             else:
                 kws = list(keywords) if keywords else keywords_for(v)
+            filters = filters_for(v, min_ratio, min_subs, min_views)
             run_id = store.start_run(conn, client.mode, v, days, kws)
             t0 = time.time()
             units_before = client.used_units
@@ -82,12 +82,12 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
             for rec in top:
                 if hooked >= hooks or attempts >= hooks * 3:
                     break
-                if store.has_hook(conn, rec.video_id):
+                if store.has_hook(conn, rec.video_id, v):
                     continue
                 attempts += 1
                 hook = try_extract_hook(rec.video_id, rec.title, gemini_key, dry_run, vertical=v)
                 if hook:
-                    store.save_hook(conn, rec.video_id, hook)
+                    store.save_hook(conn, rec.video_id, hook, v)
                     if hook.get("relevant"):
                         hooked += 1
                     else:
@@ -101,7 +101,7 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
             store.finish_run(conn, run_id, used, len(records), len(top),
                              note=f"budget_stopped={stats.get('budget_stopped', 0)} rejects={rejects}")
             result["verticals"].append({
-                "vertical": v, "keywords": kws, "searched_keywords": stats["searched_keywords"],
+                "vertical": v, "min_ratio": filters.min_ratio, "keywords": kws, "searched_keywords": stats["searched_keywords"],
                 "search_calls": stats["search_calls"], "candidates": len(records), "outliers": len(top),
                 "quota_used": used, "hooks_extracted": hooked, "hooks_irrelevant": irrelevant, "rejects": rejects,
                 "budget_stopped": bool(stats.get("budget_stopped")), "seconds": round(time.time() - t0, 1),
@@ -109,6 +109,10 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
     finally:
         conn.close()
     return result
+
+
+def _irrelevant_label(vertical: str) -> str:
+    return "범용화 불가" if vertical == "viral" else "도메인 부적합"
 
 
 def run(args) -> int:
@@ -125,14 +129,17 @@ def run(args) -> int:
             print()
             print(f"{VERTICAL_LABELS[v['vertical']]}  키워드 {v['searched_keywords']}/{len(v['keywords'])}개 · 검색 {v['search_calls']}회 · "
                   f"후보 {v['candidates']}개 → 떡상 {v['outliers']}개 · 쿼터 {v['quota_used']} units · 후킹 추출 {v['hooks_extracted']}건"
-                  f"{' (도메인 부적합 ' + str(v['hooks_irrelevant']) + '건 제외)' if v.get('hooks_irrelevant') else ''} · {v['seconds']}s")
+                  f"{' (' + _irrelevant_label(v['vertical']) + ' ' + str(v['hooks_irrelevant']) + '건 제외)' if v.get('hooks_irrelevant') else ''}"
+                  f" · 배수 ≥ {v['min_ratio']:g}x · {v['seconds']}s")
             if v["rejects"]:
                 print("   탈락 사유: " + ", ".join(f"{k} {n}" for k, n in v["rejects"].items()))
             if v["budget_stopped"]:
                 print("   ⚠️  쿼터 예산 도달로 일부 키워드를 건너뛰었습니다 (--budget 조정).")
-            for i, row in enumerate(store.recent_outliers(conn, v["vertical"], args.days, args.min_ratio, args.top), 1):
+            for i, row in enumerate(store.recent_outliers(conn, v["vertical"], args.days,
+                                                          min_ratio_for(v["vertical"], args.min_ratio), args.top), 1):
                 if row.get("hook_type") and not row.get("hook_relevant"):
-                    hook = f" | 🚫 힌트 제외 (도메인 부적합: {row.get('hook_content_type')})"
+                    hook = (f" | 🚫 힌트 제외 ({_irrelevant_label(v['vertical'])}: {row.get('hook_content_type')}"
+                            f"{' · ' + row['hook_note'] if row.get('hook_note') else ''})")
                 elif row.get("hook_type"):
                     hook = f" | 후킹[{HOOK_TYPE_KO.get(row['hook_type'], '-')}] {row['pattern_template'] or ''}"
                 else:

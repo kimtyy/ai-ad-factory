@@ -2,11 +2,12 @@
 core/radar/store.py - 레이더 SQLite 저장소
 
 테이블
-  runs       실행 이력 (모드, 키워드, 쿼터 사용량, 후보/떡상 수)
+  runs       실행 이력 (모드, 업종, 키워드, 쿼터 사용량, 후보/떡상 수)
   channels   채널 구독자 수 (최신값)
-  videos     영상 메타데이터 (최초/최근 발견 시각, 키워드)
-  snapshots  실행 시점별 조회수·배수·속도 (같은 영상을 여러 번 수집하면 추이가 쌓임)
-  hooks      첫 3초 후킹 구조 (영상당 1개)
+  videos     영상 메타데이터 (최초/최근 발견 시각). videos.vertical/keyword는 '처음' 수집된 업종·키워드일 뿐이며,
+             업종 소속은 snapshots → runs.vertical로 판단합니다 (같은 영상이 stay와 viral에 동시에 걸릴 수 있음)
+  snapshots  실행 시점별 조회수·배수·속도·통과 여부 (업종별 필터가 다르므로 통과 여부도 실행=업종 단위)
+  hooks      첫 3초 후킹 구조 ((영상, 업종)당 1개: 같은 영상도 stay에서는 부적합, viral에서는 범용 훅일 수 있음)
 실 데이터(radar.db)와 dry-run 데이터(radar_dryrun.db)는 파일을 분리해 섞이지 않게 합니다.
 """
 import json
@@ -20,6 +21,11 @@ from core.radar.scoring import VideoRecord
 DEFAULT_DB = os.path.join("outputs", "radar", "radar.db")
 DRYRUN_DB = os.path.join("outputs", "radar", "radar_dryrun.db")
 
+HOOKS_DDL = """CREATE TABLE IF NOT EXISTS hooks (
+  video_id TEXT, vertical TEXT, extracted_at TEXT, source TEXT, spoken_line TEXT, on_screen_text TEXT,
+  visual_hook TEXT, hook_type TEXT, pattern_template TEXT, why_it_works TEXT, relevant INTEGER, content_type TEXT,
+  note TEXT, PRIMARY KEY (video_id, vertical))"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
   run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT, mode TEXT, vertical TEXT,
@@ -31,13 +37,12 @@ CREATE TABLE IF NOT EXISTS videos (
   duration_sec INTEGER, url TEXT, first_seen TEXT, last_seen TEXT, category_id TEXT);
 CREATE TABLE IF NOT EXISTS snapshots (
   video_id TEXT, run_id INTEGER, captured_at TEXT, views INTEGER, likes INTEGER, comments INTEGER,
-  subscribers INTEGER, outlier_ratio REAL, velocity_per_day REAL, passed INTEGER, reject_reason TEXT,
+  subscribers INTEGER, outlier_ratio REAL, velocity_per_day REAL, passed INTEGER, reject_reason TEXT, keyword TEXT,
   PRIMARY KEY (video_id, run_id));
-CREATE TABLE IF NOT EXISTS hooks (
-  video_id TEXT PRIMARY KEY, extracted_at TEXT, source TEXT, spoken_line TEXT, on_screen_text TEXT,
-  visual_hook TEXT, hook_type TEXT, pattern_template TEXT, why_it_works TEXT, relevant INTEGER, content_type TEXT);
+""" + HOOKS_DDL + """;
 CREATE INDEX IF NOT EXISTS idx_snap_ratio ON snapshots(outlier_ratio);
 CREATE INDEX IF NOT EXISTS idx_videos_vertical ON videos(vertical);
+CREATE INDEX IF NOT EXISTS idx_runs_vertical ON runs(vertical);
 """
 
 
@@ -46,7 +51,34 @@ def _now() -> str:
 
 
 # 기존 DB에 나중에 추가된 컬럼 (CREATE TABLE IF NOT EXISTS는 기존 테이블을 바꾸지 않으므로 ALTER로 보강)
-MIGRATIONS = {"videos": {"category_id": "TEXT"}, "hooks": {"relevant": "INTEGER", "content_type": "TEXT"}}
+MIGRATIONS = {"videos": {"category_id": "TEXT"}, "snapshots": {"keyword": "TEXT"},
+              "hooks": {"relevant": "INTEGER", "content_type": "TEXT", "note": "TEXT"}}
+
+HOOK_COLS = ("extracted_at", "source", "spoken_line", "on_screen_text", "visual_hook", "hook_type", "pattern_template",
+             "why_it_works", "relevant", "content_type", "note")
+
+
+def _columns(conn, table: str) -> set:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate_hooks_per_vertical(conn):
+    """구 스키마 hooks(video_id 단독 키) → (video_id, vertical) 복합 키. 기존 행은 영상의 최초 업종으로 이관"""
+    if "vertical" in _columns(conn, "hooks"):
+        return
+    cols = ", ".join(HOOK_COLS)
+    conn.execute("BEGIN")   # SQLite DDL도 트랜잭션 안에서 원자적으로 (중간 실패 시 구 테이블 그대로)
+    try:
+        conn.execute("ALTER TABLE hooks RENAME TO hooks_legacy")
+        conn.execute(HOOKS_DDL)
+        conn.execute(f"""INSERT INTO hooks (video_id, vertical, {cols})
+                         SELECT h.video_id, COALESCE(v.vertical, 'stay'), {', '.join('h.' + c for c in HOOK_COLS)}
+                         FROM hooks_legacy h LEFT JOIN videos v ON v.video_id = h.video_id""")
+        conn.execute("DROP TABLE hooks_legacy")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
@@ -55,11 +87,12 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     for table, cols in MIGRATIONS.items():
-        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        have = _columns(conn, table)
         for col, typ in cols.items():
             if col not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     conn.commit()
+    _migrate_hooks_per_vertical(conn)
     return conn
 
 
@@ -90,50 +123,73 @@ def save_records(conn, run_id: int, records: Iterable[VideoRecord]):
                      (r.video_id, r.vertical, r.keyword, r.title, r.channel_id,
                       r.published_at.strftime("%Y-%m-%dT%H:%M:%SZ"), r.duration_sec, r.url, now, now, r.category_id))
         conn.execute("""INSERT OR REPLACE INTO snapshots (video_id, run_id, captured_at, views, likes, comments, subscribers,
-                        outlier_ratio, velocity_per_day, passed, reject_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        outlier_ratio, velocity_per_day, passed, reject_reason, keyword) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                      (r.video_id, run_id, now, r.views, r.likes, r.comments, r.subscribers, r.outlier_ratio,
-                      r.velocity_per_day, int(r.reject_reason is None), r.reject_reason))
+                      r.velocity_per_day, int(r.reject_reason is None), r.reject_reason, r.keyword))
     conn.commit()
 
 
-def delete_hooks(conn, video_ids: List[str]) -> int:
-    """잘못 수집된 후킹 패턴 삭제 (영상·스냅샷 이력은 유지)"""
-    cur = conn.executemany("DELETE FROM hooks WHERE video_id = ?", [(v,) for v in video_ids])
+def _hook_vertical(conn, video_id: str, vertical: Optional[str], hook: Optional[Dict[str, Any]] = None) -> str:
+    if vertical:
+        return vertical
+    if hook and hook.get("vertical"):
+        return hook["vertical"]
+    row = conn.execute("SELECT vertical FROM videos WHERE video_id=?", (video_id,)).fetchone()
+    return (row["vertical"] if row else None) or "stay"
+
+
+def delete_hooks(conn, video_ids: List[str], vertical: Optional[str] = None) -> int:
+    """잘못 수집된 후킹 패턴 삭제 (영상·스냅샷 이력은 유지). vertical 생략 시 모든 업종의 후킹 삭제"""
+    if vertical:
+        cur = conn.executemany("DELETE FROM hooks WHERE video_id = ? AND vertical = ?", [(v, vertical) for v in video_ids])
+    else:
+        cur = conn.executemany("DELETE FROM hooks WHERE video_id = ?", [(v,) for v in video_ids])
     conn.commit()
     return cur.rowcount
 
 
-def has_hook(conn, video_id: str) -> bool:
+def has_hook(conn, video_id: str, vertical: Optional[str] = None) -> bool:
+    if vertical:
+        return conn.execute("SELECT 1 FROM hooks WHERE video_id=? AND vertical=?", (video_id, vertical)).fetchone() is not None
     return conn.execute("SELECT 1 FROM hooks WHERE video_id=?", (video_id,)).fetchone() is not None
 
 
-def save_hook(conn, video_id: str, hook: Dict[str, Any]):
-    conn.execute("""INSERT OR REPLACE INTO hooks (video_id, extracted_at, source, spoken_line, on_screen_text, visual_hook,
-                    hook_type, pattern_template, why_it_works, relevant, content_type) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                 (video_id, _now(), hook.get("source"), hook.get("spoken_line"), hook.get("on_screen_text"),
-                  hook.get("visual_hook"), hook.get("hook_type"), hook.get("pattern_template"), hook.get("why_it_works"),
-                  int(bool(hook.get("relevant"))), hook.get("content_type")))
+def save_hook(conn, video_id: str, hook: Dict[str, Any], vertical: Optional[str] = None):
+    """vertical 생략 시 hook['vertical'] → 영상의 최초 업종 순으로 결정"""
+    conn.execute(f"""INSERT OR REPLACE INTO hooks (video_id, vertical, {', '.join(HOOK_COLS)})
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 (video_id, _hook_vertical(conn, video_id, vertical, hook), _now(), hook.get("source"),
+                  hook.get("spoken_line"), hook.get("on_screen_text"), hook.get("visual_hook"), hook.get("hook_type"),
+                  hook.get("pattern_template"), hook.get("why_it_works"), int(bool(hook.get("relevant"))),
+                  hook.get("content_type"), hook.get("note") or None))
     conn.commit()
+
+
+# 업종별 최신 스냅샷: 같은 영상이라도 업종(=실행)마다 필터·통과 여부가 다르므로 해당 업종 실행 중 최신 것을 씀
+_LATEST_IN_VERTICAL = """s.run_id = (SELECT MAX(s2.run_id) FROM snapshots s2 JOIN runs r2 ON r2.run_id = s2.run_id
+                                    WHERE s2.video_id = s.video_id AND r2.vertical = r.vertical)"""
 
 
 def recent_outliers(conn, vertical: Optional[str] = None, days: int = 14, min_ratio: float = 5.0,
                     limit: int = 20) -> List[Dict[str, Any]]:
-    """최근 업로드된 떡상 영상 (영상별 최신 스냅샷 기준) + 후킹 구조"""
-    q = """
-    SELECT v.video_id, v.vertical, v.keyword, v.title, v.url, v.published_at, v.duration_sec, v.category_id, c.title AS channel,
+    """최근 업로드된 떡상 영상 (업종별 최신 스냅샷 기준) + 그 업종의 후킹 구조"""
+    q = f"""
+    SELECT v.video_id, r.vertical AS vertical, COALESCE(s.keyword, v.keyword) AS keyword, v.title, v.url, v.published_at,
+           v.duration_sec, v.category_id, c.title AS channel,
            s.views, s.subscribers, s.outlier_ratio, s.velocity_per_day, s.captured_at,
            h.hook_type, h.pattern_template, h.spoken_line, h.on_screen_text, h.visual_hook, h.why_it_works, h.source AS hook_source,
-           h.relevant AS hook_relevant, h.content_type AS hook_content_type
-    FROM videos v
-    JOIN snapshots s ON s.video_id = v.video_id
-     AND s.run_id = (SELECT MAX(run_id) FROM snapshots s2 WHERE s2.video_id = v.video_id)
+           h.relevant AS hook_relevant, h.content_type AS hook_content_type, h.note AS hook_note
+    FROM snapshots s
+    JOIN runs r ON r.run_id = s.run_id
+    JOIN videos v ON v.video_id = s.video_id
     LEFT JOIN channels c ON c.channel_id = v.channel_id
-    LEFT JOIN hooks h ON h.video_id = v.video_id
-    WHERE s.passed = 1 AND s.outlier_ratio >= ? AND v.published_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
+    LEFT JOIN hooks h ON h.video_id = s.video_id AND h.vertical = r.vertical
+    WHERE {_LATEST_IN_VERTICAL}
+      AND s.passed = 1 AND s.outlier_ratio >= ? AND v.published_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
     """
     args: List[Any] = [min_ratio, f"-{int(days)} days"]
     if vertical:
-        q += " AND v.vertical = ?"
+        q += " AND r.vertical = ?"
         args.append(vertical)
     q += " ORDER BY s.outlier_ratio DESC, s.velocity_per_day DESC LIMIT ?"
     args.append(limit)
@@ -141,14 +197,15 @@ def recent_outliers(conn, vertical: Optional[str] = None, days: int = 14, min_ra
 
 
 def hook_type_summary(conn, vertical: Optional[str] = None) -> List[Dict[str, Any]]:
-    """후킹 유형별 떡상 영상 수/평균 배수 (어떤 후킹이 요즘 먹히는지)"""
-    q = """SELECT h.hook_type, COUNT(*) AS n, ROUND(AVG(s.outlier_ratio), 1) AS avg_ratio
-           FROM hooks h JOIN videos v ON v.video_id = h.video_id
-           JOIN snapshots s ON s.video_id = v.video_id AND s.run_id = (SELECT MAX(run_id) FROM snapshots s2 WHERE s2.video_id = v.video_id)
-           WHERE s.passed = 1 AND h.relevant = 1"""
+    """후킹 유형별 떡상 영상 수/평균 배수 (어떤 후킹이 요즘 먹히는지, 적합 판정 후킹만)"""
+    q = f"""SELECT h.hook_type, COUNT(*) AS n, ROUND(AVG(s.outlier_ratio), 1) AS avg_ratio
+           FROM hooks h
+           JOIN runs r ON r.vertical = h.vertical
+           JOIN snapshots s ON s.run_id = r.run_id AND s.video_id = h.video_id
+           WHERE {_LATEST_IN_VERTICAL} AND s.passed = 1 AND h.relevant = 1"""
     args: List[Any] = []
     if vertical:
-        q += " AND v.vertical = ?"
+        q += " AND h.vertical = ?"
         args.append(vertical)
     q += " GROUP BY h.hook_type ORDER BY n DESC"
     return [dict(r) for r in conn.execute(q, args).fetchall()]

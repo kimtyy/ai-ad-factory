@@ -83,6 +83,51 @@ check("이 가격에 {대상}이 나온다고?" in block and "베끼지" in bloc
 check(copies_reference("이 가격에 이 뷰가 나온다고?!", hints) and not copies_reference("이 가격에 이 수영장 실화?", hints),
       "원문 복제 판정 (그대로 → 차단, 구조만 차용 → 허용)")
 
+# ---------------------------------------------------------------- 1b. 업종 패턴 3개 미만 → viral 범용 패턴 보충
+fb_db = os.path.join(tempfile.mkdtemp(), "fallback.db")
+conn = store.connect(fb_db)
+
+
+def _add(run_vertical, vid, ratio, tpl, htype, relevant=True, category="22"):
+    rid_ = store.start_run(conn, "live", run_vertical, 30, ["k"])
+    r = VideoRecord(video_id=vid, title=f"원본 {vid}", channel_id="c" + vid, channel_title="ch", published_at=now - timedelta(days=3),
+                    duration_sec=30, views=int(10_000 * ratio), likes=0, comments=0, subscribers=10_000,
+                    subscribers_hidden=False, keyword="k", vertical=run_vertical, category_id=category)
+    store.save_records(conn, rid_, [score(r, filters_for(run_vertical), now)])
+    store.save_hook(conn, vid, {"source": "gemini:gemini-3.6-flash", "spoken_line": f"원문 {vid}", "on_screen_text": "",
+                                "visual_hook": "", "hook_type": htype, "pattern_template": tpl, "why_it_works": "w",
+                                "relevant": relevant, "content_type": "x"}, run_vertical)
+
+
+from core.radar.scoring import filters_for
+_add("food", "f1", 12.0, "{대상} 먹으러 {숫자}시간 줄 선 이유", "number")
+_add("viral", "g1", 88.0, "{주체}가 절대 {행동}하지 않는 이유", "reversal", category="24")
+_add("viral", "g2", 40.0, "{숫자}초 만에 {결과}되는 {대상}", "number", category="20")
+_add("viral", "g3", 95.0, "브롤스타즈 {숫자}초 컷", "number", relevant=False, category="20")   # 범용화 실패
+_add("viral", "g4", 33.0, "{대상}만 아는 {장소} 공개", "reveal")
+for vid, ratio, tpl in (("s1", 30.0, "{장소} 가면 꼭 {행동}하세요"), ("s2", 20.0, "{숫자}만원대 {장소}"), ("s3", 9.0, "{장소}의 반전")):
+    _add("stay", vid, ratio, tpl, "list" if vid == "s1" else "price_shock" if vid == "s2" else "reveal")
+conn.close()
+
+fh = load_hook_hints("food", db_path=fb_db)
+check([r["video_id"] for r in fh.references] == ["f1", "g1", "g2"] and fh.viral_count == 2,
+      f"food 전용 1개 → viral 2개 보충해 3개 (업종 패턴 우선, 범용화 실패 제외) {[r['video_id'] for r in fh.references]}")
+check("[범용] 반전형" in fh.prompt_block and "[범용 패턴 규칙]" in fh.prompt_block and "브롤스타즈" not in fh.prompt_block
+      and fh.summary()[1]["vertical"] == "viral", "보충 패턴은 [범용] 표시 + 사용 규칙 추가, 출처에 업종 기록")
+sh = load_hook_hints("stay", db_path=fb_db)
+check(len(sh.references) == 3 and sh.viral_count == 0 and "[범용" not in sh.prompt_block, "업종 패턴 3개 이상이면 viral 보충 없음")
+c_ = store.connect(fb_db)
+store.delete_hooks(c_, ["s3"], "stay")
+store.delete_hooks(c_, ["s2"], "stay")
+c_.close()
+sh2 = load_hook_hints("stay", db_path=fb_db)
+check([r["video_id"] for r in sh2.references] == ["s1", "g1", "g2"], f"stay 1개로 줄면 viral 2개 보충 {[r['video_id'] for r in sh2.references]}")
+c_ = store.connect(fb_db)
+store.delete_hooks(c_, ["g1", "g2", "g4"], "viral")
+c_.close()
+check(not load_hook_hints("food", db_path=fb_db).viral_count and len(load_hook_hints("food", db_path=fb_db).references) == 1,
+      "적합한 viral 패턴이 없으면 업종 패턴만")
+
 # ---------------------------------------------------------------- 2. 프롬프트 주입 (가짜 Gemini)
 captured = {}
 
