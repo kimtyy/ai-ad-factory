@@ -44,7 +44,7 @@ from core.asset_generator import AssetGenerator, VOICE_ACTOR_PROFILES
 from core.compositor import AdCompositor
 from core.scraper import scrape_product_info
 from core.image_processor import extract_product_cutout, composite_cutout_on_background
-from core.job import JobContext
+from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.planners import BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE, plan_owner_storyboard
 from core.planners.travel import plan_travel_storyboard
@@ -102,8 +102,17 @@ if "vision_cache" not in st.session_state:
     st.session_state.vision_cache = {}       # 비전 판정 캐시 (이미지 해시:역할 -> 판정)
 if "uploaded_paths" not in st.session_state:
     st.session_state.uploaded_paths = []     # 일괄 업로드 사진/영상 (씬 1부터 순서대로 배정)
+@st.cache_resource(show_spinner=False)
+def _startup_cleanup():
+    """서버 프로세스 시작 시 1회: 24시간 넘게 아무것도 저장되지 않은 빈 작업 폴더 정리 (결과물이 있는 폴더는 보존)"""
+    return cleanup_old_jobs(empty_only=True, max_age_hours=24)
+
+
+_startup_cleanup()
+
 if "job" not in st.session_state:
     # 브라우저 세션마다 독립 작업 공간 (outputs/jobs/{job_id}/) - 동시 사용자 간 파일 충돌 방지
+    # 폴더는 첫 저장 시점에 생성됨 (접속만 한 세션은 빈 폴더를 남기지 않음)
     st.session_state.job = JobContext.create(app="streamlit")
 
 UPLOAD_TYPES = ["jpg", "jpeg", "png", "mp4", "mov", "m4v"]
