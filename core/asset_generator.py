@@ -427,6 +427,18 @@ class AssetGenerator:
         scene["hook_sec"] = round(hook_sec, 2)
         return out_path
 
+    def _speak_checked(self, text: str, path: str, rate: str, pitch: str, scene_num: int, keep_commas: bool = False) -> str:
+        """Edge-TTS 합성 + 잘린 응답이면 재시도 (TTS_RETRIES회)"""
+        from core.tts import generate_speech
+        for attempt in range(TTS_RETRIES + 1):
+            generate_speech(text=text, output_path=path, voice_actor=self.voice_actor, rate=rate, pitch=pitch, force=True,
+                            keep_commas=keep_commas)
+            sec = _audio_seconds(path)
+            if not tts_too_short(text, sec):
+                return path
+            logger.warning(f"씬 {scene_num} Edge-TTS 잘린 응답 ({sec or 0:.2f}초, {len(text)}자) → 재시도 {attempt + 1}/{TTS_RETRIES}")
+        raise RuntimeError(f"Edge-TTS가 {TTS_RETRIES + 1}회 연속 잘린 음성을 반환 ('{text}')")
+
     def _spoken_hook(self, scene: Dict[str, Any]) -> str:
         """씬 1 후킹 헤드라인을 먼저 읽을지 (실사 모드에서 hook_title이 있을 때만. 커머스는 기존 상단 후킹 바 유지)"""
         if self.mode not in REAL_MEDIA_MODES:
@@ -448,17 +460,24 @@ class AssetGenerator:
             logger.info(f"[Mock Audio] 씬 {scene_num} 더미 오디오 생성 완료 ({duration_sec:.2f}초): {out_path}")
             return out_path
 
-        from core.tts import generate_speech
+        from core.tts import end_rise_percent, question_variants
         try:
             raw_path = os.path.splitext(out_path)[0] + ".raw.mp3"
-            for attempt in range(TTS_RETRIES + 1):
-                generate_speech(text=text, output_path=raw_path, voice_actor=self.voice_actor, rate=rate, pitch=pitch, force=True)
-                raw_sec = _audio_seconds(raw_path)
-                if not tts_too_short(text, raw_sec):
-                    break
-                logger.warning(f"씬 {scene_num} Edge-TTS 잘린 응답 ({raw_sec or 0:.2f}초, {len(text)}자) → 재시도 {attempt + 1}/{TTS_RETRIES}")
+            variants = question_variants(text)
+            if len(variants) > 1:
+                # 의문문: 숨 쉼표 위치가 다른 후보를 합성해 말끝이 가장 많이 올라가는 것을 사용 (자막은 원문 그대로)
+                scored = []
+                for vi, variant in enumerate(variants):
+                    cand_path = os.path.splitext(out_path)[0] + f".q{vi}.mp3"
+                    self._speak_checked(variant, cand_path, rate, pitch, scene_num, keep_commas=True)
+                    scored.append((end_rise_percent(cand_path), vi, variant, cand_path))
+                best = max(scored, key=lambda x: (x[0] if x[0] is not None else -999.0, -x[1]))
+                import shutil
+                shutil.copyfile(best[3], raw_path)
+                logger.info(f"씬 {scene_num} 의문문 억양 선택: '{best[2]}' (말끝 {best[0] if best[0] is not None else 0:+.0f}%) / 후보 "
+                            + ", ".join(f"'{v}' {r if r is not None else 0:+.0f}%" for r, _, v, _ in scored))
             else:
-                raise RuntimeError(f"Edge-TTS가 {TTS_RETRIES + 1}회 연속 잘린 음성을 반환 ('{text}')")
+                self._speak_checked(text, raw_path, rate, pitch, scene_num)
             trim_silence(raw_path, out_path)
             logger.info(f"씬 {scene_num} Edge-TTS 음성 생성 완료 (앞뒤 무음 제거: {_audio_seconds(raw_path) or 0:.2f}초 → "
                         f"{_audio_seconds(out_path) or 0:.2f}초) -> {out_path}")

@@ -70,10 +70,12 @@ def resolve_edge_voice(actor_key: Optional[str]) -> str:
     return DEFAULT_FEMALE_VOICE
 
 
-def clean_tts_text(text: str) -> str:
+def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     """
     [TTS 음성 합성용 텍스트 정제기]
-    - 문장 부호(!, ., ?) 완전 제거 -> 음절 간 어색한 끊김 방지 및 자연스러운 연음 유도
+    - 문장 부호(!, .)와 쉼표 제거 -> 음절 간 어색한 끊김 방지 및 자연스러운 연음 유도
+      (keep_commas=True: 의문문 억양용 '숨 쉼표'를 살림)
+    - 물음표(?)는 유지: 지우면 신경망 TTS가 평서문으로 읽어 끝음이 떨어짐 (실측: '맞아요' 끝 F0 -26% → '맞아요?' +5~21%)
     - 특수문자 및 따옴표 제거
     - 숫자의 한자어 변환
     """
@@ -84,8 +86,11 @@ def clean_tts_text(text: str) -> str:
     text = text.replace("~", " ").replace("～", " ").replace("^", " ")
     text = re.sub(r'[\'\"`#*@&%=+;:\(\)\[\]\{\}<>\/\\_]', ' ', text)
 
-    # 2. 문장 부호(!, ., ?) 및 쉼표 완전 제거 (자연스러운 연음 유도)
-    text = text.replace("!", " ").replace(".", " ").replace("?", " ").replace(",", " ")
+    # 2. 문장 부호(!, .) 및 쉼표 제거 (자연스러운 연음 유도). 물음표는 하나로 정리해 유지 ('?!', '??' → '?')
+    text = re.sub(r"\?[!?]*|!+\?", "?", text)
+    text = text.replace("!", " ").replace(".", " ")
+    if not keep_commas:
+        text = text.replace(",", " ")
 
     # 3. 한자어 숫자 변환
     num_map = {
@@ -100,8 +105,66 @@ def clean_tts_text(text: str) -> str:
 
     # 4. 공백 및 조사 정리
     text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'(\S)\s+([을를이가은는])', r'\1\2', text)
+    # 떨어져 있는 조사 한 글자만 앞말에 붙임 ('숙소 를' → '숙소를'). '이/가'는 관형사·동사('이 뷰', '여기 가 보면')와
+    # 구별이 안 돼 제외하고, 다음 어절의 첫 글자('이 가격', '가성비')도 건드리지 않음
+    text = re.sub(r'(\S)\s+([을를은는])(?=\s|$|[?,])', r'\1\2', text)
+    text = re.sub(r'\s+([?,])', r'\1', text)
     return text.strip()
+
+
+def question_variants(text: str) -> list:
+    """
+    의문문 억양 후보 (TTS 입력용, 자막은 그대로). 신경망 TTS는 문장마다 끝 억양이 달라 한 규칙으로 안 올라가므로
+    후보를 합성해 끝음 상승폭(end_rise_percent)이 가장 큰 것을 고름:
+      그대로 / 마지막 어절 앞 숨 쉼표 / 마지막 두 어절 앞 숨 쉼표
+    실측(SunHi): '여기 진짜, 한국 맞아요?' +20% (그대로 +5%), '아직도 여기, 모르세요?' +50% (그대로 +21%)
+    """
+    base = clean_tts_text(text, keep_commas=True)
+    if not base.endswith("?"):
+        return [base]
+    body = base[:-1].rstrip()
+    head, _, last_sentence = body.rpartition("? ")
+    prefix = (head + "? ") if head else ""
+    words = last_sentence.split(" ")
+    out = [base]
+    if len(words) >= 2 and "," not in words[-2]:
+        out.append(prefix + " ".join(words[:-1]) + ", " + words[-1] + "?")
+    if len(words) >= 3 and "," not in words[-3]:
+        out.append(prefix + " ".join(words[:-2]) + ", " + " ".join(words[-2:]) + "?")
+    return list(dict.fromkeys(out))
+
+
+def end_rise_percent(path: str) -> Optional[float]:
+    """
+    말끝 억양 상승폭(%): 앞 60% 구간 대비 마지막 구간의 기본 주파수(F0) 중앙값 변화 (자기상관 피치 추정, 16kHz 모노).
+    측정 불가하면 None
+    """
+    import subprocess
+    import numpy as np
+    import imageio_ffmpeg
+    try:
+        raw = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", path, "-f", "s16le", "-ac", "1",
+                              "-ar", "16000", "-"], capture_output=True, timeout=30).stdout
+    except Exception:
+        return None
+    x = np.frombuffer(raw, np.int16).astype(np.float32)
+    sr, win, hop = 16000, 640, 160
+    lo, hi = sr // 400, sr // 70
+    track = []
+    for i in range(0, max(0, len(x) - win), hop):
+        fr = x[i:i + win] - x[i:i + win].mean()
+        if np.sqrt((fr ** 2).mean()) < 300:
+            continue
+        ac = np.correlate(fr, fr, "full")[win - 1:]
+        lag = lo + int(np.argmax(ac[lo:hi]))
+        if ac[lag] > 0.3 * ac[0]:
+            track.append(sr / lag)
+    if len(track) < 10:
+        return None
+    n = len(track)
+    head = float(np.median(track[: int(n * 0.6)]))
+    tail = float(np.median(track[-max(4, n // 10):]))
+    return (tail / head - 1.0) * 100.0
 
 
 async def _generate_edge_tts_async(
@@ -141,7 +204,8 @@ def generate_speech(
     voice_actor: str = "female_20s",
     rate: str = DEFAULT_RATE,
     pitch: str = DEFAULT_PITCH,
-    force: bool = False
+    force: bool = False,
+    keep_commas: bool = False
 ) -> str:
     """
     Edge-TTS를 이용해 고품질 한국어 나레이션 오디오 파일(MP3)을 생성합니다.
@@ -162,7 +226,7 @@ def generate_speech(
 
     # 성우 보이스 자동 매핑
     voice = resolve_edge_voice(voice_actor)
-    cleaned = clean_tts_text(text)
+    cleaned = clean_tts_text(text, keep_commas=keep_commas)
     if not cleaned:
         cleaned = "힐링 여행을 즐겨보세요."
 

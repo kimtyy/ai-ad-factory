@@ -177,6 +177,48 @@ fixed = real_gen._synthesize("근데 진짜 대박인 건 객실에서도 오션
 tts_mod.generate_speech = _orig_speech
 check(len(_calls) == 2 and (_audio_seconds(fixed) or 0) > 2.0, f"첫 응답이 잘리면 재시도해 정상 음성 확보 (호출 {len(_calls)}회)")
 
+# ---------------------------------------------------------------- 2-2-1. 의문문 억양 (물음표 유지 + 숨 쉼표 후보 중 말끝 상승 최대 선택)
+from core.tts import clean_tts_text, end_rise_percent, question_variants
+check(clean_tts_text("여기 진짜 한국 맞아요?!") == "여기 진짜 한국 맞아요?" and clean_tts_text("솔직히 없거든요!") == "솔직히 없거든요"
+      and clean_tts_text("이 가격에 이 뷰가 나온다고요??") == "이 가격에 이 뷰가 나온다고요?" and clean_tts_text("숙소 를 예약") == "숙소를 예약",
+      "TTS 텍스트: 물음표 유지('?!'·'??' 정리), 느낌표·마침표 제거, '이 가격'처럼 다음 어절 첫 글자를 앞말에 붙이지 않음")
+check(question_variants("여기 진짜 한국 맞아요?") == ["여기 진짜 한국 맞아요?", "여기 진짜 한국, 맞아요?", "여기 진짜, 한국 맞아요?"]
+      and question_variants("솔직히 여기만 한 데가 없거든요.") == ["솔직히 여기만 한 데가 없거든요"],
+      "의문문만 숨 쉼표 후보 3개 (평서문은 그대로 1개)")
+
+
+def _tone(path, f0, f1):
+    """f0 → f1 Hz로 변하는 배음 섞인 톤 (말소리 대용)"""
+    expr = f"0.5*sin(2*PI*({f0}*t+({f1}-{f0})*t*t/4))+0.25*sin(4*PI*({f0}*t+({f1}-{f0})*t*t/4))"
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"aevalsrc='{expr}':s=24000:d=2", "-c:a", "libmp3lame", path], check=True)
+    return path
+
+
+up_r = end_rise_percent(_tone(os.path.join(work, "up.mp3"), 200, 280))
+down_r = end_rise_percent(_tone(os.path.join(work, "down.mp3"), 240, 170))
+check(up_r is not None and down_r is not None and up_r > 15 and down_r < -15,
+      f"말끝 억양 측정: 올라가는 톤 {up_r:+.0f}%, 내려가는 톤 {down_r:+.0f}%")
+_spoken = []
+
+
+def _fake_tts(text, output_path, **kw):
+    _spoken.append(text)
+    rising = text == "여기 진짜, 한국 맞아요?"      # 세 번째 후보만 말끝이 올라가는 응답
+    return _tone(output_path, 200, 280) if rising else _tone(output_path, 240, 180)
+
+
+_orig_tts, tts_mod.generate_speech = tts_mod.generate_speech, _fake_tts
+qgen = AssetGenerator(cache_dir=os.path.join(work, "q"), mode="travel")
+qout = qgen._synthesize("여기 진짜 한국 맞아요?", os.path.join(work, "q", "hook.mp3"), {"scene_index": 1})
+tts_mod.generate_speech = _orig_tts
+check(len(_spoken) == 3 and (end_rise_percent(qout) or 0) > 15, f"의문문: 후보 3개 합성 → 말끝이 올라가는 후보 선택 ({_spoken[-1]})")
+_spoken.clear()
+tts_mod.generate_speech = _fake_tts
+qgen._synthesize("솔직히 여기만 한 데가 없거든요.", os.path.join(work, "q", "plain.mp3"), {"scene_index": 2})
+tts_mod.generate_speech = _orig_tts
+check(len(_spoken) == 1, "평서문은 1회만 합성 (추가 비용 없음)")
+
 # ---------------------------------------------------------------- 2-3. 나레이션이 클립보다 길면 음성을 자르지 않고 화면을 늘림
 long_voice = os.path.join(work, "long_voice.mp3")
 gen._create_mock_audio(6.0, long_voice)
