@@ -46,7 +46,7 @@ _ow._plan_with_gemini = lambda *a, **k: [{"role": "room", "hook_title": "계곡 
                                          {"role": "view", "voiceover": "창문 열면 계곡 물소리가 그대로 들어와요"}, {"voiceover": "x"}]
 sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞", "stay", "", [], num_scenes=3, api_key="fake")
 _ow._plan_with_gemini = _orig
-check(not find_promo_tone(sc[0]["voiceover"]) and sc[1]["voiceover"] == "창문 열면 계곡 물소리가 그대로 들어와요"
+check(not find_promo_tone(sc[0]["voiceover"]) and sc[1]["voiceover"] == "창문 열면 계곡 물소리가 그대로 들어와요."
       and sc[-1]["voiceover"].endswith("검색해 보세요!"), f"Gemini 홍보 어투 → 템플릿 교체, 자연스러운 대사·CTA 유지 ({sc[0]['voiceover']})")
 
 _ow._plan_with_gemini = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "계곡 앞 독채 펜션이라 조용합니다."},

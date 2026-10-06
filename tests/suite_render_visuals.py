@@ -177,6 +177,19 @@ fixed = real_gen._synthesize("근데 진짜 대박인 건 객실에서도 오션
 tts_mod.generate_speech = _orig_speech
 check(len(_calls) == 2 and (_audio_seconds(fixed) or 0) > 2.0, f"첫 응답이 잘리면 재시도해 정상 음성 확보 (호출 {len(_calls)}회)")
 
+# ---------------------------------------------------------------- 2-3. 나레이션이 클립보다 길면 음성을 자르지 않고 화면을 늘림
+long_voice = os.path.join(work, "long_voice.mp3")
+gen._create_mock_audio(6.0, long_voice)
+short_clip = os.path.join(work, "short_clip.mp4")
+gen._create_ken_burns_video(src, 2.0, short_clip, motion_type="zoom_in", motion_sec=2.0)
+synced = comp.assemble_ad([{"scene_index": 1, "video_path": short_clip, "audio_path": long_voice, "subtitle": "긴 나레이션", "hook_title": ""},
+                           {"scene_index": 2, "video_path": short_clip, "audio_path": long_voice, "subtitle": "두 번째", "hook_title": ""}],
+                          output_filename="sync.mp4", mode="travel")
+from core.media import probe_media
+sp = probe_media(synced)
+check(abs(sp.duration - (6.0 + 0.2 + 6.0 + 1.0)) < 0.3,
+      f"나레이션 6초 > 클립 2초: 음성 전부 재생, 화면은 마지막 프레임 유지로 연장 (총 {sp.duration:.2f}초 = 6.0+0.2 + 6.0+1.0)")
+
 # ---------------------------------------------------------------- 3. 씬 1: 후킹 먼저 읽고 → 서브 문장 (음성·자막 시간차)
 s1 = {"scene_index": 1, "duration_sec": 2.0, "hook_title": "국내 손꼽히는 끝판왕 오션뷰 풀",
       "voiceover": "바다랑 수영장이 그냥 이어져 있거든요", "video_motion_prompt_en": "zoom_in"}

@@ -14,8 +14,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_MAX, find_promo_tone, find_unsupported_claim, is_hook_echo,
-                                shorten_line, strip_brochure_words, to_haeyo)
+from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, find_promo_tone,
+                                find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo)
 from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.planners.owner")
@@ -34,12 +34,12 @@ ROLE_LABELS_KO = {
 }
 
 MOCK_LINES = {
-    "stay": {"exterior": "도착하자마자 설레는 우리 숙소!", "room": "객실 들어오면 다들 일단 눕고 봐요!",
-             "facility": "놀 거리 가득한 부대시설까지!", "view": "창밖 풍경만 봐도 힐링돼요!", "detail": "작은 것 하나까지 신경 썼어요!"},
-    "food": {"exterior": "골목 안 숨은 맛집, 여기예요!", "signature": "이게 바로 저희 대표 메뉴!",
+    "stay": {"exterior": "도착하자마자 다들 사진부터 찍으시더라고요.", "room": "객실 들어오면 다들 일단 눕고 봐요!",
+             "facility": "부대시설에서 놀다 보면 하루가 금방 가요.", "view": "창밖 풍경만 봐도 힐링돼요!", "detail": "작은 것 하나까지 신경 썼어요!"},
+    "food": {"exterior": "골목 안에 숨어 있어서 아는 분들만 오시더라고요.", "signature": "이게 바로 저희 대표 메뉴예요!",
              "cooking": "주문 즉시 바로 만들어 드려요!", "interior": "편하게 머물다 가는 공간이에요!", "detail": "재료부터 정성껏 준비해요!"},
-    "shop": {"exterior": "찾아오시기 쉬운 우리 매장!", "product": "가장 사랑받는 대표 상품!",
-             "interior": "천천히 둘러보기 좋은 공간!", "detail": "디테일까지 꼼꼼하게 골랐어요!", "service": "친절하게 안내해 드릴게요!"},
+    "shop": {"exterior": "찾아오시기 쉬운 데 있어요!", "product": "제일 많이 찾으시는 대표 상품이에요!",
+             "interior": "천천히 둘러보기 좋은 공간이에요!", "detail": "디테일까지 꼼꼼하게 골랐어요!", "service": "친절하게 안내해 드릴게요!"},
 }
 
 # 사장님이 입력하지 않은 수치/혜택/순위 주장 차단 규칙은 core.script_guard.PRICE_CLAIM_PATTERNS에서 관리
@@ -141,7 +141,14 @@ def plan_owner_storyboard(
             if promo:
                 logger.info(f"[홍보 어투 차단] 씬 {i + 1}: {promo} (대사: {text}) → 템플릿 대사로 교체")
                 text = lines.get(role, lines["exterior"])
-            text = shorten_line(strip_brochure_words(text), VO_LIMIT, VO_MAX)
+            text = strip_brochure_words(text)
+            if len(text) > VO_HARD_MAX:
+                text = shorten_line(text, VO_HARD_MAX - 3, VO_HARD_MAX)
+            done = complete_sentence(text)
+            if done is None:
+                logger.info(f"[미완성 문장 차단] 씬 {i + 1}: '{text}' → 템플릿 대사로 교체")
+                done = complete_sentence(lines.get(role, lines["exterior"])) or lines.get(role, lines["exterior"])
+            text = done
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
             role = llm[i]["role"]
         hook = ""
@@ -199,8 +206,9 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
 1. 총 {n}개 씬. 위에 붙은 [씬 i 미디어]가 있으면 i번째 씬 대사는 그 사진/영상 속 공간·메뉴에 대한 이야기여야 합니다
    (사진에 없는 걸 지어내지 말되, 보이는 걸 나열해 읽지도 말고 '그래서 뭐가 좋은지'를 말하세요).
    미디어가 없는 씬은 업종 기본 구성({role_hint})을 따르세요.
-2. 먼저 사장님이 손님 한 명에게 가게 자랑 썰을 푸는 독백(story)을 쓰고, 순서대로 잘라 씬 1~{n - 1}의 voiceover로 나누세요.
-   각 voiceover는 공백 포함 15~{VO_LIMIT}자. 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
+2. 먼저 사장님이 손님 한 명에게 가게 자랑 썰을 푸는 독백(story)을 정확히 {n - 1}개의 완결 문장으로 쓰고, 문장 하나씩 씬 1~{n - 1}의
+   voiceover로 나누세요. 각 voiceover는 공백 포함 15~{VO_LIMIT}자, 해요체 종결 어미로 끝나는 완결 문장
+   (문장 중간에서 끊기 금지). 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
 3. 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
 4. 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내). 나레이터가 헤드라인을 먼저 읽고
    씬 1 voiceover를 이어 읽으므로, voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰세요.

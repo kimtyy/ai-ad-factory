@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 from core.guardrail import validate_model_call
-from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_MAX, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
+from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
     find_off_scene_topic, find_promo_tone, find_unsupported_claim, safe_line_for
 from core.radar.hints import HookHints, copies_reference
 
@@ -323,29 +323,29 @@ def narrative_role_for(index: int, total: int, visual_role: str) -> str:
 MOCK_TRAVEL_LINES = {
     "info": {
         "hook_title": "여기 진짜 한국 맞아요?",
-        "view": "문 열자마자 펼쳐지는 역대급 뷰!",
-        "pool": "물놀이 시작하면 시간 순삭되는 수영장",
-        "facility": "분위기 좋은 공간에서 여유 한 잔!",
-        "bedroom": "푹신한 침구에서 꿀잠 예약!",
-        "bedroom_or_view": "창밖 풍경 보며 늦잠 자고 싶은 방!",
-        "view_or_night": "밤이 되면 더 예뻐지는 풍경!",
+        "view": "문 열자마자 역대급 뷰가 펼쳐져요!",
+        "pool": "물놀이 시작하면 시간이 순삭돼요.",
+        "facility": "분위기 좋은 공간에서 여유 한 잔 하기 좋아요.",
+        "bedroom": "침구가 푹신해서 꿀잠 예약이에요!",
+        "bedroom_or_view": "창밖 풍경 보면서 늦잠 자고 싶어져요.",
+        "view_or_night": "밤이 되면 풍경이 더 예뻐져요!",
     },
     "experience": {
         "hook_title": "문 열자마자 입이 떡 벌어짐!",
-        "view": "도착하자마자 뷰 보고 입 떡 벌어짐!",
+        "view": "도착하자마자 뷰 보고 입이 떡 벌어졌어요!",
         "pool": "물놀이하다 보니 시간 가는 줄 몰랐어요!",
-        "facility": "여기서 커피 마시니 세상 행복!",
-        "bedroom": "체크아웃하기 진짜 싫었던 침구 맛집!",
+        "facility": "여기서 커피 마시니까 세상 행복하더라고요!",
+        "bedroom": "침구가 너무 좋아서 체크아웃하기 싫었어요!",
         "bedroom_or_view": "창밖 뷰 보다가 하루가 다 갔어요!",
-        "view_or_night": "밤 풍경까지 완벽했던 하루!",
+        "view_or_night": "밤 풍경까지 완벽한 하루였어요!",
     },
 }
 # 황금 비율 슬롯별 Mock 대사 (같은 역할이 연속돼도 대사가 반복되지 않도록 슬롯 위치별로 구분)
 MOCK_GOLDEN7_LINES = {
-    "info": ["물빛부터 진짜 다르거든요", "풀 뷰가 끝없이 이어지는데", "물멍하다 보면 시간이 순삭돼요",
-             "객실도 감성이 가득해서", "창밖 뷰가 그림처럼 펼쳐지고요", "분위기 좋은 공간까지 있어요"],
-    "experience": ["수영장 보자마자 입 떡 벌어짐!", "풀 뷰 보면서 사진만 백 장 찍음!", "물멍하다 보니 시간 순삭!",
-                   "객실 들어가자마자 감성 폭발!", "창밖 뷰 보다가 늦잠까지 완벽!", "마지막까지 꽉 찬 하루!"],
+    "info": ["물빛부터 진짜 다르거든요.", "풀 뷰가 끝없이 이어지는데요.", "물멍하다 보면 시간이 순삭돼요.",
+             "객실도 감성이 가득해서 좋고요.", "창밖 뷰가 그림처럼 펼쳐져요.", "분위기 좋은 공간까지 있어요."],
+    "experience": ["수영장 보자마자 입이 떡 벌어졌어요!", "풀 뷰 보면서 사진만 백 장 찍었어요!", "물멍하다 보니 시간이 순삭됐어요!",
+                   "객실 들어가자마자 감성이 폭발하더라고요!", "창밖 뷰 보다가 늦잠까지 잤어요!", "마지막까지 꽉 찬 하루였어요!"],
 }
 
 
@@ -565,8 +565,8 @@ def plan_storyboard(
                     "scene_index": i + 1,
                     "role": narrative_role_for(i, len(role_plan), r),
                     "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else (
-                        f"<story의 첫 조각: 헤드라인을 받아 썰을 시작 ({slot_plan[i]['desc']} 화면), 15~{VO_LIMIT}자>" if i == 0 else
-                        f"<story의 {i + 1}번째 조각: 앞 조각에서 이어지는 말 ({slot_plan[i]['desc']} 화면), 15~{VO_LIMIT}자>"),
+                        f"<story의 첫 문장: 헤드라인을 받아 썰을 시작 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{VO_LIMIT}자>" if i == 0 else
+                        f"<story의 {i + 1}번째 문장: 앞 문장을 이음말로 받아 이어감 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{VO_LIMIT}자>"),
                     "subtitle": TRAVEL_CTA_SUBTITLE if i == last_i else "<voiceover와 동일>",
                     "target_visual_role": r,
                     "visual_keywords": ROLE_KEYWORDS.get(r, []),
@@ -597,9 +597,11 @@ def plan_storyboard(
 1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "story": "...", "scenes": [...]}})으로 정확히 출력하세요.
 2. [대본 = 유튜버 썰 하나를 씬별로 자른 것]:
    - 먼저 'story'에 씬 1~{last_i}에 해당하는 전체 독백을 쓰세요. 유튜버가 시청자 한 명에게 꿀팁을 전수하듯 말하는 100% 구어체입니다.
-   - 그다음 story를 순서대로 잘라 씬 1~{last_i}의 voiceover에 넣으세요 (각 공백 포함 15~{VO_LIMIT}자). voiceover를 이어 붙이면 story와 같아야 합니다.
+   - story는 정확히 {last_i}개의 완결 문장으로 쓰고, 문장 하나씩 순서대로 씬 1~{last_i}의 voiceover에 넣으세요 (각 공백 포함 15~{VO_LIMIT}자).
+     voiceover를 이어 붙이면 story와 같아야 하고, 각 voiceover는 해요체 종결 어미(~거든요, ~있어요, ~돼요, ~더라고요)로 끝나야 합니다.
+     문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지 마세요. 씬 사이 연결은 다음 문장 첫머리 이음말('근데', '거기다', '그리고')로 하세요.
    - 추임새('솔직히', '근데 진짜 대박인 건', '여기 오시면', '말할 것도 없고요')를 2번 이상 자연스럽게 섞으세요.
-   - 예 (구조만 참고): "(지역)에서 수영장 하나로 끝내고 싶다? 솔직히 여기만 한 데가 없거든요." → "야외에서 바다 멍 때려도 좋은데,"
+   - 예 (구조만 참고): "(지역)에서 수영장 하나로 끝내고 싶다? 솔직히 여기만 한 데가 없거든요." → "야외에서 바다 멍 때리는 것도 진짜 좋은데요."
      → "날씨 쌀쌀할 땐 통유리 실내 풀로 쏙 들어가면 끝납니다."
    - 금지: 사진 낭독체('~가 보여요', '~도 있어서', '고급스러운·세련된 ~'), '~해보세요/~마세요/~딱!' 홍보 어미, '~가능함/~보임/~됨/~임' 개조식,
      '~입니다/~습니다/~아닙니다' 합쇼체. 어미는 처음부터 끝까지 해요체(~거든요, ~있어요, ~돼요, ~나와요)로 통일하세요.
@@ -866,7 +868,19 @@ JSON 출력 스키마 예시:
                 # 3. 템플릿 길이 준수: 나레이션은 어절 경계에서 VO_LIMIT자 이내로 (실제 길이는 TTS 길이 기준)
                 sc["duration_sec"] = 2.5
                 if idx < len(scenes) - 1:
-                    vo = shorten_line(strip_brochure_words(vo), VO_LIMIT, VO_MAX)
+                    # 길이 때문에 문장을 자르지 않음 (영상 길이는 나레이션에 맞춰짐). 지나치게 긴 경우만 문장 경계에서 줄임
+                    vo = strip_brochure_words(vo)
+                    if len(vo) > VO_HARD_MAX:
+                        vo = shorten_line(vo, VO_HARD_MAX - 3, VO_HARD_MAX)
+                    # 종결 어미 검증: 연결 어미 끝은 '요'를 붙여 종결, 잘린 문장('~할 수!', '~바다!')은 교체
+                    done = complete_sentence(vo)
+                    if done is None:
+                        logger.info(f"[미완성 문장 차단] 씬 {idx + 1}: '{vo}' → 사진 중립 문구로 교체")
+                        done = safe_line_for(sc.get("target_visual_role", ""), note, replaced) + "."
+                        replaced += 1
+                    elif done != vo:
+                        logger.info(f"[종결 어미 보정] 씬 {idx + 1}: '{vo}' → '{done}'")
+                    vo = done
                 cap = vo   # 자막 = 나레이션 (앱에서도 동일하게 동기화)
 
                 sc["voiceover"] = vo

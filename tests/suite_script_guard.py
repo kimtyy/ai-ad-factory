@@ -71,7 +71,7 @@ class FakeResp:
       {"voiceover": "탁 트인 실내 수영장도 정말 최고입니다!"},
       {"voiceover": "마운틴 뷰 객실에서 꿀잠 자고 오세요!"},
       {"voiceover": "침대 추가해서 온 가족이 함께 즐겨보세요!"},
-      {"voiceover": "우아한 레스토랑에서 여유로운 한 끼!"},
+      {"voiceover": "우아한 레스토랑에서 여유롭게 한 끼 하기 좋아요!"},
       {"voiceover": "아무거나"}]}'''
 
 
@@ -98,11 +98,11 @@ sb = plan_storyboard(product_name="힐튼 경주", usp="", mode="travel", api_ke
                      slot_photo_notes=notes, force=True)
 for s in sb:
     print(f"     씬{s['scene_index']}: {s['voiceover']}")
-check(sb[1]["voiceover"] in SAFE_LINES["pool"], f"씬2 근거 없는 '온수' → 중립 문구: {sb[1]['voiceover']}")
+check(sb[1]["voiceover"].rstrip(".") in SAFE_LINES["pool"], f"씬2 근거 없는 '온수' → 중립 문구: {sb[1]['voiceover']}")
 check(sb[3]["voiceover"] != "마운틴 뷰 객실에서 꿀잠 자고 오세요!" and not find_promo_tone(sb[3]["voiceover"]),
       f"씬4 '~오세요' 강요형 → 감각 묘사 문구로 교체: {sb[3]['voiceover']}")
 check(all(not find_promo_tone(s["voiceover"]) for s in sb[:-1]), "CTA 제외 전 씬 홍보 어투 없음")
-from core.script_guard import VO_LIMIT, VO_MAX, strip_brochure_words
+from core.script_guard import VO_LIMIT, VO_MAX, VO_HARD_MAX, strip_brochure_words
 check(strip_brochure_words("고급스러운 라운지에서 여유까지 챙기면 끝납니다.") == "라운지에서 여유까지 챙기면 끝납니다."
       and strip_brochure_words("세련된 레스토랑 분위기가 진짜 좋은데,") == "레스토랑 분위기가 진짜 좋은데,"
       and strip_brochure_words("솔직히 여기만 한 데가 없거든요") == "솔직히 여기만 한 데가 없거든요", "브로슈어 수식어(고급스러운·세련된) 제거, 일반 문장은 그대로")
@@ -111,14 +111,15 @@ check(shorten_line("여기 오시면 객실이 깔끔해서 푹 쉬어가기에 
       "29자는 자르지 않고, 자를 때 '진짜!/너무!'로 끝나지 않음")
 long_story = "근데 진짜 대박인 건 해 질 때 루프탑에서 보는 노을이거든요"
 check(shorten_line("솔직히 여기만 한 데가 없거든요, 진짜로요", VO_LIMIT, VO_MAX) == "솔직히 여기만 한 데가 없거든요, 진짜로요"
-      and len(shorten_line(long_story, VO_LIMIT, VO_MAX)) <= VO_MAX, f"이야기형 대사 길이 상한 {VO_LIMIT}~{VO_MAX}자 (추임새 여유)")
+      and len(shorten_line(long_story, VO_LIMIT, VO_MAX)) <= VO_MAX and VO_HARD_MAX >= 40,
+      f"shorten_line 동작 유지, 실사 모드 대사는 {VO_HARD_MAX}자 넘을 때만 줄임")
 sys_inst = sent["config"].system_instruction
 user_prompt = sent["contents"][-1]
 check("유튜버가 시청자 1명에게 꿀팁 썰 푸는" in sys_inst and "팜플렛·브로슈어 낭독 금지" in sys_inst and "근데 진짜 대박인 건" in sys_inst
       and "금지 2 (개조식 단문)" in sys_inst and "'즐겨보세요', '놓치면 손해입니다'" not in sys_inst
       and "사진에 실제로 보이는 공간만 묘사하세요" not in sys_inst and "(~됨, ~임" not in sys_inst,
       "프롬프트: 유튜버 썰 구어체 + 브로슈어 낭독·홍보 어미·개조식 금지 + 추임새 (사진 묘사 지시 제거)")
-check('"story"' in user_prompt and "story를 순서대로 잘라" in user_prompt and "날씨 쌀쌀할 땐 통유리 실내 풀로" in user_prompt
+check('"story"' in user_prompt and "문장 하나씩 순서대로 씬 1~" in user_prompt and "날씨 쌀쌀할 땐 통유리 실내 풀로" in user_prompt
       and "15~20자" not in user_prompt and "15~26자" in user_prompt,
       "프롬프트: 전체 독백(story) 먼저 → 씬별 분할, 씬당 15~26자, 이어지는 예시")
 check("hook_title을 먼저 읽고" in user_prompt, "프롬프트: 씬 1 = 후킹 먼저 읽고 서브 문장 이어 읽기 안내")
@@ -176,10 +177,50 @@ for s_ in sj:
 check(not is_hook_echo(sj[0]["hook_title"], sj[0]["voiceover"]), f"씬 1 앵무새 반복 → 교체: {sj[0]['voiceover']}")
 check(sj[2]["voiceover"] == "근데 진짜 대박인 건 실내 풀도 뷰가 장난 아니에요." and sj[4]["voiceover"] == "객실 슬라이딩 도어만 열어도 바다가 바로 보여요.",
       "합쇼체 대사는 내용 그대로 해요체로 변환 (교체 아님)")
-check("댕댕" not in sj[3]["voiceover"] and sj[3]["voiceover"] in SAFE_LINES["bedroom"],
+check("댕댕" not in sj[3]["voiceover"] and sj[3]["voiceover"].rstrip(".") in SAFE_LINES["bedroom"],
       f"USP에 반려견 정보가 있어도 침실 사진 씬의 '댕댕이 용품' → 객실 문구로 교체: {sj[3]['voiceover']}")
 check(sj[5]["voiceover"].startswith("라운지") and all(not has_hapsyo(s_["voiceover"]) for s_ in sj[:-1]),
       "브로슈어 수식어 제거 + 전 씬 합쇼체 없음")
 up = sent["contents"][-1]
 check("해요체" in up and "앵무새" in up and "댕댕이 전용 용품" in up and "금지 3 (합쇼체·뉴스체)" in sent["config"].system_instruction,
       "프롬프트: 해요체 통일·후킹 반복 금지·화면 무관 주제 금지 규칙 주입")
+
+# 5. 종결 어미 검증 (세인트존스 4차 렌더 실측: 31자 대사가 기계적으로 잘려 '수영할 수!', '펼쳐지는 바다!')
+from core.script_guard import complete_sentence, is_complete_sentence
+check(complete_sentence("탁 트인 바다 보면서 수영할 수!") is None and complete_sentence("근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다!") is None,
+      "잘린 문장(~할 수!, 명사로 끝남) → 미완성 판정")
+check(complete_sentence("돈 안 아까운데,") == "돈 안 아까운데요." and complete_sentence("들어가자마자 푹 쉬기 좋고,") == "들어가자마자 푹 쉬기 좋고요."
+      and complete_sentence("호캉스 가능해요") == "호캉스 가능해요." and complete_sentence("여기 진짜 한국 맞아요?") == "여기 진짜 한국 맞아요?",
+      "연결 어미 끝은 '요'를 붙여 해요체 종결, 완결 문장은 마침표만 정리")
+
+
+class FourthResp:
+    text = json.dumps({"story": "…", "scenes": [
+        {"voiceover": "솔직히 여기 인피니티 풀 하나만 봐도 돈 안 아까운데,", "hook_title": "국내 손꼽히는 오션뷰 풀"},
+        {"voiceover": "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링되고요."},
+        {"voiceover": "실내 풀도 통유리라 날씨 걱정 없이 놀면 되거든요."},
+        {"voiceover": "객실은 폭신한 침구 덕분에 들어가자마자 푹 쉬기 좋고,"},
+        {"voiceover": "근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다 뷰예요."},
+        {"voiceover": "라운지까지 있어서 제대로 호캉스 가능해요."},
+        {"voiceover": "x"}]}, ensure_ascii=False)
+
+
+class FourthModels:
+    def generate_content(self, **kw):
+        sent.update(kw)
+        return FourthResp()
+
+
+an.genai.Client = lambda api_key=None: type("C", (), {"models": FourthModels()})()
+sj4 = plan_storyboard(product_name="세인트존스 호텔", usp="", mode="travel", api_key="fake",
+                      photo_inventory={"pool": 3, "bedroom": 2, "facility": 1, "view": 1}, slot_photo_notes=sj_notes, force=True)
+for s_ in sj4:
+    print(f"     4차 재현 씬{s_['scene_index']}: {s_['voiceover']}")
+check(sj4[1]["voiceover"] == "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링되고요."
+      and sj4[4]["voiceover"] == "근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다 뷰예요.",
+      "31자 대사도 자르지 않음 (4차 렌더의 '수영할 수!', '바다!' 재발 방지)")
+check(sj4[0]["voiceover"].endswith("아까운데요.") and sj4[3]["voiceover"].endswith("좋고요."), "연결 어미로 끝난 씬 → '~는데요.', '~고요.'로 종결")
+check(all(is_complete_sentence(s_["voiceover"]) for s_ in sj4[:-1]), "CTA 제외 전 씬이 완결 문장(해요체 종결 어미)으로 끝남")
+check("정확히 6개의 완결 문장" in sent["contents"][-1] and "문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지" in sent["contents"][-1],
+      "프롬프트: 씬마다 완결 문장 하나, 문장 중간에서 끊기 금지")
+finish(fails)
