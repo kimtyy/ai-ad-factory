@@ -19,6 +19,7 @@ from moviepy.editor import (
 import urllib.request
 
 from core.render.brand import BrandOverlay
+from core.render.commerce_layout import COMMERCE_CAPTION_CENTER_Y
 
 logger = logging.getLogger("ad_factory.compositor")
 
@@ -140,7 +141,8 @@ class AdCompositor:
         return words
 
 
-    def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int) -> np.ndarray:
+    def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
+                       center_y: float = CAPTION_CENTER_Y) -> np.ndarray:
         """
         travel/owner 공통 하단 자막 (배경 박스 없음):
         - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
@@ -173,7 +175,7 @@ class AdCompositor:
 
         gap = int(width * 0.025) if len(groups) > 1 else 0
         text_h = sum(len(ls) * lh for ls, _, _, lh in groups) + gap
-        y = int(height * CAPTION_CENTER_Y) - text_h // 2
+        y = int(height * center_y) - text_h // 2
         placed = []   # (x, y, 줄, 폰트, 색)
         for gi, (lines, f, color, lh) in enumerate(groups):
             if gi:
@@ -236,7 +238,9 @@ class AdCompositor:
           * 일반 씬: 하단 62% 지점(쇼츠 UI 세이프존)에 볼드 자막 노출
         """
         if mode in CENTER_CAPTION_MODES:
-            return self._caption_block(caption_text, hook_title, width, height)
+            # 쇼핑은 상품 카드(화면 31~71%)를 가리지 않도록 카드 위쪽에 자막
+            center = COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else CAPTION_CENTER_Y
+            return self._caption_block(caption_text, hook_title, width, height, center_y=center)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 

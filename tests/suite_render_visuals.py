@@ -84,10 +84,11 @@ check(break_penalty("안", "가보면") > 1 and break_penalty("바다", "뷰가"
 check(all(len(wrap(t)) <= 3 for t in samples) and wrap("숙소 정보는 댓글에 여행 남겨주세요!") == ["숙소 정보는 댓글에", "여행 남겨주세요!"],
       "최대 3줄, 균형 있는 2줄 분할")
 
-# 쇼핑(commerce)도 실물 사진만 쓰게 되어 같은 중앙 자막 레이아웃 (상단 후킹 바 없음)
+# 쇼핑(commerce)은 상품 카드(31~71%)를 가리지 않도록 카드 위쪽(21.5%)에 자막·후킹
 ch = comp.create_overlay_image(None, "겨울 난방비 고민 끝", W, H, mode="commerce")
-cs = comp.create_overlay_image("과열 방지 기능이 있어서 안심이 돼요.", "", W, H, mode="commerce")
-check(0.48 <= sum(alpha_rows(ch)) / 2 <= 0.52 and 0.48 <= sum(alpha_rows(cs)) / 2 <= 0.52, "쇼핑: 후킹·자막 모두 화면 중앙 (상단 후킹 바 없음)")
+cs = comp.create_overlay_image("과열 방지 기능이 있어서 밤새 켜 둬도 안심이 돼요.", "", W, H, mode="commerce")
+check(all(0.12 < alpha_rows(x)[0] and alpha_rows(x)[1] < 0.30 for x in (ch, cs)),
+      f"쇼핑: 후킹·자막이 상품 카드 위쪽 띠에만 ({alpha_rows(ch)[0]:.2f}~{alpha_rows(ch)[1]:.2f}, {alpha_rows(cs)[0]:.2f}~{alpha_rows(cs)[1]:.2f})")
 
 # ---------------------------------------------------------------- 2. Ken Burns
 src = os.path.join(work, "grid.png")

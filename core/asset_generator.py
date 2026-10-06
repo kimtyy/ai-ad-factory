@@ -23,6 +23,8 @@ import json
 from core.guardrail import validate_model_call
 from core.media import normalize_ugc_clip, extract_thumbnail
 from core.media.normalize import DEFAULT_TRIM_START
+from core.render.commerce_layout import (COMMERCE_BG_BLUR, COMMERCE_BG_DIM, COMMERCE_BG_ZOOM, COMMERCE_CARD_BOX,
+                                         COMMERCE_CARD_RADIUS, COMMERCE_CARD_ZOOM)
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
@@ -564,6 +566,83 @@ class AssetGenerator:
         writer.close()
         return out_path
 
+    def _create_product_card_video(
+        self,
+        image_path: str,
+        duration_sec: float,
+        out_path: str,
+        fps: int = 24,
+        motion_type: str = "zoom_in",
+        motion_sec: Optional[float] = None
+    ) -> str:
+        """
+        쇼핑 전용 9:16 클립: 흐린 배경(같은 사진) + 중앙~하단 상품 카드(원본 비율 그대로, 잘림 없이) + 카드 안 Ken Burns.
+        자막은 컴포지터가 카드 위쪽(COMMERCE_CAPTION_CENTER_Y)에 올리므로 상품을 가리지 않음.
+        """
+        from PIL import ImageFilter, ImageEnhance
+        W, H = 1080, 1920
+        motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
+        img = Image.open(image_path).convert("RGB")
+        iw, ih = img.size
+
+        # 배경: 화면을 덮도록(+천천히 확대할 여유) 키운 뒤 크게 흐리고 어둡게
+        bw0, bh0 = int(W * COMMERCE_BG_ZOOM), int(H * COMMERCE_BG_ZOOM)
+        cover = max(bw0 / iw, bh0 / ih)
+        bg = img.resize((int(iw * cover) + 1, int(ih * cover) + 1), Image.Resampling.LANCZOS)
+        bg = bg.crop(((bg.width - bw0) // 2, (bg.height - bh0) // 2, (bg.width - bw0) // 2 + bw0, (bg.height - bh0) // 2 + bh0))
+        bg = ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(COMMERCE_BG_BLUR))).enhance(COMMERCE_BG_DIM)
+        bg_np = np.array(bg)
+
+        # 상품 카드: 영역 안에 원본 비율로 '담기'(contain) → 상품이 잘리지 않음
+        x0, y0, x1, y1 = (int(COMMERCE_CARD_BOX[0] * W), int(COMMERCE_CARD_BOX[1] * H),
+                          int(COMMERCE_CARD_BOX[2] * W), int(COMMERCE_CARD_BOX[3] * H))
+        fit = min((x1 - x0) / iw, (y1 - y0) / ih)
+        cw, ch = int(iw * fit), int(ih * fit)
+        cx, cy = (W - cw) // 2, y0 + ((y1 - y0) - ch) // 2
+        src = np.array(img.resize((int(cw * COMMERCE_CARD_ZOOM), int(ch * COMMERCE_CARD_ZOOM)), Image.Resampling.LANCZOS))
+        sh, sw = src.shape[:2]
+
+        radius = int(W * COMMERCE_CARD_RADIUS)
+        mask_img = Image.new("L", (cw, ch), 0)
+        ImageDraw.Draw(mask_img).rounded_rectangle([0, 0, cw - 1, ch - 1], radius=radius, fill=255)
+        mask = (np.array(mask_img.filter(ImageFilter.GaussianBlur(1))).astype(np.float32) / 255.0)[..., None]
+        shadow_img = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(shadow_img).rounded_rectangle([cx, cy + 14, cx + cw, cy + ch + 14], radius=radius, fill=150)
+        shadow = (np.array(shadow_img.filter(ImageFilter.GaussianBlur(26))).astype(np.float32) / 255.0)[..., None]
+
+        writer = imageio_ffmpeg.write_frames(out_path, size=(W, H), fps=fps, codec="libx264", pix_fmt_in="rgb24",
+                                             macro_block_size=1, ffmpeg_log_level="error")
+        writer.send(None)
+        total = max(1, int(round(duration_sec * fps)))
+        for i in range(total):
+            e = kb_ease(min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0)
+            # 배경: 1.0 → COMMERCE_BG_ZOOM 천천히 확대
+            bz = 1.0 + (COMMERCE_BG_ZOOM - 1.0) * e
+            bcw, bch = int(bw0 / bz), int(bh0 / bz)
+            bx, by = (bw0 - bcw) // 2, (bh0 - bch) // 2
+            frame = cv2.resize(bg_np[by:by + bch, bx:bx + bcw], (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+            frame *= (1.0 - shadow * 0.85)
+            # 카드 안 Ken Burns: 줌인/줌아웃, 패닝은 같은 폭 안에서 좌우·상하로 살짝 이동
+            if motion_type == "zoom_out":
+                z = COMMERCE_CARD_ZOOM - (COMMERCE_CARD_ZOOM - 1.0) * e
+            elif motion_type.startswith("pan_"):
+                z = 1.0 + (COMMERCE_CARD_ZOOM - 1.0) * 0.7
+            else:
+                z = 1.0 + (COMMERCE_CARD_ZOOM - 1.0) * e
+            kw, kh = int(sw / z), int(sh / z)
+            slack_x, slack_y = sw - kw, sh - kh
+            px, py = slack_x // 2, slack_y // 2
+            if motion_type in ("pan_right", "pan_left"):
+                px = int(slack_x * (e if motion_type == "pan_right" else 1.0 - e))
+            elif motion_type in ("pan_down", "pan_up"):
+                py = int(slack_y * (e if motion_type == "pan_down" else 1.0 - e))
+            card = cv2.resize(src[py:py + kh, px:px + kw], (cw, ch), interpolation=cv2.INTER_AREA).astype(np.float32)
+            region = frame[cy:cy + ch, cx:cx + cw]
+            frame[cy:cy + ch, cx:cx + cw] = card * mask + region * (1.0 - mask)
+            writer.send(np.clip(frame, 0, 255).astype(np.uint8).tobytes())
+        writer.close()
+        return out_path
+
     def _create_mock_video(self, image_path: str, duration_sec: float, out_path: str):
         """키프레임 이미지를 바탕으로 Ken Burns 모션 비디오 클립 생성 (기존 호환 래퍼)"""
         return self._create_ken_burns_video(image_path, duration_sec, out_path)
@@ -620,6 +699,12 @@ class AssetGenerator:
                     f"클립 {duration_sec:.1f}초, 원본: {image_path})")
         # 제휴(travel) 모드만 씬 1 상단 간판을 프레임 밖으로 밀어 숙소명을 숨김. 사장님(owner) 모드는 간판 노출이 목적
         is_focus_bottom = bool(scene.get("focus_bottom") or (self.mode == "travel" and scene_num == 1))
+        if self.mode == "commerce":
+            # 쇼핑: 상품을 가리지 않는 '상단 자막 + 중앙~하단 상품 카드' 배치
+            self._create_product_card_video(image_path=image_path, duration_sec=duration_sec, out_path=out_path, fps=24,
+                                            motion_type=motion_type, motion_sec=motion_sec)
+            logger.info(f"씬 {scene_num} 상품 카드 클립 렌더링 완료 -> {out_path}")
+            return out_path
         self._create_ken_burns_video(
             image_path=image_path,
             duration_sec=duration_sec,

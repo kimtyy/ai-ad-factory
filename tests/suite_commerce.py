@@ -131,6 +131,50 @@ check(len(rows) and 0.07 < rows.min() and rows.max() < 0.15 and cols.min() > 0.0
       f"제휴 표시: 화면 위쪽 가장자리 안쪽 작은 글씨 ({rows.min():.3f}~{rows.max():.3f}, 가운데 자막 50%와 분리)")
 check("쿠팡 파트너스" in COUPANG_DISCLOSURE and "수수료" in COUPANG_DISCLOSURE, "표시 문구: 쿠팡 파트너스 + 수수료 고지")
 
+# ---------------------------------------------------------------- 4-1. 상품 카드 레이아웃 (상단 자막 + 중앙~하단 상품, 흐린 배경)
+import imageio_ffmpeg
+import cv2
+from core.render.commerce_layout import COMMERCE_CARD_BOX
+
+
+def card_photo(path, w, h):
+    rng = np.random.default_rng(5)
+    arr = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)               # 질감이 많은 '상품' 사진 (선명도 측정용)
+    Image.fromarray(arr).save(path, "JPEG", quality=95)
+    return path
+
+
+def frames(path):
+    r = imageio_ffmpeg.read_frames(path)
+    next(r)
+    return [np.frombuffer(f, np.uint8).reshape(1920, 1080, 3) for f in r]
+
+
+def sharp_bbox(fr):
+    """선명한(고주파) 영역의 범위 = 상품 카드 (배경은 크게 흐림)"""
+    lap = np.abs(cv2.Laplacian(cv2.cvtColor(fr, cv2.COLOR_RGB2GRAY), cv2.CV_32F))
+    rows = np.where((lap > 30).mean(axis=1) > 0.2)[0] / 1920
+    cols = np.where((lap > 30).mean(axis=0) > 0.1)[0] / 1080
+    return rows.min(), rows.max(), cols.min(), cols.max()
+
+
+cgen = AssetGenerator(cache_dir=tmp("commerce_card_"), mock=True, mode="commerce")
+for label, (w, h) in (("세로 사진", (1200, 1500)), ("가로 사진", (1600, 900))):
+    clip = os.path.join(cgen.cache_dir, f"card_{w}x{h}.mp4")
+    cgen._create_product_card_video(card_photo(os.path.join(cgen.cache_dir, f"p_{w}.jpg"), w, h), 2.0, clip, motion_sec=1.5)
+    fs = frames(clip)
+    r0, r1, c0, c1 = sharp_bbox(fs[0])
+    check(COMMERCE_CARD_BOX[1] - 0.01 <= r0 and r1 <= COMMERCE_CARD_BOX[3] + 0.01 and COMMERCE_CARD_BOX[0] - 0.01 <= c0
+          and c1 <= COMMERCE_CARD_BOX[2] + 0.01,
+          f"{label}: 상품 카드가 화면 {r0:.2f}~{r1:.2f}(세로)·{c0:.2f}~{c1:.2f}(가로) 안에 (자막 띠·하단 UI·우측 버튼 회피)")
+    bg_lap = np.abs(cv2.Laplacian(cv2.cvtColor(fs[0][:int(0.28 * 1920)], cv2.COLOR_RGB2GRAY), cv2.CV_32F)).mean()
+    card_lap = np.abs(cv2.Laplacian(cv2.cvtColor(fs[0][int(r0 * 1920):int(r1 * 1920), int(c0 * 1080):int(c1 * 1080)],
+                                                 cv2.COLOR_RGB2GRAY), cv2.CV_32F)).mean()
+    moved = float(np.abs(fs[0][int(r0 * 1920):int(r1 * 1920), int(c0 * 1080):int(c1 * 1080)].astype(int)
+                         - fs[35][int(r0 * 1920):int(r1 * 1920), int(c0 * 1080):int(c1 * 1080)].astype(int)).mean())
+    check(card_lap > bg_lap * 5 and moved > 5 and sharp_bbox(fs[35])[:2] == (r0, r1),
+          f"{label}: 상품은 선명(배경 대비 {card_lap / max(bg_lap, 1e-6):.0f}배) + 카드 안 Ken Burns(변화 {moved:.0f}), 카드 위치 고정")
+
 # ---------------------------------------------------------------- 5. 상품 사진 수집 (가짜 응답)
 import core.scraper as scr
 
