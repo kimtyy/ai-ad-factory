@@ -84,10 +84,10 @@ check(break_penalty("안", "가보면") > 1 and break_penalty("바다", "뷰가"
 check(all(len(wrap(t)) <= 3 for t in samples) and wrap("숙소 정보는 댓글에 여행 남겨주세요!") == ["숙소 정보는 댓글에", "여행 남겨주세요!"],
       "최대 3줄, 균형 있는 2줄 분할")
 
-# 커머스 모드는 기존 레이아웃 유지 (씬 2 제품 누끼가 62% 지점이라 하단 블록으로 옮기지 않음)
-ch = comp.create_overlay_image("자막", "아직도 건조함 참으세요?", W, H, mode="commerce")
-cs = comp.create_overlay_image("48시간 촉촉! 속당김 끝", "", W, H, mode="commerce")
-check(alpha_rows(ch)[1] < 0.3 and 0.55 < sum(alpha_rows(cs)) / 2 < 0.68, "커머스: 상단 17% 후킹 바 / 62% 자막 그대로")
+# 쇼핑(commerce)도 실물 사진만 쓰게 되어 같은 중앙 자막 레이아웃 (상단 후킹 바 없음)
+ch = comp.create_overlay_image(None, "겨울 난방비 고민 끝", W, H, mode="commerce")
+cs = comp.create_overlay_image("과열 방지 기능이 있어서 안심이 돼요.", "", W, H, mode="commerce")
+check(0.48 <= sum(alpha_rows(ch)) / 2 <= 0.52 and 0.48 <= sum(alpha_rows(cs)) / 2 <= 0.52, "쇼핑: 후킹·자막 모두 화면 중앙 (상단 후킹 바 없음)")
 
 # ---------------------------------------------------------------- 2. Ken Burns
 src = os.path.join(work, "grid.png")
@@ -246,7 +246,7 @@ cg = AssetGenerator(cache_dir=os.path.join(work, "commerce"), mock=True, mode="c
 s3 = dict(s1)
 s3.pop("hook_sec", None)
 cg.generate_voice(s3, force=True)
-check("hook_sec" not in s3, "커머스는 기존대로 후킹을 읽지 않음 (상단 후킹 바 유지)")
+check(s3.get("hook_sec") == HOOK_SOLO_SEC, "쇼핑도 씬 1 후킹을 먼저 읽고 서브 문장 (숙소·사장님과 동일)")
 
 clip1 = gen.generate_video(s1, src, force=True)
 final = comp.assemble_ad([{**s1, "video_path": clip1, "audio_path": v1, "subtitle": s1["voiceover"]}],

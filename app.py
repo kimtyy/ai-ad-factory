@@ -43,10 +43,10 @@ from core.analyzer import plan_storyboard, TONE_PRESETS, DURATION_PRESETS, TRAVE
 from core.asset_generator import AssetGenerator, VOICE_ACTOR_PROFILES
 from core.compositor import AdCompositor
 from core.scraper import scrape_product_info
-from core.image_processor import extract_product_cutout, composite_cutout_on_background
 from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
-from core.planners import BUSINESS_TYPES, DEFAULT_BUSINESS_TYPE, plan_owner_storyboard
+from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
+                           plan_commerce_storyboard, plan_owner_storyboard)
 from core.planners.travel import plan_travel_storyboard
 from core.radar.hints import load_hook_hints, vertical_for
 from core.radar.hooks import HOOK_TYPE_KO
@@ -197,7 +197,10 @@ def assign_media_to_scene(scene: dict, path: str, source: str, matched_url: str 
     invalidate_scene_derivatives(_scene_num(scene, 1))
 
 
-def assign_uploads_to_scenes(scenes: list, paths: list):
+def assign_uploads_to_scenes(scenes: list, paths: list, cycle: bool = False):
+    """i번째 미디어 → i번째 씬. cycle=True(쇼핑)면 사진이 씬보다 적을 때 처음부터 돌려 씀 (Ken Burns 모션은 씬마다 다름)"""
+    if cycle and paths:
+        paths = [paths[i % len(paths)] for i in range(len(scenes))]
     for scene, p in zip(scenes, paths):
         assign_media_to_scene(scene, p, "uploaded")
 
@@ -223,7 +226,7 @@ def rematch_scenes(target_scenes: list, api_key: str):
 # 제작 모드 = 비즈니스 파이프라인
 #   owner    (트랙 B) 사장님 직영 홍보: 업로드 미디어 기반, 상호명 노출, 네이버 검색 CTA, 브랜드 오버레이
 #   travel   (트랙 A) 숙소 제휴 쇼츠: URL 크롤링 + 비전 매칭, 숙소명 은닉, 댓글 유도 CTA
-#   commerce (트랙 A) 쇼핑 제휴 쇼츠: 상품 URL + 누끼 합성
+#   commerce (트랙 A) 쇼핑 제휴 쇼츠(쿠팡 파트너스): 판매 페이지 실물 사진/직접 올린 사진 + 리뷰 썰 대본 + 제휴 표시
 # ==============================================================================
 MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce"}
 MODE_LABELS = {v: k for k, v in MODES.items()}
@@ -258,7 +261,8 @@ for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp",
 
 is_owner_mode = pipeline_mode == "owner"
 is_travel_mode = pipeline_mode == "travel"
-uses_scene_media = pipeline_mode in ("owner", "travel")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드
+is_commerce_mode = pipeline_mode == "commerce"
+uses_scene_media = pipeline_mode in ("owner", "travel", "commerce")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드 (전 모드 실물만)
 
 # ==============================================================================
 # 상단 헤더 + 화면 전환 (영상 만들기 / 실시간 떡상 레이더)
@@ -389,7 +393,7 @@ st.segmented_control(
     "제작 모드", list(MODES), key="mode_switch", on_change=_on_mode_change, width="stretch",
     help="🏠 사장님 매장 홍보: 내 폰 사진·영상으로 상호명과 네이버 검색 유도가 들어간 홍보 영상\n"
          "🧳 숙소 제휴 쇼츠: 숙소 URL 크롤링, 숙소명을 숨긴 호기심 유발 + 댓글 유도\n"
-         "🛒 쇼핑 제휴 쇼츠: 상품 URL 크롤링 + 누끼 합성 광고"
+         "🛒 쇼핑 제휴 쇼츠: 판매 페이지 실물 사진(또는 직접 올린 사진) + 써 본 사람 리뷰 썰 + 쿠팡 파트너스 표시"
 )
 production_mode = MODE_LABELS[pipeline_mode]
 
@@ -464,16 +468,16 @@ if crawl_btn:
                     )
                     st.toast(f"메타데이터 풀 {len(image_pool)}개 확보! 2단계 대본 기획을 진행해 주세요.", icon="📋")
                 else:
-                    # 일반 커머스 모드: 단일 이미지 누끼 추출 진행
+                    # 쇼핑 제휴: 판매 페이지의 실물 상품 사진을 씬 사진으로 사용 (AI 이미지 생성 없음)
                     st.session_state.gallery_images = []
-                    if scraped.get("image_path") and os.path.exists(scraped["image_path"]):
-                        with st.spinner("✂️ rembg AI로 제품 누끼(배경 투명화)를 자동 추출하고 있습니다..."):
-                            try:
-                                cutout_p = extract_product_cutout(scraped["image_path"], current_job().asset_path("product_cutout.png"))
-                                st.session_state.cutout_path = cutout_p
-                                st.toast("제품 누끼 추출 완료!", icon="✨")
-                            except Exception as e:
-                                st.warning(f"누끼 추출 실패: {e}")
+                    st.session_state.cutout_path = None
+                    product_imgs = [p for p in scraped.get("product_images", []) if os.path.exists(p)]
+                    st.session_state.uploaded_paths = product_imgs
+                    if product_imgs:
+                        st.toast(f"🛒 상품 사진 {len(product_imgs)}장 확보!", icon="📸")
+                    else:
+                        st.warning("⚠️ 판매 페이지에서 상품 사진을 가져오지 못했습니다 (쿠팡처럼 자동 수집을 막는 쇼핑몰). "
+                                   "아래에서 상품 사진을 직접 올려 주세요.")
             else:
                 # 실패해도 링크에서 확실히 알 수 있는 상품명(검색어)은 입력 칸에 제안으로 채움 (특장점은 비움)
                 st.session_state.scraped_data = {"product_name": scraped.get("product_name_hint", ""), "usp": ""} \
@@ -529,6 +533,14 @@ if uses_scene_media:
         )
     elif is_owner_mode:
         st.caption("💡 가게 외관, 대표 메뉴·상품, 내부 분위기를 찍은 사진·영상을 순서대로 2~8개 올려 주세요. 올린 순서대로 씬이 만들어집니다.")
+    elif is_commerce_mode:
+        n_imgs = len(st.session_state.uploaded_paths)
+        st.caption(f"💡 상품 사진 {n_imgs}장 준비됨. 판매 페이지 사진이나 직접 찍은 사진·영상을 올리면 올린 순서대로 씬에 들어갑니다 "
+                   "(사진이 씬보다 적으면 다른 카메라 모션으로 돌려 씁니다). AI로 상품 이미지를 만들지 않습니다.")
+        if st.session_state.uploaded_paths:
+            thumbs = [p for p in st.session_state.uploaded_paths if not is_video_file(p)][:6]
+            if thumbs:
+                st.image(thumbs, width=110)
     else:
         st.caption("💡 숙소 URL을 크롤링하거나, 아래에서 사진·영상을 직접 올릴 수 있습니다.")
 
@@ -547,19 +559,6 @@ if uses_scene_media:
                 assign_uploads_to_scenes(st.session_state.storyboard, new_uploaded_paths)
             st.toast(f"📱 사진·영상 {len(new_uploaded_paths)}개 첨부 완료!", icon="✨")
             st.rerun()
-else:
-    # 쇼핑 제휴 모드: 단일 대표 이미지 및 투명 누끼 PNG 박스 노출
-    if st.session_state.scraped_data and st.session_state.scraped_data.get("image_path"):
-        col_img1, col_img2 = st.columns(2)
-        with col_img1:
-            st.markdown("**수집된 원본 상품 이미지**")
-            st.image(st.session_state.scraped_data["image_path"], width=260)
-        with col_img2:
-            st.markdown("**AI 추출 투명 누끼 PNG**")
-            if st.session_state.cutout_path and os.path.exists(st.session_state.cutout_path):
-                st.image(st.session_state.cutout_path, width=260)
-            else:
-                st.info("누끼 추출 대기 중")
 
 st.markdown("---")
 
@@ -581,8 +580,8 @@ with col_plan_desc:
                    + (" · ⚠️ Dry-run 테스트 데이터" if hook_hints.is_dryrun else ""))
     elif hook_vertical and hints_enabled():
         st.caption("🔥 레이더 패턴 없음 → 기본 후킹 규칙으로 기획 (🔥 실시간 떡상 레이더 화면에서 수집)")
-    if is_owner_mode:
-        st.caption(f"모드: **{production_mode}** | 올린 미디어 **{len(st.session_state.uploaded_paths)}개** 기준으로 씬 구성 | 성우: **{selected_actor_label}**")
+    if is_owner_mode or is_commerce_mode:
+        st.caption(f"모드: **{production_mode}** | 사진·영상 **{len(st.session_state.uploaded_paths)}개** 기준으로 씬 구성 | 성우: **{selected_actor_label}**")
     else:
         st.caption(f"모드: **{production_mode}** | 스타일: **{script_style_options[selected_script_style]}** | **{selected_tone_label}** | 성우: **{selected_actor_label}**")
 
@@ -615,6 +614,20 @@ if generate_plan_btn:
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
                     hook_hints=hook_hints,
+                )
+            elif is_commerce_mode:
+                # 트랙 A 쇼핑 제휴: 실물 상품 사진을 보고 '써 본 사람' 리뷰 썰 대본, 효능·수치는 판매 페이지 근거만
+                if not st.session_state.uploaded_paths and not mock_mode:
+                    raise ValueError("상품 사진이 없습니다. 판매 페이지 링크를 크롤링하거나 상품 사진을 직접 올려 주세요.")
+                scenes = plan_commerce_storyboard(
+                    product_name=product_name,
+                    usp=usp_desc,
+                    media_paths=st.session_state.uploaded_paths,
+                    num_scenes=DURATION_PRESETS[selected_duration]["default_scenes"] + 1,
+                    api_key=api_key,
+                    mock=mock_mode,
+                    thumb_dir=current_job().assets_dir,
+                    output_plan_path=current_job().plan_path,
                 )
             elif travel_photo_first:
                 # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
@@ -659,7 +672,7 @@ if generate_plan_btn:
 
             # [씬별 에셋 배정] 업로드 미디어 우선 배정 → (숙소 제휴) 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
             if uses_scene_media:
-                assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths)
+                assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths, cycle=is_commerce_mode)
                 pending = [s for s in scenes if not scene_has_media(s)]
                 if is_travel_mode and pending and st.session_state.get("image_pool"):
                     with st.spinner("🎯 씬별 최적 사진을 매칭하고 비전 검증 중 (자판기·복도·외벽 등 자동 탈락)..."):
@@ -688,7 +701,7 @@ if st.session_state.storyboard:
     if st.session_state.get("storyboard_mode", pipeline_mode) != pipeline_mode:
         st.warning(f"⚠️ 이 콘티는 '{MODE_LABELS.get(st.session_state.get('storyboard_mode'), '다른')}' 모드로 기획되었습니다. "
                    f"현재 모드로 만들려면 스토리보드를 다시 기획해 주세요.")
-    if is_owner_mode:
+    if is_owner_mode or is_commerce_mode:
         cols_to_display = ["scene_index", "role", "duration_sec", "hook_title", "voiceover"]
     elif is_travel_mode:
         cols_to_display = ["scene_index", "role", "target_visual_role", "visual_keywords", "duration_sec", "hook_title", "subtitle", "voiceover", "video_motion_prompt_en"]
@@ -936,24 +949,6 @@ if render_btn:
                 img_path = asset_gen.generate_image(scene, force=force_render, gallery_image_path=g_cut)
                 generated_imgs.append(img_path)
 
-                # 일반 커머스 모드: 제품 누끼가 존재하고 씬 2인 경우 누끼 합성 (여행 모드는 절대 실행 안 함)
-                if pipeline_mode == "commerce" and st.session_state.cutout_path and os.path.exists(st.session_state.cutout_path):
-                    if s_num == 2:
-                        comp_img_path = current_job().scene_asset(s_num, ".png", suffix="_comp")
-                        try:
-                            composite_cutout_on_background(
-                                background_path=img_path,
-                                cutout_path=st.session_state.cutout_path,
-                                output_path=comp_img_path,
-                                scale_ratio=0.48,
-                                y_center_ratio=0.62
-                            )
-                            img_path = comp_img_path
-                            generated_imgs[-1] = img_path
-                            logger.info(f"씬 {s_num}에 제품 누끼 합성 완료")
-                        except Exception as ce:
-                            logger.warning(f"누끼 합성 실패: {ce}")
-
                 # 음성 생성
                 audio_path = asset_gen.generate_voice(scene, force=force_render)
 
@@ -987,7 +982,8 @@ if render_btn:
                 fps=24,
                 audio_mode=selected_audio_mode,
                 mode=pipeline_mode,
-                brand=brand_cfg
+                brand=brand_cfg,
+                disclosure=COUPANG_DISCLOSURE if is_commerce_mode else None,
             )
             current_job().save_plan(scenes)
 
@@ -1018,6 +1014,9 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                 key="download_cta"
             )
         st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
+        if is_commerce_mode:
+            st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
+            st.code(f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: (쿠팡 파트너스 링크를 붙여 넣으세요)", language=None)
     with col_meta:
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:

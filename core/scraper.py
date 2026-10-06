@@ -263,6 +263,43 @@ CDN_DOWNLOAD_HEADERS = {
 }  # Referer는 cdn_headers_for()에서 원본 페이지 기준으로 설정
 
 
+COMMERCE_MAX_IMAGES = 6
+PRODUCT_IMAGE_MIN_BYTES = 15000
+PRODUCT_IMAGE_MIN_SIDE = 400
+
+
+def download_product_images(candidates: List[Dict[str, Any]], output_dir: str, referer: Optional[str],
+                            limit: int = COMMERCE_MAX_IMAGES) -> List[str]:
+    """상품 사진 후보를 순서대로 받아 실물 사진만 저장 (작은 아이콘·가로 배너·중복 제외). 저장 경로 목록 반환"""
+    saved, seen = [], set()
+    for cand in candidates:
+        if len(saved) >= limit:
+            break
+        u = cand.get("url", "")
+        try:
+            resp = requests.get(u, headers=cdn_headers_for(u, referer), timeout=10)
+            data = resp.content or b""
+            if resp.status_code != 200 or len(data) < PRODUCT_IMAGE_MIN_BYTES:
+                continue
+            digest = hashlib.md5(data).hexdigest()
+            if digest in seen:
+                continue
+            with Image.open(io.BytesIO(data)) as im:
+                w, h = im.size
+                fmt = (im.format or "JPEG").lower()
+            if min(w, h) < PRODUCT_IMAGE_MIN_SIDE or max(w, h) / max(1, min(w, h)) > 2.5:
+                continue
+            seen.add(digest)
+            ext = ".png" if fmt == "png" else (".webp" if fmt == "webp" else ".jpg")
+            path = os.path.join(output_dir, f"product_{len(saved) + 1:02d}{ext}")
+            with open(path, "wb") as f:
+                f.write(data)
+            saved.append(os.path.abspath(path))
+        except Exception as e:
+            logger.debug(f"상품 사진 다운로드 건너뜀 ({u}): {e}")
+    return saved
+
+
 # 공유 링크가 판매 페이지가 아닌 검색 결과로 이어지는 경우 (검색 페이지는 크롤링 금지 대상이라 열지 않음)
 SEARCH_RESULT_HOSTS = ("google.", "search.naver.com", "search.daum.net", "bing.com")
 
@@ -320,6 +357,7 @@ def scrape_product_info(
         "image_path": "",
         "gallery_images": [],
         "gallery_urls": [],
+        "product_images": [],   # 쇼핑 모드: 다운로드한 실물 상품 사진 경로
         "missing": [],          # 페이지에서 못 찾은 항목 (화면에서 직접 입력 요청). 지어낸 기본값은 절대 넣지 않음
         "product_name_hint": "",
         "error": None
@@ -551,24 +589,13 @@ def scrape_product_info(
         }
 
         if mode == "commerce":
-            # 일반 커머스 모드: 대표 단일 이미지 다운로드 (누끼용)
-            if clean_candidates:
-                first_url = clean_candidates[0]["url"]
-                img_ext = ".png" if ".png" in first_url.lower() else ".jpg"
-                local_img_path = os.path.join(output_image_dir, f"scraped_product{img_ext}")
-                try:
-                    img_resp = requests.get(first_url, headers=cdn_headers_for(first_url, page_origin(url)), timeout=10)
-                    content_len = len(img_resp.content) if img_resp.content else 0
-                    if img_resp.status_code == 200 and content_len >= 3000:
-                        with open(local_img_path, "wb") as f:
-                            f.write(img_resp.content)
-                        result["image_path"] = os.path.abspath(local_img_path)
-                        print(f"[Scraper] 대표 상품 이미지 다운로드 성공: {local_img_path} ({content_len:,} bytes)")
-                    else:
-                        print(f"[CRITICAL ERROR] 대표 상품 이미지 다운로드 실패: HTTP {img_resp.status_code}, 크기={content_len}")
-                except Exception as ie:
-                    logger.warning(f"대표 이미지 다운로드 실패: {ie}")
-                    print(f"[CRITICAL ERROR] 대표 이미지 다운로드 예외: {ie}")
+            # 쇼핑 제휴: 대표(og:image) 우선으로 실물 상품 사진을 최대 COMMERCE_MAX_IMAGES장 받아 씬 사진으로 사용
+            # (AI 이미지 생성 없음). 아이콘·배너·작은 썸네일은 크기·비율로 거름
+            ordered = sorted(clean_candidates, key=lambda c: 0 if c.get("source") in ("og:image", "twitter:image") else 1)
+            result["product_images"] = download_product_images(ordered, output_image_dir, page_origin(url))
+            if result["product_images"]:
+                result["image_path"] = result["product_images"][0]
+            print(f"[Scraper] 상품 사진 {len(result['product_images'])}장 다운로드")
 
         result["success"] = True
         logger.info(

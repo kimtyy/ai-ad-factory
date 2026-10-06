@@ -1,5 +1,6 @@
 """
-core/asset_generator.py - Step 2: Google Imagen 3(키프레임), 로컬 2D Ken Burns 모션 비디오, Google TTS 에셋 생성 및 캐싱 관리
+core/asset_generator.py - Step 2: 실물 사진·영상 키프레임, 로컬 2D Ken Burns 모션 비디오, Edge-TTS 에셋 생성 및 캐싱 관리
+(AI 이미지 생성은 쓰지 않음: 숙소·매장·상품 모두 실물만)
 """
 import os
 import re
@@ -25,8 +26,9 @@ from core.media.normalize import DEFAULT_TRIM_START
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
-# 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장 사진은 허위광고)
-REAL_MEDIA_MODES = ("travel", "owner")
+# 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장·상품 사진은 허위광고)
+# 쇼핑도 포함: AI 이미지(Imagen)로 장면을 만들면 화면 속 물건이 실제 상품과 달라짐 (전기히터 링크 → 세럼 장면). Imagen 호출은 제거됨
+REAL_MEDIA_MODES = ("travel", "owner", "commerce")
 
 # Ken Burns 모션 강도: 줌 1.0 ↔ 1.20배 (기존 1.12배 계획이 5초 클립 중 앞 3초만 노출돼 실제 약 1.07배로 정지 화면처럼 보였음)
 KB_ZOOM = 1.20
@@ -227,7 +229,7 @@ class AssetGenerator:
         os.makedirs(self.cache_dir, exist_ok=True)
 
         # Google GenAI 클라이언트 초기화 (Mock이 아닐 때만)
-        self.genai_client = genai.Client(api_key=self.gemini_api_key) if (self.gemini_api_key and not mock) else None
+        self.genai_client = None   # AI 이미지 생성(Imagen) 제거: 모든 모드가 실물 사진·영상만 사용
 
     def is_cached(self, file_path: str) -> bool:
         """파일이 존재하고 0바이트 이상인지 검사하여 캐시 여부 확인"""
@@ -270,108 +272,18 @@ class AssetGenerator:
                 logger.warning(f"갤러리 이미지 변환 실패 ({ge}). 원본 경로를 직접 사용합니다.")
                 return gallery_image_path
 
-        # 여행 상품 모드는 실물 사진만 허용: AI로 숙소 사진을 지어내면 허위광고가 되므로 생성 대신 중단
+        # 실물 사진만 허용: AI로 숙소·매장·상품 사진을 지어내면 허위광고가 되므로 생성 대신 중단
         if self.mode in REAL_MEDIA_MODES and not self.mock:
             raise ValueError(
                 f"씬 {scene_num}에 매칭된 실물 사진이 없습니다. 사진을 교체하거나 직접 업로드해 주세요."
             )
 
+        # 여기까지 왔으면 mock(테스트) 실행: 실제 사진 대신 자리표시 그래픽 (AI 이미지 생성은 하지 않음)
         if not force and self.is_cached(out_path):
             logger.info(f"[Cache Hit] 씬 {scene_num} 이미지 이미 존재: {out_path}")
             return out_path
-
-        raw_prompt = scene.get("image_prompt_en", "")
-        
-        # 가상 모델 프로필 및 헤어스타일 일관성 보장 (20대 한국 여성 모델 + shoulder-length soft wave hair 고정)
-        model_keyword = "the same 20s Korean female model with clear glass skin and shoulder-length soft wave hair"
-        prompt = raw_prompt
-
-        # 1. 헤어스타일 고정화: 프롬프트 내 다양한 헤어 표현을 'shoulder-length soft wave hair'로 통일
-        for hair_expr in [
-            r"medium brown shoulder-length hair",
-            r"natural hair style",
-            r"short bob hair",
-            r"long wavy hair",
-            r"long straight hair",
-            r"curly hair"
-        ]:
-            prompt = re.sub(hair_expr, "shoulder-length soft wave hair", prompt, flags=re.IGNORECASE)
-
-        # 2. 프로페셔널 앵글 구분: 제형 매크로 시연 컷(no full face, macro close-up)인지 판별
-        is_macro_or_no_face = bool(re.search(r"\b(no full face|no face|macro close-up|texture on skin|product display)\b", prompt, re.IGNORECASE))
-
-        if not is_macro_or_no_face:
-            # 인물 등장 씬: 한국인 여성 모델 키워드가 없으면 교체 및 주입
-            if "korean female model" not in prompt.lower():
-                replaced = False
-                for target_pattern in [
-                    r"\b(a|the)\s+(model's|woman's|female's)\b",
-                    r"\b(a|the)\s+(young\s+)?(woman|female|model|person|girl|lady)\b",
-                    r"\b(model's|woman's|female's)\b",
-                    r"\b(model|woman|female|person)\b"
-                ]:
-                    if re.search(target_pattern, prompt, re.IGNORECASE):
-                        if "s" in target_pattern:
-                            prompt = re.sub(target_pattern, f"{model_keyword}'s", prompt, count=1, flags=re.IGNORECASE)
-                        else:
-                            prompt = re.sub(target_pattern, model_keyword, prompt, count=1, flags=re.IGNORECASE)
-                        replaced = True
-                        break
-
-                if not replaced:
-                    if re.search(r"\b(face|skin|beauty|looking|expression|portrait)\b", prompt, re.IGNORECASE):
-                        prompt = f"{prompt.rstrip(' .')}, featuring {model_keyword}"
-            else:
-                if "shoulder-length soft wave hair" not in prompt.lower():
-                    prompt = f"{prompt.rstrip(' .')}, with shoulder-length soft wave hair"
-        else:
-            # 매크로/제형 시연 컷: 얼굴 노출을 방지하고 제형 및 피부 결 극대화
-            if "no full face" not in prompt.lower():
-                prompt = f"{prompt.rstrip(' .')}, macro close-up focus, no full face"
-
-        clean_clause = ", clean commercial photography, without any text, no typography, no watermark, no letters, pure image"
-        if "without any text" not in prompt:
-            prompt = prompt.rstrip(" .") + clean_clause
-
-        logger.info(f"[Image Gen] 씬 {scene_num} 키프레임 이미지 생성 시작 (앵글 및 헤어스타일 일관성 적용)...")
-        logger.debug(f"최종 적용 이미지 프롬프트: {prompt}")
-
-        if self.mock or not self.genai_client:
-            self._create_mock_image(scene, out_path)
-            logger.info(f"[Mock Image] 씬 {scene_num} 더미 이미지 생성 완료: {out_path}")
-            return out_path
-
-        # 1차 시도: 허용된 Google Imagen 3 기본 모델 호출 (가드레일 검증 통과 필수)
-        candidate_models = ["imagen-3.0-generate-001", "imagen-3.0-generate-002"]
-        for model_name in candidate_models:
-            try:
-                # 호출 전 가드레일 하드코딩 검증
-                validated_model = validate_model_call(model_name, category="image")
-                logger.info(f"Google Imagen 호출 시도 (Model: {validated_model}, Aspect Ratio: 9:16)...")
-                response = self.genai_client.models.generate_images(
-                    model=validated_model,
-                    prompt=prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        aspect_ratio="9:16",
-                        output_mime_type="image/png"
-                    )
-                )
-                if response.generated_images:
-                    generated_image = response.generated_images[0].image
-                    if hasattr(generated_image, "image_bytes") and generated_image.image_bytes:
-                        with open(out_path, "wb") as f:
-                            f.write(generated_image.image_bytes)
-                    elif hasattr(generated_image, "save"):
-                        generated_image.save(location=out_path)
-                    logger.info(f"씬 {scene_num} Google Imagen({validated_model}) 이미지 저장 완료 -> {out_path}")
-                    return out_path
-            except Exception as e:
-                logger.warning(f"모델 '{model_name}' 이미지 생성 실패: {e}")
-
-        # 안전망: AI 생성 실패 시 로컬 고품질 세로형 그래픽으로 안전 복구 (비인가 외부 모델 일체 호출 금지)
-        logger.info(f"씬 {scene_num}: 로컬 고품질 세로형 그래픽으로 안전 대체합니다.")
         self._create_mock_image(scene, out_path)
+        logger.info(f"[Mock Image] 씬 {scene_num} 자리표시 이미지 생성: {out_path}")
         return out_path
 
     # -------------------------------------------------------------
@@ -782,7 +694,7 @@ class AssetGenerator:
             s_num = int(scene.get("scene_index") or scene.get("scene_number", i))
             logger.info(f"===== [에셋 생성 {i}/{total}] 씬 {s_num} 처리 시작 =====")
 
-            # 1. 키프레임 이미지 (여행 상품 모드 시 씬에 기록된 image_path 1:1 매핑, 커머스 모드 시 Google Imagen 3)
+            # 1. 키프레임 이미지 (씬에 기록된 실물 사진 image_path 1:1 매핑)
             # 순번 기반 매핑은 다운로드 실패 시 이후 씬이 밀리므로, 씬 키(image_path)를 우선 사용합니다.
             # gallery_images는 씬 수와 정확히 같은 길이의 명시적 순서 목록일 때만 사용합니다 (모듈로 순환 금지).
             g_path = scene.get("image_path")

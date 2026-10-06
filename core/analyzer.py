@@ -423,6 +423,9 @@ def plan_storyboard(
     """
     if mode == "owner":
         raise ValueError("사장님(owner) 모드는 core.planners.plan_owner_storyboard를 사용하세요 (트랙 A 제휴 플래너와 분리).")
+    if mode == "commerce":
+        # 예전 커머스 프롬프트는 화장품 전용 예시 + AI 이미지(Imagen) 전제라 어떤 상품이든 화장품 광고처럼 나왔음
+        raise ValueError("쇼핑 제휴(commerce) 모드는 core.planners.plan_commerce_storyboard를 사용하세요 (실물 상품 사진 기반).")
     preset_info = DURATION_PRESETS.get(duration_preset, DURATION_PRESETS["15s"])
     target_total_sec = preset_info["target_sec"]
     if mode == "travel" and travel_template == "golden7":

@@ -24,8 +24,8 @@ logger = logging.getLogger("ad_factory.compositor")
 
 # 하단 단일 자막 블록 스타일을 쓰는 모드 (실사 공간 영상: 수영장·객실 등 사진 핵심을 가리지 않음)
 #   씬 1은 후킹 헤드라인 단독(0~hook_sec) → 서브 자막 순서로 시간차 노출, 위치는 화면 정중앙 한곳 (배경 박스 없음)
-#   커머스 모드는 씬 2 제품 누끼가 화면 62% 지점에 합성되므로 기존 레이아웃(상단 후킹 바 / 62% 자막) 유지
-CENTER_CAPTION_MODES = ("travel", "owner")
+#   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
+CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
 # 자막 블록 세로 중심 (높이 비율). 쇼츠 세이프 에어리어: 하단 약 35%는 채널명·제목·구독 버튼·사운드명,
 # 우측은 좋아요·댓글 버튼이 덮음 → 화면 정중앙(48~52%)에 둬야 모바일에서 가려지지 않음 (하단 68%는 UI에 가려졌음)
 CAPTION_CENTER_Y = 0.50
@@ -34,6 +34,9 @@ HOOK_HEADLINE_COLOR = (255, 214, 10)
 HOOK_FONT_RATIO = 0.092          # 씬 1 후킹 단독 노출이라 서브 자막보다 크게
 CAPTION_FONT_RATIO = 0.066
 CAPTION_STROKE_RATIO = 0.0065    # 1080px 기준 외곽선 약 7px
+# 제휴 광고 표시(쿠팡 파트너스 등): 화면 위쪽 가장자리 안쪽(쇼츠 상단 아이콘 줄 아래)에 작고 옅게
+DISCLOSURE_Y = 0.085
+DISCLOSURE_FONT_RATIO = 0.027
 HOOK_SOLO_SEC = 1.5              # hook_sec 정보가 없을 때 후킹 단독 노출 시간 (asset_generator.HOOK_SOLO_SEC와 동일)
 
 
@@ -196,6 +199,26 @@ class AdCompositor:
             draw.text((x, ty), ln, font=f, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         return np.array(img)
 
+    def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
+        """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        if not (text and text.strip()):
+            return layer
+        draw = ImageDraw.Draw(layer)
+        try:
+            font = ImageFont.truetype(self.font_path, max(14, int(width * DISCLOSURE_FONT_RATIO)))
+        except Exception:
+            font = ImageFont.load_default()
+        lines = self._wrap_text(text.strip(), draw, font, max_width=int(width * 0.78))
+        line_h = int(font.size * 1.3)
+        y = int(height * DISCLOSURE_Y)
+        for ln in lines:
+            bb = draw.textbbox((0, 0), ln, font=font)
+            x = (width - (bb[2] - bb[0])) // 2 - bb[0]
+            draw.text((x, y - bb[1]), ln, font=font, fill=(255, 255, 255, 215), stroke_width=2, stroke_fill=(0, 0, 0, 170))
+            y += line_h
+        return layer
+
     def create_overlay_image(
         self,
         caption_text: Optional[str],
@@ -331,6 +354,7 @@ class AdCompositor:
         audio_mode: str = "voice_and_sub",
         mode: str = "commerce",
         brand: Optional[BrandOverlay] = None,
+        disclosure: Optional[str] = None,
         **kwargs
     ) -> str:
         """
@@ -339,6 +363,7 @@ class AdCompositor:
         오디오는 AI 나레이션(VO)만 사용합니다. BGM은 엔진에서 합성하지 않습니다
         (플랫폼 인앱 트렌딩 음원·자사 유통 음원을 업로드 단계에서 태그하는 정책).
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
+        disclosure(제휴 광고 표시 문구, 예: 쿠팡 파트너스)가 주어지면 전 씬 위쪽에 작게 표시.
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
         logger.info(f"Step 3 시작 (모드={mode}): 타임라인 조립, 자막 오버레이 합성 진행 (총 {len(asset_manifest)}개 씬, 오디오 모드: {audio_mode})")
@@ -388,7 +413,7 @@ class AdCompositor:
 
                 # 4. 자막 오버레이 (실사 모드 씬 1: 후킹 단독 0~hook_sec → 서브 자막, 나레이션 2단 음성과 같은 시점)
                 w, h = synced_video.size
-                if caption_text or hook_title or brand:
+                if caption_text or hook_title or brand or disclosure:
                     split_hook = mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
                     if split_hook:
                         hook_sec = float(item.get("hook_sec") or HOOK_SOLO_SEC)
@@ -413,11 +438,17 @@ class AdCompositor:
                             height=h,
                             mode=mode
                         )
-                        if brand:
-                            if (w, h) not in watermark_cache:
-                                watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
+                        if brand or disclosure:
                             merged = Image.fromarray(overlay_img_arr).convert("RGBA")
-                            merged.alpha_composite(watermark_cache[(w, h)])
+                            if brand:
+                                if (w, h) not in watermark_cache:
+                                    watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
+                                merged.alpha_composite(watermark_cache[(w, h)])
+                            if disclosure:
+                                key = ("disclosure", w, h)
+                                if key not in watermark_cache:
+                                    watermark_cache[key] = self.render_disclosure(disclosure, w, h)
+                                merged.alpha_composite(watermark_cache[key])
                             overlay_img_arr = np.array(merged)
                         sub_clip = ImageClip(overlay_img_arr, ismask=False).set_start(seg_start).set_duration(seg_dur)
                         opened_clips.append(sub_clip)

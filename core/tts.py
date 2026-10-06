@@ -70,6 +70,28 @@ def resolve_edge_voice(actor_key: Optional[str]) -> str:
     return DEFAULT_FEMALE_VOICE
 
 
+_DIGITS = "영일이삼사오육칠팔구"
+
+
+def sino_korean_number(num: int) -> str:
+    """정수를 한자어 수사로 (0 → 영, 10 → 십, 48 → 사십팔, 1200 → 천이백, 35000 → 삼만 오천)"""
+    if num == 0:
+        return "영"
+    out = []
+    for unit_value, unit_name in ((10 ** 8, "억"), (10 ** 4, "만")):
+        if num >= unit_value:
+            head, num = divmod(num, unit_value)
+            out.append(("" if head == 1 and unit_name == "만" else sino_korean_number(head)) + unit_name)
+    if num:
+        part = ""
+        for value, name in ((1000, "천"), (100, "백"), (10, "십"), (1, "")):
+            d, num = divmod(num, value)
+            if d:
+                part += ("" if d == 1 and name else _DIGITS[d]) + name
+        out.append(part)
+    return " ".join(out)
+
+
 def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     """
     [TTS 음성 합성용 텍스트 정제기]
@@ -82,6 +104,9 @@ def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     if not text:
         return ""
 
+    # 0. 한자어 숫자 변환 - 쉼표 제거 전에 ('1,200' 보존) (자릿값 포함: 48 → 사십팔, 1200 → 천이백). 예전엔 한 자리씩 읽어 '48시간'이 '사팔 시간'이 됐음
+    text = re.sub(r'\d{1,3}(?:,\d{3})+|\d+', lambda m: sino_korean_number(int(m.group(0).replace(",", ""))), text)
+
     # 1. 물결표, 특수문자, 따옴표, 괄호류 제거
     text = text.replace("~", " ").replace("～", " ").replace("^", " ")
     text = re.sub(r'[\'\"`#*@&%=+;:\(\)\[\]\{\}<>\/\\_]', ' ', text)
@@ -92,16 +117,6 @@ def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     if not keep_commas:
         text = text.replace(",", " ")
 
-    # 3. 한자어 숫자 변환
-    num_map = {
-        '0': '영', '1': '일', '2': '이', '3': '삼', '4': '사',
-        '5': '오', '6': '육', '7': '칠', '8': '팔', '9': '구'
-    }
-    def replace_num(match):
-        digits = match.group(0)
-        return ''.join(num_map.get(d, d) for d in digits)
-
-    text = re.sub(r'\b\d+\b', replace_num, text)
 
     # 4. 공백 및 조사 정리
     text = re.sub(r'\s+', ' ', text)

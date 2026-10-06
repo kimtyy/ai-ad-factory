@@ -26,7 +26,7 @@ from core.asset_generator import AssetGenerator
 from core.compositor import AdCompositor
 from core.job import JobContext
 from core.render.brand import BrandOverlay, EndCard
-from core.planners import BUSINESS_TYPES, plan_owner_storyboard
+from core.planners import BUSINESS_TYPES, COUPANG_DISCLOSURE, plan_commerce_storyboard, plan_owner_storyboard
 from core.media import is_video_file
 from core.media.normalize import DEFAULT_TRIM_START
 
@@ -48,7 +48,7 @@ def print_banner():
 [bold magenta]   [AI Short-form Ad Video Factory] 자동 광고 영상 파이프라인   [/bold magenta]
 [bold cyan]====================================================================[/bold cyan]
 [dim]  * Step 1: Gemini 3.6 Flash Vision 레퍼런스 분석 & 콘티 역기획[/dim]
-[dim]  * Step 2: Google Imagen 3(이미지) + 로컬 Ken Burns(2D 모션 비디오) + Google TTS(음성) 에셋 양산[/dim]
+[dim]  * Step 2: 실물 사진·영상 + 로컬 Ken Burns(2D 모션 비디오) + Edge-TTS(음성) 에셋 양산[/dim]
 [dim]  * Step 3: MoviePy 기반 오디오 싱크 컷팅 & 9:16 타임라인 조립[/dim]
 """
     console.print(banner_text)
@@ -100,7 +100,7 @@ def main():
     )
     parser.add_argument("--mode", type=str, choices=["owner", "travel", "commerce"], default="travel",
                         help="제작 모드 (owner: 사장님 직영 홍보 / travel: 숙소 제휴 쇼츠 / commerce: 쇼핑 제휴 쇼츠)")
-    parser.add_argument("--media", type=str, nargs="*", default=[], help="[owner] 사장님 사진·영상 경로 (순서대로 씬 배정)")
+    parser.add_argument("--media", type=str, nargs="*", default=[], help="[owner/commerce] 사진·영상 경로 (순서대로 씬 배정)")
     parser.add_argument("--business-type", type=str, choices=list(BUSINESS_TYPES), default="food", help="[owner] 업종")
     parser.add_argument("--url", type=str, default=None, help="상품/숙소 상세 페이지 URL (입력 시 정보 및 이미지 자동 수집)")
     parser.add_argument("--ref", type=str, default="reference.mp4", help="레퍼런스 영상 경로 (기본값: reference.mp4)")
@@ -158,6 +158,11 @@ def main():
             args.usp = scraped.get("usp") or args.usp
             image_pool = scraped.get("image_pool", [])
             photo_inventory = scraped.get("category_counts")
+            if args.mode == "commerce":
+                args.media = list(args.media) + scraped.get("product_images", [])
+        elif scraped.get("product_name_hint") and not args.product:
+            console.print(f"[yellow]{scraped.get('error')}[/yellow] (상품명 후보: {scraped['product_name_hint']})")
+            sys.exit(1)
             console.print(f"[bold green]>> 크롤링 성공:[/bold green] 제품/숙소명='{args.product}', USP='{args.usp[:30]}...', 사진 후보={len(image_pool)}장")
 
     keys = check_env_keys(mock=args.mock)
@@ -192,6 +197,20 @@ def main():
                     thumb_dir=job.assets_dir,
                 )
                 for sc, path in zip(scenes, args.media):
+                    if is_video_file(path):
+                        sc["media"] = {"type": "video", "path": os.path.abspath(path), "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
+                    else:
+                        sc["image_path"] = os.path.abspath(path)
+            elif args.mode == "commerce":
+                # 트랙 A 쇼핑 제휴: 실물 상품 사진(판매 페이지/직접 지정) 기반 리뷰 썰, AI 이미지 없음
+                if not args.media and not args.mock:
+                    raise ValueError("상품 사진이 없습니다. --url(판매 페이지) 또는 --media(사진 경로)를 지정해 주세요.")
+                scenes = plan_commerce_storyboard(
+                    product_name=args.product, usp=args.usp, media_paths=args.media,
+                    api_key=keys.get("GEMINI_API_KEY"), mock=args.mock, thumb_dir=job.assets_dir,
+                )
+                media_cycle = [args.media[i % len(args.media)] for i in range(len(scenes))] if args.media else []
+                for sc, path in zip(scenes, media_cycle):
                     if is_video_file(path):
                         sc["media"] = {"type": "video", "path": os.path.abspath(path), "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
                     else:
@@ -242,11 +261,11 @@ def main():
         return
 
     # =========================================================================
-    # Step 2: 에셋 생성 (Google Imagen 3 + 로컬 Ken Burns 모션 비디오 + Google TTS)
+    # Step 2: 에셋 생성 (실물 사진·영상 + 로컬 Ken Burns 모션 비디오 + Edge-TTS)
     # =========================================================================
     manifest = []
     if args.step in ["all", "generate"]:
-        console.rule("[bold cyan]Step 2: 에셋 배치 생성 (풍경 갤러리/Imagen 3, 로컬 Ken Burns 모션, Google TTS)[/bold cyan]")
+        console.rule("[bold cyan]Step 2: 에셋 배치 생성 (실물 사진·영상, 로컬 Ken Burns 모션, Edge-TTS)[/bold cyan]")
         try:
             generator = AssetGenerator(
                 gemini_api_key=keys.get("GEMINI_API_KEY"),
@@ -257,8 +276,8 @@ def main():
                 mock=args.mock,
                 mode=args.mode
             )
-            # 여행 모드: 각 씬의 image_path(실물 사진)로 1:1 매핑. 사진 없는 씬은 AI 생성 대신 중단
-            if args.mode == "travel" and not args.mock:
+            # 실물 사진 모드(숙소·쇼핑): 각 씬의 image_path(실물 사진)로 1:1 매핑. 사진 없는 씬은 AI 생성 대신 중단
+            if args.mode in ("travel", "commerce") and not args.mock:
                 missing = [
                     sc.get("scene_index") for sc in scenes
                     if not (sc.get("image_path") and os.path.exists(sc["image_path"]))
@@ -314,7 +333,8 @@ def main():
                 fps=24,
                 audio_mode=args.audio_mode,
                 mode=args.mode,
-                brand=brand
+                brand=brand,
+                disclosure=COUPANG_DISCLOSURE if args.mode == "commerce" else None
             )
             console.print(Panel(
                 f"[bold green]최종 광고 영상 제작 완료![/bold green]\n\n"
