@@ -14,7 +14,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import COPY_TONE_RULES, find_promo_tone, find_unsupported_claim, shorten_line
+from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_MAX, find_promo_tone, find_unsupported_claim, is_hook_echo,
+                                shorten_line, strip_brochure_words, to_haeyo)
 from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.planners.owner")
@@ -116,10 +117,12 @@ def plan_owner_storyboard(
     default_hook = f"{business_name} 가봤어요?" if business_name else "여기 진짜 가볼 만해요!"
 
     llm = None
+    llm_story = ""
     if api_key and not mock:
         try:
             llm = _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
                                     tone_instruction, api_key, thumb_dir, hook_hints)
+            llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 플래너 Gemini 호출 실패, 업종 템플릿으로 대체: {e}")
 
@@ -129,6 +132,7 @@ def plan_owner_storyboard(
         item = (llm or [])[i] if llm and i < len(llm) else {}
         text = cta_line if is_last else str(item.get("voiceover") or "").strip() or lines.get(role, lines["exterior"])
         if not is_last:
+            text = to_haeyo(text)   # 말투 통일: 합쇼체 → 해요체
             claim = _unsupported_claim(text, usp)
             if claim:
                 logger.info(f"[허위 차단] 씬 {i + 1}: USP에 없는 표현 '{claim}' → 템플릿 대사로 교체")
@@ -137,7 +141,7 @@ def plan_owner_storyboard(
             if promo:
                 logger.info(f"[홍보 어투 차단] 씬 {i + 1}: {promo} (대사: {text}) → 템플릿 대사로 교체")
                 text = lines.get(role, lines["exterior"])
-            text = shorten_line(text)
+            text = shorten_line(strip_brochure_words(text), VO_LIMIT, VO_MAX)
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
             role = llm[i]["role"]
         hook = ""
@@ -151,6 +155,9 @@ def plan_owner_storyboard(
                     hook = default_hook
                 if copies_reference(text, hook_hints):
                     text = lines.get(role, lines["exterior"])
+            if is_hook_echo(hook, text):
+                logger.info(f"[후킹 반복 차단] 헤드라인 '{hook}' ≈ 서브 '{text}' → 템플릿 대사로 교체")
+                text = lines.get(role, lines["exterior"])
         scenes.append(_scene(i, "cta" if is_last else role, text, hook))
         if i == 0 and hook_hints:
             scenes[0]["hook_reference"] = hook_hints.summary()
@@ -158,6 +165,8 @@ def plan_owner_storyboard(
             scenes[0]["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
                                               "pattern_template": used["pattern_template"]} if used else None
 
+    if llm_story and scenes:
+        scenes[0]["story"] = llm_story
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
@@ -187,19 +196,22 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
 - 톤 참고: {tone_instruction or '친근하고 담백한 사장님 직접 홍보 톤'}
 
 [작성 규칙]
-1. 총 {n}개 씬. 위에 붙은 [씬 i 미디어]가 있으면 i번째 씬 대사는 반드시 그 사진/영상에 실제로 보이는 것만 묘사하세요.
+1. 총 {n}개 씬. 위에 붙은 [씬 i 미디어]가 있으면 i번째 씬 대사는 그 사진/영상 속 공간·메뉴에 대한 이야기여야 합니다
+   (사진에 없는 걸 지어내지 말되, 보이는 걸 나열해 읽지도 말고 '그래서 뭐가 좋은지'를 말하세요).
    미디어가 없는 씬은 업종 기본 구성({role_hint})을 따르세요.
-2. 각 voiceover는 공백 포함 15~20자 구어체 한 문장. 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
+2. 먼저 사장님이 손님 한 명에게 가게 자랑 썰을 푸는 독백(story)을 쓰고, 순서대로 잘라 씬 1~{n - 1}의 voiceover로 나누세요.
+   각 voiceover는 공백 포함 15~{VO_LIMIT}자. 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
 3. 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
-4. 씬 1의 hook_title은 스크롤을 멈추게 하는 10~15자 헤드라인 (상호명 포함 가능). 씬 1 voiceover는 화면에 헤드라인과 함께
-   붙어 나가므로 헤드라인을 받아 사진 속 장면으로 이어지게 쓰세요.
-{COPY_TONE_RULES.replace("친구에게 비밀 장소 자랑하듯", "사장님이 단골에게 자랑하듯")}
-   (사장님 말투 예: '저녁 되면 마당 불멍존에 다들 모여요', '창문 열면 계곡 물소리가 그대로 들어와요')
+4. 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내). 나레이터가 헤드라인을 먼저 읽고
+   씬 1 voiceover를 이어 읽으므로, voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰세요.
+   헤드라인 단어를 voiceover에서 그대로 반복하지 말고 바로 구체적인 이유·감탄으로 받으세요.
+{COPY_TONE_RULES.replace("유튜버가 시청자 1명에게 꿀팁 썰 푸는", "사장님이 손님 1명에게 가게 자랑 썰 푸는")}
+   (사장님 말투 예: '솔직히 저희 집은 창문 열면 계곡 소리부터 들어오거든요.' → '근데 진짜 대박인 건 저녁에 마당 불멍인데,')
 {hook_hints.prompt_block if hook_hints else ""}
 5. 마지막 씬 {n}의 voiceover는 정확히: "{cta_line}"
 6. role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")
 
-JSON만 출력: {{"scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
+JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
 """)
     client = genai.Client(api_key=api_key)
     res = client.models.generate_content(
@@ -216,4 +228,11 @@ JSON만 출력: {{"scenes": [{{"scene_index": 1, "role": "...", "hook_title": ".
     scenes = data.get("scenes", data) if isinstance(data, dict) else data
     if not isinstance(scenes, list) or not scenes:
         raise ValueError(f"예상치 못한 응답: {res.text[:200]}")
-    return scenes
+    out = _ScenesWithStory(scenes)
+    out.story = str(data.get("story") or "").strip() if isinstance(data, dict) else ""
+    return out
+
+
+class _ScenesWithStory(list):
+    """씬 목록 + Gemini가 먼저 쓴 전체 독백(story)"""
+    story = ""

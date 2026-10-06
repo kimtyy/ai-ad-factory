@@ -16,9 +16,10 @@ python tests/suite_script_guard.py # 스위트 하나만 직접 실행
 | `suite_job_lazy_folders.py` | 작업 폴더 지연 생성, 24시간 넘은 빈 폴더 자동 정리 (결과물 있는 폴더 보존) |
 | `suite_travel_golden7.py` | 숙소 7씬 황금 비율(수영장3·객실2·부대시설2), 비전 슬롯 배정, 엔딩 야경 뷰, BGM 제외 |
 | `suite_script_guard.py` | 어절 경계 길이 맞춤, 사진·USP 근거 없는 주장 차단, 홍보 어투(~해보세요·~마세요·~딱!) 차단 |
-| `suite_render_visuals.py` | 하단 30~35% 단일 자막 블록·다크 필, 커머스 레이아웃 유지, Ken Burns 1.2배 줌·ease-out·나레이션 길이 연동 |
+| `suite_render_visuals.py` | 화면 중앙(48~52%) 자막·우측 버튼 열 회피(배경 박스 없이 외곽선+그림자), 씬 1 후킹→서브 시간차(음성·자막), TTS 앞뒤 무음 제거·잘린 응답 재시도, 커머스 레이아웃 유지, Ken Burns 1.2배 줌·ease-out |
 | `suite_radar_core.py` | 쇼츠 레이더: 점수·필터, API 래퍼(파라미터·배치·쿼터 예산), 수집, SQLite, CLI dry-run |
 | `suite_radar_hints.py` | 레이더 후킹 패턴 → 씬 1 힌트 주입, 원문 복제 차단 |
+| `suite_app_auth.py` | 외부 접속(Cloudflare 터널·다른 기기) PIN 잠금, 틀린 PIN 거부, 5회 실패 10분 잠금, PIN 미설정 시 차단, localhost는 바로 열림 |
 | `suite_owner_planner.py` | 사장님 플래너: 상호명 보존, 네이버 검색 CTA, 가격·할인 주장 차단 |
 | `suite_app_radar_ui.py` | Streamlit 레이더 화면, 화면 전환 시 설정 유지, 기획 연동 |
 | `suite_app_travel_flow.py` | Streamlit 숙소 제휴 흐름 (실제 페이지 크롤링: `--live`에서만) |

@@ -23,12 +23,18 @@ from core.render.brand import BrandOverlay
 logger = logging.getLogger("ad_factory.compositor")
 
 # 하단 단일 자막 블록 스타일을 쓰는 모드 (실사 공간 영상: 수영장·객실 등 사진 핵심을 가리지 않음)
-#   씬 1 후킹 헤드라인과 나레이션 자막을 한 블록(반투명 다크 필)으로 묶어 화면 하단 30~35% 지점에 배치 → 시선 분열 제거
+#   씬 1은 후킹 헤드라인 단독(0~hook_sec) → 서브 자막 순서로 시간차 노출, 위치는 화면 정중앙 한곳 (배경 박스 없음)
 #   커머스 모드는 씬 2 제품 누끼가 화면 62% 지점에 합성되므로 기존 레이아웃(상단 후킹 바 / 62% 자막) 유지
 CENTER_CAPTION_MODES = ("travel", "owner")
-CAPTION_BLOCK_BOTTOM = 0.745     # 블록 아래 끝 (높이 비율). 그 아래 약 25%는 쇼츠·릴스 제목/버튼 UI가 덮는 영역
-CAPTION_PILL_FILL = (12, 12, 14, 150)
+# 자막 블록 세로 중심 (높이 비율). 쇼츠 세이프 에어리어: 하단 약 35%는 채널명·제목·구독 버튼·사운드명,
+# 우측은 좋아요·댓글 버튼이 덮음 → 화면 정중앙(48~52%)에 둬야 모바일에서 가려지지 않음 (하단 68%는 UI에 가려졌음)
+CAPTION_CENTER_Y = 0.50
+CAPTION_MAX_WIDTH = 0.72         # 줄 폭 상한 (가운데 14~86%): 우측 좋아요·댓글 버튼 열(약 84~100%)과 겹치지 않게 줄바꿈
 HOOK_HEADLINE_COLOR = (255, 214, 10)
+HOOK_FONT_RATIO = 0.092          # 씬 1 후킹 단독 노출이라 서브 자막보다 크게
+CAPTION_FONT_RATIO = 0.066
+CAPTION_STROKE_RATIO = 0.0065    # 1080px 기준 외곽선 약 7px
+HOOK_SOLO_SEC = 1.5              # hook_sec 정보가 없을 때 후킹 단독 노출 시간 (asset_generator.HOOK_SOLO_SEC와 동일)
 
 
 class AdCompositor:
@@ -83,74 +89,61 @@ class AdCompositor:
 
     def _wrap_text(self, text: str, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, max_width: int) -> List[str]:
         """
-        [의미 단위 어절 줄바꿈 시스템 (word-break: keep-all)]
-        - 글자 수 기반 강제 줄바꿈 배제.
-        - 어절(단어) 단위 분리 및 단어 쪼개짐 절대 방지.
-        - 2줄 자막 생성 시 글자 수 중심이 아닌 '가장 중앙에 가까운 띄어쓰기 위치'를 기준으로 분할.
-        - 1줄 너비(max_width) 이내인 경우 1줄로 깔끔하게 유지.
+        [의미 단위 어절 줄바꿈 (word-break: keep-all)]
+        - 어절(띄어쓰기 단위) 안에서는 절대 자르지 않음, 한 줄에 들어가면 1줄 유지
+        - 가장 적은 줄 수로 나누는 모든 경우 중 '줄 폭 균형 + 의미 덩어리 점수(break_penalty)'가 가장 좋은 것을 선택
+          (가운데 띄어쓰기에서 기계적으로 자르면 '수영장 안 / 가보면', '바다 / 뷰가'처럼 의미가 끊김)
         """
         if not text:
             return []
-        import re
         clean = re.sub(r'\s+', ' ', text).strip()
         if not clean:
             return []
 
-        # 1. 전체 텍스트가 1줄에 들어가는 경우 1줄 유지
-        bbox = draw.textbbox((0, 0), clean, font=font)
-        total_w = bbox[2] - bbox[0]
-        if total_w <= max_width:
+        def width(line: str) -> int:
+            bb = draw.textbbox((0, 0), line, font=font)
+            return bb[2] - bb[0]
+
+        if width(clean) <= max_width:
             return [clean]
+        words = clean.split(" ")
+        if len(words) == 1:
+            return [clean]   # 띄어쓰기 없는 한 덩어리는 자르지 않음 (keep-all)
 
-        # 2. 띄어쓰기 위치 목록 추출 (어절 단위 분리)
-        space_indices = [i for i, ch in enumerate(clean) if ch == ' ']
-        if not space_indices:
-            # 띄어쓰기가 없는 단일 단어인 경우 단어를 임의로 자르지 않고 그대로 반환 (keep-all)
-            return [clean]
+        from itertools import combinations
+        word_w = {}
 
-        # 3. 2줄 분할 시: 텍스트 중앙에 가장 가까운 띄어쓰기 위치를 기준으로 분할
-        mid = len(clean) / 2.0
-        valid_candidates = []
+        def best_for(n_lines):
+            best = None
+            for cuts in combinations(range(1, len(words)), n_lines - 1):
+                bounds = (0,) + cuts + (len(words),)
+                lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+                ws = [word_w.setdefault(ln, width(ln)) for ln in lines]
+                if max(ws) > max_width:
+                    continue
+                score = (max(ws) - min(ws)) / max_width + sum(break_penalty(words[c - 1], words[c]) for c in cuts)
+                if best is None or score < best[0]:
+                    best = (score, lines)
+            return best
 
-        for idx in space_indices:
-            line1 = clean[:idx].strip()
-            line2 = clean[idx + 1:].strip()
-            w1 = draw.textbbox((0, 0), line1, font=font)[2] - draw.textbbox((0, 0), line1, font=font)[0]
-            w2 = draw.textbbox((0, 0), line2, font=font)[2] - draw.textbbox((0, 0), line2, font=font)[0]
+        for n_min in range(2, len(words) + 1):
+            first = best_for(n_min)
+            if first:
+                # 한 줄 더 쓰면 의미가 확실히 덜 끊길 때만 늘림 (예: '바다 보고 / 있으면' → '누워서 / 바다 보고 있으면 / …')
+                more = best_for(n_min + 1) if n_min + 1 <= min(3, len(words)) else None
+                if more and more[0] + EXTRA_LINE_COST < first[0]:
+                    return more[1]
+                return first[1]
+        return words
 
-            if w1 <= max_width and w2 <= max_width:
-                # 중앙 지점과의 거리
-                dist = abs(idx - mid)
-                valid_candidates.append((dist, line1, line2))
-
-        if valid_candidates:
-            # 중앙과 가장 가까운 띄어쓰기 위치 분할 선택
-            valid_candidates.sort(key=lambda x: x[0])
-            return [valid_candidates[0][1], valid_candidates[0][2]]
-
-        # 4. 2줄로 모두 수용되지 않는 아주 긴 문장의 경우: 어절 단위 keep-all 순차 래핑 (단어 분리 방지)
-        words = clean.split()
-        lines = []
-        current_line = ""
-        for word in words:
-            test_line = f"{current_line} {word}".strip()
-            line_w = draw.textbbox((0, 0), test_line, font=font)[2] - draw.textbbox((0, 0), test_line, font=font)[0]
-            if line_w <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-        return lines
 
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int) -> np.ndarray:
         """
-        travel/owner 공통 하단 단일 자막 블록:
-        - [씬 1] 노란 후킹 헤드라인(크게) + 흰 나레이션 자막을 한 덩어리로 쌓아 시선을 한곳에 모음
-        - [일반 씬] 흰 나레이션 자막만
-        - 블록 뒤 반투명 다크 필 + 부드러운 그림자, 글자는 Pretendard-Black + 얇은 외곽선 (밝은 하늘·바다 위에서도 선명)
+        travel/owner 공통 하단 자막 (배경 박스 없음):
+        - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
+        - 후킹 헤드라인(노랑, 크게)과 서브 자막(흰색)은 보통 따로 호출됨 (씬 1은 시간차로 하나씩 노출).
+          둘 다 주어지면 위아래로 쌓음 (하위 호환)
+        - 블록 세로 중심 = 높이의 CAPTION_CENTER_Y (화면 정중앙, 쇼츠 하단·우측 UI 영역 회피)
         """
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -163,46 +156,44 @@ class AdCompositor:
 
         groups = []   # (줄 목록, 폰트, 글자색, 줄 높이)
         if hook_title and hook_title.strip():
-            hf = font(int(width * 0.084))
-            lines = self._wrap_text(hook_title.strip(), draw, hf, max_width=int(width * 0.80))
+            hf = font(int(width * HOOK_FONT_RATIO))
+            lines = self._wrap_text(hook_title.strip(), draw, hf, max_width=int(width * CAPTION_MAX_WIDTH))
             if lines:
-                groups.append((lines, hf, HOOK_HEADLINE_COLOR + (255,), int(hf.size * 1.22)))
+                groups.append((lines, hf, HOOK_HEADLINE_COLOR + (255,), int(hf.size * 1.2)))
         if caption_text and caption_text.strip():
-            cf = font(int(width * 0.062))
-            lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * 0.82))
+            cf = font(int(width * CAPTION_FONT_RATIO))
+            lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * CAPTION_MAX_WIDTH))
             if lines:
-                groups.append((lines, cf, (255, 255, 255, 255), int(cf.size * 1.3)))
+                groups.append((lines, cf, (255, 255, 255, 255), int(cf.size * 1.28)))
         if not groups:
             return np.array(img)
 
-        gap = int(width * 0.022) if len(groups) > 1 else 0
+        gap = int(width * 0.025) if len(groups) > 1 else 0
         text_h = sum(len(ls) * lh for ls, _, _, lh in groups) + gap
-        text_w = max(draw.textbbox((0, 0), ln, font=f)[2] - draw.textbbox((0, 0), ln, font=f)[0]
-                     for ls, f, _, _ in groups for ln in ls)
-        pad_x, pad_y = int(width * 0.05), int(width * 0.034)
-        bottom = int(height * CAPTION_BLOCK_BOTTOM)
-        box = (max(int(width * 0.04), (width - text_w) // 2 - pad_x), bottom - text_h - 2 * pad_y,
-               min(width - int(width * 0.04), (width + text_w) // 2 + pad_x), bottom)
-        radius = int(width * 0.04)
-
-        # 부드러운 그림자 → 반투명 다크 필
-        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle((box[0], box[1] + 10, box[2], box[3] + 10), radius=radius, fill=(0, 0, 0, 110))
-        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(int(width * 0.02))))
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle(box, radius=radius, fill=CAPTION_PILL_FILL)
-
-        y = box[1] + pad_y
+        y = int(height * CAPTION_CENTER_Y) - text_h // 2
+        placed = []   # (x, y, 줄, 폰트, 색)
         for gi, (lines, f, color, lh) in enumerate(groups):
             if gi:
                 y += gap
             for ln in lines:
                 bb = draw.textbbox((0, 0), ln, font=f)
                 x = (width - (bb[2] - bb[0])) // 2 - bb[0]
-                # 줄 높이 안에서 글자 세로 중앙 정렬 (폰트 상단 여백 보정)
-                ty = y + (lh - (bb[3] - bb[1])) // 2 - bb[1]
-                draw.text((x, ty), ln, font=f, fill=color, stroke_width=2, stroke_fill=(0, 0, 0, 200))
+                placed.append((x, y + (lh - (bb[3] - bb[1])) // 2 - bb[1], ln, f, color))
                 y += lh
+
+        stroke = max(3, int(width * CAPTION_STROKE_RATIO))
+        # 짙은 드롭섀도우: 아래로 살짝 내린 검은 글자를 블러 → 두 번 겹쳐 농도 확보
+        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow)
+        off = max(3, int(width * 0.006))
+        for x, ty, ln, f, _ in placed:
+            sd.text((x + off // 2, ty + off), ln, font=f, fill=(0, 0, 0, 255), stroke_width=stroke + 2, stroke_fill=(0, 0, 0, 255))
+        blurred = shadow.filter(ImageFilter.GaussianBlur(max(4, int(width * 0.009))))
+        img.alpha_composite(blurred)
+        img.alpha_composite(blurred)
+        draw = ImageDraw.Draw(img)
+        for x, ty, ln, f, color in placed:
+            draw.text((x, ty), ln, font=f, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         return np.array(img)
 
     def create_overlay_image(
@@ -216,7 +207,7 @@ class AdCompositor:
     ) -> np.ndarray:
         """
         숏폼 전용 고가독성 자막 오버레이:
-        - [여행/사장님 모드]: _caption_block - 후킹 헤드라인 + 자막을 하단 30~35% 지점 단일 블록으로
+        - [여행/사장님 모드]: _caption_block - 화면 정중앙(50%), 외곽선 + 드롭섀도우 글자 (배경 박스 없음)
         - [일반 커머스 모드]:
           * 씬 1 (hook_title 존재 시): 상단 17% 지점 후킹 바 단독 노출
           * 일반 씬: 하단 62% 지점(쇼츠 UI 세이프존)에 볼드 자막 노출
@@ -344,7 +335,7 @@ class AdCompositor:
     ) -> str:
         """
         Step 3: 각 씬별 비디오와 오디오를 오디오 길이에 맞춰 컷팅하고,
-        상단 후킹 바 및 런비 스타일 중앙 자막을 합성한 뒤 최종 광고 비디오 결합.
+        자막 오버레이(실사 모드: 하단 자막, 씬 1 후킹→서브 시간차)를 합성한 뒤 최종 광고 비디오 결합.
         오디오는 AI 나레이션(VO)만 사용합니다. BGM은 엔진에서 합성하지 않습니다
         (플랫폼 인앱 트렌딩 음원·자사 유통 음원을 업로드 단계에서 태그하는 정책).
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
@@ -395,33 +386,44 @@ class AdCompositor:
                     opened_clips.append(last_frame_clip)
                     synced_video = concatenate_videoclips([video_clip, last_frame_clip], method="compose")
 
-                # 4. 상단 후킹 바 & 런비 스타일 중앙 자막 오버레이 생성
+                # 4. 자막 오버레이 (실사 모드 씬 1: 후킹 단독 0~hook_sec → 서브 자막, 나레이션 2단 음성과 같은 시점)
                 w, h = synced_video.size
                 if caption_text or hook_title or brand:
-                    if mode in CENTER_CAPTION_MODES:
-                        logger.info(f"씬 {scene_num} 하단 단일 자막 블록 렌더링 (하단 30~35%){' + 후킹 헤드라인' if hook_title else ''}: '{caption_text}'")
-                    elif hook_title and hook_title.strip():
-                        logger.info(f"씬 {scene_num} 상단 후킹 바 단독 렌더링 (모바일 세이프존 17%): '{hook_title}'")
+                    split_hook = mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
+                    if split_hook:
+                        hook_sec = float(item.get("hook_sec") or HOOK_SOLO_SEC)
+                        hook_sec = max(0.5, min(hook_sec, scene_target_duration - 0.5))
+                        segments = [(0.0, hook_sec, None, hook_title), (hook_sec, scene_target_duration - hook_sec, caption_text, None)]
+                        logger.info(f"씬 {scene_num} 후킹 단독 0~{hook_sec:.2f}초 '{hook_title}' → 서브 자막 '{caption_text}'")
                     else:
-                        logger.info(f"씬 {scene_num} 하단 나레이션 자막 단독 렌더링 (쇼츠 UI 세이프존 62%): '{caption_text}'")
+                        segments = [(0.0, scene_target_duration, caption_text, hook_title)]
+                        if mode in CENTER_CAPTION_MODES:
+                            logger.info(f"씬 {scene_num} 중앙 자막 렌더링 (화면 50%): '{caption_text}'")
+                        elif hook_title and hook_title.strip():
+                            logger.info(f"씬 {scene_num} 상단 후킹 바 단독 렌더링 (모바일 세이프존 17%): '{hook_title}'")
+                        else:
+                            logger.info(f"씬 {scene_num} 하단 나레이션 자막 단독 렌더링 (쇼츠 UI 세이프존 62%): '{caption_text}'")
 
-                    overlay_img_arr = self.create_overlay_image(
-                        caption_text=caption_text,
-                        hook_title=hook_title,
-                        width=w,
-                        height=h,
-                        mode=mode
-                    )
-                    if brand:
-                        if (w, h) not in watermark_cache:
-                            watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
-                        merged = Image.fromarray(overlay_img_arr).convert("RGBA")
-                        merged.alpha_composite(watermark_cache[(w, h)])
-                        overlay_img_arr = np.array(merged)
-                    sub_clip = ImageClip(overlay_img_arr, ismask=False).set_duration(scene_target_duration)
-                    opened_clips.append(sub_clip)
+                    layers = [synced_video]
+                    for seg_start, seg_dur, seg_caption, seg_hook in segments:
+                        overlay_img_arr = self.create_overlay_image(
+                            caption_text=seg_caption,
+                            hook_title=seg_hook,
+                            width=w,
+                            height=h,
+                            mode=mode
+                        )
+                        if brand:
+                            if (w, h) not in watermark_cache:
+                                watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
+                            merged = Image.fromarray(overlay_img_arr).convert("RGBA")
+                            merged.alpha_composite(watermark_cache[(w, h)])
+                            overlay_img_arr = np.array(merged)
+                        sub_clip = ImageClip(overlay_img_arr, ismask=False).set_start(seg_start).set_duration(seg_dur)
+                        opened_clips.append(sub_clip)
+                        layers.append(sub_clip)
                     # 비디오 위에 오버레이 클립 합성
-                    synced_video = CompositeVideoClip([synced_video, sub_clip])
+                    synced_video = CompositeVideoClip(layers).set_duration(scene_target_duration)
 
                 # 5. 오디오 결합 (오디오가 완전히 끝난 뒤에도 화면이 0.3~0.5초간 머물도록 비디오 길이에 맞춤)
                 synced_video = synced_video.set_audio(audio_clip)
@@ -488,3 +490,46 @@ class AdCompositor:
                     c.close()
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------- 자막 줄바꿈: 의미 덩어리 점수
+_PARTICLES = ("에서", "으로", "에게", "까지", "부터", "처럼", "이랑", "은", "는", "이", "가", "을", "를", "에", "도", "로", "랑", "와", "과", "의", "만")
+_CLAUSE_ENDS = ("는데", "거든요", "지만", "니까", "면서", "는데요", "고요", "어서", "아서", "해서", "하고", "면", "고", "서", "며")
+_AUX_HEADS = ("있", "없", "않", "싶", "주", "줘", "버", "놓", "두", "보", "봐", "봤", "드")
+_AUX_PREV_ENDS = ("고", "어", "아", "여", "게", "지", "해", "워")
+_ADNOMINAL_ENDS = ("한", "던", "운", "된", "인", "할", "볼", "갈", "올", "될", "낼", "을")
+# 구를 닫는 1음절 의존명사·축약 ('대박인 건 / ~', '나쁠 땐 / ~') - 1음절이어도 뒤에서 끊기 좋은 자리
+_PHRASE_CLOSERS = ("건", "게", "데", "땐", "걸", "거", "곳", "때")
+EXTRA_LINE_COST = 1.3
+
+
+def _core(word: str) -> str:
+    """문장부호를 떼고, 끝 조사를 하나 뗀 어간 (예: '뷰가' → '뷰', '것도' → '것')"""
+    w = re.sub(r"[^\w]", "", word)
+    for p in _PARTICLES:
+        if len(w) > len(p) and w.endswith(p):
+            return w[: -len(p)]
+    return w
+
+
+def break_penalty(prev: str, nxt: str) -> float:
+    """prev 뒤에서 줄을 바꿀 때의 감점 (음수 = 끊기 좋은 자리)"""
+    pen = 0.0
+    p = re.sub(r"[^\w]", "", prev)
+    if p in _PHRASE_CLOSERS:
+        pen -= 0.4          # '대박인 건 / 객실 침구가': 구가 닫히는 자리
+    elif len(p) == 1:
+        pen += 1.5          # '안 / 가보면', '더 / 좋아요': 1음절 부사·관형사는 뒤 말에 붙음
+    if len(_core(nxt)) == 1:
+        pen += 1.2          # '바다 / 뷰가', '실내 / 풀로', '좋은 / 건': 1음절 명사는 앞 말과 한 덩어리
+    if p.endswith(_AUX_PREV_ENDS) and nxt.startswith(_AUX_HEADS):
+        pen += 1.0          # '보고 / 있으면', '들어가 / 보면': 본용언 + 보조용언
+    if len(p) >= 2 and p.endswith(_ADNOMINAL_ENDS):
+        pen += 0.6          # '완벽한 / 뷰', '볼 / 수': 꾸미는 말과 꾸밈 받는 말
+    if prev.rstrip().endswith((",", ".", "!", "?")):
+        pen -= 0.8          # 쉼표·문장부호 뒤는 숨 쉬는 자리
+    elif p.endswith(_CLAUSE_ENDS):
+        pen -= 0.6          # '~는데 / ~', '~고 / ~': 절이 끝나는 자리
+    elif p.endswith(_PARTICLES) and len(p) >= 3:
+        pen -= 0.3          # '수영장은 / ~', '바다에서 / ~': 명사구가 끝나는 자리
+    return pen

@@ -34,6 +34,36 @@ KB_PAN_ZOOM = 1.06          # 패닝 중 함께 밀고 들어가는 줌 (평면 
 KB_PAN_MARGIN_X = 1.32      # 좌우 패닝 이동 폭 (프레임 폭 대비 원본 여유)
 KB_PAN_MARGIN_Y = 1.25      # 상하 패닝 이동 폭
 
+# 씬 1 후킹 단독 노출 구간: 후킹 헤드라인만 화면에 띄우는 최소 시간 (그 뒤 서브 문장 자막·음성)
+HOOK_SOLO_SEC = 1.5
+HOOK_GAP_SEC = 0.15         # 후킹 음성이 1.5초보다 길면 끝나고 이만큼 쉬고 서브 문장 시작
+HOOK_RATE = "+25%"          # 후킹은 짧고 빠르게 (기본 나레이션 +12%보다 빠름)
+# Edge-TTS 결과의 앞(약 0.2초)·뒤(약 0.85초) 무음 → 씬마다 1초 넘는 공백이 생겨 이야기가 끊겨 들림. 이만큼만 남기고 잘라냄
+TTS_KEEP_LEAD_SEC = 0.05
+TTS_KEEP_TAIL_SEC = 0.12
+# Edge-TTS가 가끔 앞부분만 담긴 잘린 파일(예: 26자 대사에 0.36초)을 정상 응답처럼 돌려줌 → 글자 수 대비 너무 짧으면 재시도
+TTS_MIN_SEC_PER_CHAR = 0.06
+TTS_RETRIES = 2
+
+
+def tts_too_short(text: str, seconds: Optional[float]) -> bool:
+    chars = len(re.sub(r"[\s\W_]", "", text or ""))
+    return chars >= 4 and (seconds or 0.0) < max(0.6, chars * TTS_MIN_SEC_PER_CHAR)
+
+
+def trim_silence(src: str, dst: str) -> str:
+    """앞뒤 무음 제거 (-40dB 기준, 앞 TTS_KEEP_LEAD_SEC·뒤 TTS_KEEP_TAIL_SEC만 남김). 실패하면 원본 복사"""
+    th = "-40dB"
+    af = (f"silenceremove=start_periods=1:start_threshold={th}:start_silence={TTS_KEEP_LEAD_SEC},areverse,"
+          f"silenceremove=start_periods=1:start_threshold={th}:start_silence={TTS_KEEP_TAIL_SEC},areverse")
+    res = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", src, "-af", af,
+                          "-c:a", "libmp3lame", "-q:a", "2", dst], capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    if res.returncode != 0 or not os.path.exists(dst) or os.path.getsize(dst) < 500:
+        logger.warning(f"무음 제거 실패, 원본 사용 ({src}): {res.stderr[-200:]}")
+        import shutil
+        shutil.copyfile(src, dst)
+    return dst
+
 
 def kb_ease(t: float) -> float:
     """ease-out (2차): 시작 속도가 가장 빠르고 끝에서 안착 → 씬 시작 순간부터 움직임이 보임"""
@@ -348,36 +378,69 @@ class AssetGenerator:
     # 2. 오디오 생성 (Google TTS + 성우 다변화 + 무음 모드 제어)
     # -------------------------------------------------------------
     def generate_voice(self, scene: Dict[str, Any], force: bool = False) -> str:
-        """gTTS 기반 음성 합성 후 성우 프로필(피치/템포) 변환 적용 또는 무음 모드 생성"""
+        """
+        Edge-TTS 나레이션 (또는 무음/mock). 실사 모드(travel/owner) 씬 1은 '후킹 헤드라인 → 서브 문장' 2단 음성:
+        후킹을 먼저 읽고(최소 HOOK_SOLO_SEC초 구간) 이어서 서브 문장을 읽어, 화면 자막도 같은 시점에 바뀌게 합니다.
+        경계 시점은 scene['hook_sec']에 기록 (컴포지터가 후킹 자막 → 서브 자막 전환에 사용)
+        """
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp3")
+        hook = self._spoken_hook(scene)
 
-        if not force and self.is_cached(out_path):
-            logger.info(f"[Cache Hit] 씬 {scene_num} 오디오 이미 존재: {out_path}")
-            return out_path
-
-        # 1. 무음 모드 처리 (자막 전용 / 외부 음원 결합용)
         if self.audio_mode == "silent":
-            dur = float(scene.get("duration_sec", 3.0))
+            # 무음 모드: 소리는 없지만 자막 전환 시점은 동일하게 유지
+            if hook:
+                scene["hook_sec"] = HOOK_SOLO_SEC
+            if not force and self.is_cached(out_path):
+                return out_path
+            dur = float(scene.get("duration_sec", 3.0)) + (HOOK_SOLO_SEC if hook else 0.0)
             self._create_silent_audio(dur, out_path)
             logger.info(f"[Silent Mode] 씬 {scene_num} 무음 오디오 생성 완료 ({dur:.2f}초): {out_path}")
             return out_path
 
-        raw_voiceover = scene.get("voiceover", "")
-        actor_info = VOICE_ACTOR_PROFILES.get(self.voice_actor, VOICE_ACTOR_PROFILES["female_20s"])
-        
-        # Edge-TTS 파라미터 적용:
-        # - rate="+12%" (기본 속도보다 약간 빠르게 조정하여 지루함 제거)
-        # - pitch="+3Hz" (발랄한 톤앤매너 구현)
-        # - 여성 보이스: 'ko-KR-SunHiNeural' 강제
-        # - 남성 보이스: 'ko-KR-InJoonNeural' 매핑
-        rate = actor_info.get("rate", "+12%")
-        pitch = actor_info.get("pitch", "+3Hz")
+        if not hook:
+            if not force and self.is_cached(out_path):
+                logger.info(f"[Cache Hit] 씬 {scene_num} 오디오 이미 존재: {out_path}")
+                return out_path
+            self._synthesize(scene.get("voiceover", ""), out_path, scene, force)
+            return out_path
 
-        logger.info(
-            f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor}, Rate={rate}, Pitch={pitch}): "
-            f"'{raw_voiceover}'"
-        )
+        hook_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_hook.mp3")
+        body_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_body.mp3")
+        if force or not (self.is_cached(out_path) and self.is_cached(hook_path)):
+            self._synthesize(hook, hook_path, {**scene, "duration_sec": 1.2}, force, rate=HOOK_RATE)
+            self._synthesize(scene.get("voiceover", ""), body_path, scene, force)
+            hook_sec = max(HOOK_SOLO_SEC, (_audio_seconds(hook_path) or 0.0) + HOOK_GAP_SEC)
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            fmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            res = subprocess.run([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", hook_path, "-i", body_path,
+                                  "-filter_complex", f"[0:a]{fmt},apad=whole_dur={hook_sec:.3f}[h];[1:a]{fmt}[b];"
+                                                     f"[h][b]concat=n=2:v=0:a=1[a]",
+                                  "-map", "[a]", "-c:a", "libmp3lame", "-q:a", "2", out_path],
+                                 capture_output=True, text=True, encoding="utf-8", errors="ignore")
+            if res.returncode != 0:
+                raise RuntimeError(f"씬 {scene_num} 후킹+서브 음성 결합 실패: {res.stderr[-300:]}")
+            logger.info(f"씬 {scene_num} 2단 음성: 후킹 '{hook}' ({hook_sec:.2f}초) → 서브 '{scene.get('voiceover', '')}'")
+        else:
+            hook_sec = max(HOOK_SOLO_SEC, (_audio_seconds(hook_path) or 0.0) + HOOK_GAP_SEC)
+            logger.info(f"[Cache Hit] 씬 {scene_num} 2단 음성 이미 존재 (후킹 {hook_sec:.2f}초): {out_path}")
+        scene["hook_sec"] = round(hook_sec, 2)
+        return out_path
+
+    def _spoken_hook(self, scene: Dict[str, Any]) -> str:
+        """씬 1 후킹 헤드라인을 먼저 읽을지 (실사 모드에서 hook_title이 있을 때만. 커머스는 기존 상단 후킹 바 유지)"""
+        if self.mode not in REAL_MEDIA_MODES:
+            return ""
+        return str(scene.get("hook_title") or "").strip()
+
+    def _synthesize(self, text: str, out_path: str, scene: Dict[str, Any], force: bool = False,
+                    rate: Optional[str] = None) -> str:
+        scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
+        actor_info = VOICE_ACTOR_PROFILES.get(self.voice_actor, VOICE_ACTOR_PROFILES["female_20s"])
+        # Edge-TTS 파라미터: rate="+12%"(지루함 제거), pitch="+3Hz"(발랄한 톤), 여성 SunHi / 남성 InJoon
+        rate = rate or actor_info.get("rate", "+12%")
+        pitch = actor_info.get("pitch", "+3Hz")
+        logger.info(f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor}, Rate={rate}, Pitch={pitch}): '{text}'")
 
         if self.mock:
             duration_sec = float(scene.get("duration_sec", 2.5))
@@ -387,21 +450,22 @@ class AssetGenerator:
 
         from core.tts import generate_speech
         try:
-            generate_speech(
-                text=raw_voiceover,
-                output_path=out_path,
-                voice_actor=self.voice_actor,
-                rate=rate,
-                pitch=pitch,
-                force=force
-            )
-            logger.info(f"씬 {scene_num} Edge-TTS 음성 생성 완료 -> {out_path}")
-            return out_path
+            raw_path = os.path.splitext(out_path)[0] + ".raw.mp3"
+            for attempt in range(TTS_RETRIES + 1):
+                generate_speech(text=text, output_path=raw_path, voice_actor=self.voice_actor, rate=rate, pitch=pitch, force=True)
+                raw_sec = _audio_seconds(raw_path)
+                if not tts_too_short(text, raw_sec):
+                    break
+                logger.warning(f"씬 {scene_num} Edge-TTS 잘린 응답 ({raw_sec or 0:.2f}초, {len(text)}자) → 재시도 {attempt + 1}/{TTS_RETRIES}")
+            else:
+                raise RuntimeError(f"Edge-TTS가 {TTS_RETRIES + 1}회 연속 잘린 음성을 반환 ('{text}')")
+            trim_silence(raw_path, out_path)
+            logger.info(f"씬 {scene_num} Edge-TTS 음성 생성 완료 (앞뒤 무음 제거: {_audio_seconds(raw_path) or 0:.2f}초 → "
+                        f"{_audio_seconds(out_path) or 0:.2f}초) -> {out_path}")
         except Exception as e:
             logger.warning(f"씬 {scene_num} Edge-TTS 음성 생성 실패: {e}. 더미 오디오로 안전 복구합니다.")
-            duration_sec = float(scene.get("duration_sec", 2.5))
-            self._create_mock_audio(duration_sec, out_path)
-            return out_path
+            self._create_mock_audio(float(scene.get("duration_sec", 2.5)), out_path)
+        return out_path
 
     generate_audio = generate_voice
 
@@ -721,7 +785,8 @@ class AssetGenerator:
                 "audio_path": audio_path,
                 "video_path": video_path,
                 "caption": scene.get("caption") or scene.get("voiceover", ""),
-                "hook_title": scene.get("hook_title", "")
+                "hook_title": scene.get("hook_title", ""),
+                "hook_sec": scene.get("hook_sec"),
             })
             logger.info(f"씬 {s_num} 에셋 준비 완료.\n")
 

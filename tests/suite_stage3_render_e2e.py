@@ -107,7 +107,8 @@ final = comp.assemble_ad(manifest, output_filename="final.mp4", fps=24, mode="tr
 elapsed = time.time() - t0
 
 info = probe_media(final)
-scene_total = sum(2.5 + 0.2 for _ in scenes[:-1]) + 2.5 + 1.0
+# 씬 1은 후킹 헤드라인을 먼저 읽는 구간(hook_sec)이 앞에 붙음
+scene_total = sum(2.5 + 0.2 for _ in scenes[:-1]) + 2.5 + 1.0 + float(manifest[0].get("hook_sec") or 0)
 expected = scene_total + brand.end_card.duration_sec
 check(final.startswith(job.final_dir) and os.path.exists(final), f"최종 영상이 job/final 안에 생성: {os.path.relpath(final, JOBS_ROOT)}")
 check((info.width, info.height) == (1080, 1920) and info.has_audio, "최종 영상 1080x1920 + 나레이션 오디오")

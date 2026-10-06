@@ -1,4 +1,4 @@
-"""렌더 시각 요소: 하단 단일 자막 블록(위치·다크 필), 커머스 레이아웃 유지, Ken Burns 줌 폭·속도·나레이션 길이 연동"""
+"""렌더 시각 요소: 하단 자막(위치·배경 박스 없음·외곽선+그림자), 씬 1 후킹→서브 시간차, 커머스 레이아웃 유지, Ken Burns"""
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _support import ROOT, fixture, tmp, live_skip, finish  # noqa: E402  (레포 루트로 chdir + sys.path 설정)
@@ -11,8 +11,8 @@ import imageio_ffmpeg
 import numpy as np
 from PIL import Image, ImageDraw
 
-from core.asset_generator import KB_ZOOM, AssetGenerator, _audio_seconds, kb_ease
-from core.compositor import CAPTION_BLOCK_BOTTOM, AdCompositor
+from core.asset_generator import HOOK_SOLO_SEC, KB_ZOOM, AssetGenerator, _audio_seconds, kb_ease
+from core.compositor import CAPTION_CENTER_Y, CAPTION_MAX_WIDTH, AdCompositor
 
 fails = 0
 
@@ -37,21 +37,52 @@ def alpha_rows(arr, min_alpha=100):
 # ---------------------------------------------------------------- 1. 자막 블록 (travel/owner)
 hook = comp.create_overlay_image("수영장이랑 바다 경계가 그냥 사라집니다", "우리나라 손꼽히는 인피니티풀", W, H, mode="travel")
 cap = comp.create_overlay_image("침대에 누워서 바로 일출 직관 가능한 룸 컨디션", "", W, H, mode="owner")
-top_h, bot_h = alpha_rows(hook)
-top_c, bot_c = alpha_rows(cap)
-check(bot_h <= CAPTION_BLOCK_BOTTOM + 0.02 and bot_c <= CAPTION_BLOCK_BOTTOM + 0.02 and top_h > 0.45 and top_c > 0.6,
-      f"씬 1(헤드라인+자막) {top_h:.2f}~{bot_h:.2f}, 일반 씬 {top_c:.2f}~{bot_c:.2f}: 중앙~하단 한 블록, 하단 25% UI 영역 침범 없음")
-mid_c = (top_c + bot_c) / 2
-check(0.62 <= mid_c <= 0.72, f"일반 씬 자막 중심 {mid_c:.2f} = 화면 하단 30~35% 지점")
-yellow = (hook[:, :, 0] > 230) & (hook[:, :, 1] > 190) & (hook[:, :, 2] < 60) & (hook[:, :, 3] > 200)
+hook_only = comp.create_overlay_image(None, "국내 손꼽히는 끝판왕 오션뷰 풀", W, H, mode="travel")
+long_cap = comp.create_overlay_image("날씨 쌀쌀할 땐 통유리 실내 풀로 쏙 들어가면 끝납니다", None, W, H, mode="travel")
+for name, arr in (("후킹 단독", hook_only), ("서브 자막", cap), ("긴 자막", long_cap)):
+    t_, b_ = alpha_rows(arr)
+    cols = np.where(arr[:, :, 3].max(axis=0) >= 100)[0] / W
+    check(0.48 <= (t_ + b_) / 2 <= 0.52 and b_ < 0.65 and cols.min() >= 0.12 and cols.max() <= 0.88,
+          f"{name}: 세로 중심 {(t_ + b_) / 2:.2f} (48~52%), 아래 끝 {b_:.2f} < 쇼츠 하단 UI(약 65%~), 가로 {cols.min():.2f}~{cols.max():.2f} (우측 버튼 열 회피)")
+yellow = (hook_only[:, :, 0] > 230) & (hook_only[:, :, 1] > 190) & (hook_only[:, :, 2] < 60) & (hook_only[:, :, 3] > 200)
 ys = np.where(yellow.any(axis=1))[0] / H
-check(len(ys) and ys.min() > 0.5 and not ((cap[:, :, 0] > 230) & (cap[:, :, 2] < 60) & (cap[:, :, 3] > 200)).any(),
-      f"노란 후킹 헤드라인은 자막 블록 안({ys.min():.2f}~)에만, 상단 별도 배너 없음")
-# 다크 필: 글자 위 여백(패딩)에도 반투명 어두운 배경이 깔려 있어야 밝은 배경에서 읽힘
-px = cap[int(top_c * H) + 8, W // 2]
-shadow_tail = alpha_rows(cap, min_alpha=1)[1]
-check(130 <= px[3] <= 200 and px[:3].max() < 40 and shadow_tail < 0.8,
-      f"자막 뒤 반투명 다크 필 (alpha {px[3]}, RGB {tuple(int(v) for v in px[:3])}), 그림자 끝 {shadow_tail:.2f}")
+check(len(ys) and ys.min() > 0.4 and not ((cap[:, :, 0] > 230) & (cap[:, :, 2] < 60) & (cap[:, :, 3] > 200)).any(),
+      f"노란 후킹 헤드라인은 중앙({ys.min():.2f}~)에만, 상단 별도 배너 없음")
+# 배경 박스 없음: 글자 줄 사이 빈 공간·좌우 바깥은 투명, 글자 = 흰 본체 + 검은 외곽선 + 블러 그림자
+a = cap[:, :, 3]
+rows = np.where(a.max(axis=1) >= 200)[0]
+row_band = cap[rows.min():rows.max() + 1]
+cols = np.where(row_band[:, :, 3].max(axis=0) >= 200)[0]
+outside = np.concatenate([row_band[:, :max(cols.min() - 40, 1), 3].ravel(), row_band[:, cols.max() + 40:, 3].ravel()])
+opaque = cap[a >= 250][:, :3]
+semi = cap[(a > 20) & (a < 200)][:, :3]
+check(outside.max() == 0 and (opaque.min(axis=1) > 240).any() and (opaque.max(axis=1) < 30).any()
+      and len(semi) and semi.max(axis=1).mean() < 40,
+      "자막 배경 박스 제거: 글자 바깥 완전 투명, 흰 글자 + 검은 외곽선 + 반투명 검은 그림자")
+
+# 줄바꿈: 어절 안 절단 없음 + 의미 덩어리 유지 (실측 '수영장 안 / 가보면', '바다 / 뷰가' 재발 방지)
+from PIL import ImageFont
+from core.compositor import CAPTION_FONT_RATIO, break_penalty
+_d = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+_f = ImageFont.truetype(comp.font_path, int(W * CAPTION_FONT_RATIO))
+wrap = lambda t: comp._wrap_text(t, _d, _f, int(W * CAPTION_MAX_WIDTH))
+samples = {
+    "솔직히 오자마자 수영장 안 가보면 손해거든요": ("안 가보면",),
+    "여기 오시면 바다랑 연결된 특급 바다 뷰가 펼쳐져요": ("바다 뷰가",),
+    "근데 진짜 대박인 건 객실 침구가 대박 편해요": ("객실 침구가",),
+    "침대에 누워서 바다 보고 있으면 시간 가는 줄 몰라요": ("보고 있으면",),
+    "날씨 나쁠 땐 통유리 실내 풀로 들어가면 돼요": ("실내 풀로",),
+}
+bad = {}
+for text, keep in samples.items():
+    lines = wrap(text)
+    if " ".join(lines) != text or not all(any(k in ln for ln in lines) for k in keep):
+        bad[text] = lines
+check(not bad, f"자막 줄바꿈: 어절 보존 + 의미 덩어리('안 가보면'·'바다 뷰가'·'보고 있으면') 한 줄 유지 {bad or ''}")
+check(break_penalty("안", "가보면") > 1 and break_penalty("바다", "뷰가") > 1 and break_penalty("좋은데,", "날씨") < 0
+      and break_penalty("건", "객실") < 0, "끊기 점수: 1음절 부사 뒤·1음절 명사 앞 감점, 쉼표·'~건' 뒤 가점")
+check(all(len(wrap(t)) <= 3 for t in samples) and wrap("숙소 정보는 댓글에 여행 남겨주세요!") == ["숙소 정보는 댓글에", "여행 남겨주세요!"],
+      "최대 3줄, 균형 있는 2줄 분할")
 
 # 커머스 모드는 기존 레이아웃 유지 (씬 2 제품 누끼가 62% 지점이라 하단 블록으로 옮기지 않음)
 ch = comp.create_overlay_image("자막", "아직도 건조함 참으세요?", W, H, mode="commerce")
@@ -113,6 +144,72 @@ os.utime(voice, None)
 gen._create_mock_audio(3.0, voice)
 n2 = len(frames(gen.generate_video(scene, src)))
 check(n2 > n, "나레이션이 바뀌면 캐시 무시하고 모션 클립 재생성")
+
+# ---------------------------------------------------------------- 2-1. TTS 앞뒤 무음 제거 (씬 사이 1초 넘는 공백 방지)
+import subprocess
+from core.asset_generator import TTS_KEEP_TAIL_SEC, trim_silence
+padded = os.path.join(work, "padded.mp3")
+subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=2",
+                "-af", "adelay=200|200,apad=pad_dur=0.85", "-c:a", "libmp3lame", padded], check=True)
+trimmed = trim_silence(padded, os.path.join(work, "trimmed.mp3"))
+before, after = _audio_seconds(padded), _audio_seconds(trimmed)
+check(abs(before - 3.05) < 0.1 and 2.0 <= after <= 2.0 + 0.05 + TTS_KEEP_TAIL_SEC + 0.08,
+      f"Edge-TTS식 앞 0.2초·뒤 0.85초 무음 제거: {before:.2f}초 → {after:.2f}초 (말소리 2.0초는 보존)")
+
+# ---------------------------------------------------------------- 2-2. Edge-TTS 잘린 응답 재시도
+import core.asset_generator as ag
+import core.tts as tts_mod
+from core.asset_generator import tts_too_short
+check(tts_too_short("근데 진짜 대박인 건 객실에서도 오션뷰가 쏟아지고,", 0.36) and not tts_too_short("근데 진짜 대박인 건 객실에서도 오션뷰가 쏟아지고,", 3.9)
+      and not tts_too_short("네!", 0.3), "잘린 TTS 판정: 22글자에 0.36초 → 잘림, 3.9초 → 정상, 짧은 감탄사는 예외")
+_calls = []
+
+
+def _flaky_speech(text, output_path, **kw):
+    _calls.append(1)
+    gen._create_mock_audio(0.3 if len(_calls) == 1 else 2.5, output_path)   # 첫 응답만 잘린 파일
+    return output_path
+
+
+_orig_speech, tts_mod.generate_speech = tts_mod.generate_speech, _flaky_speech
+real_gen = AssetGenerator(cache_dir=os.path.join(work, "flaky"), mode="travel")
+fixed = real_gen._synthesize("근데 진짜 대박인 건 객실에서도 오션뷰가 쏟아지고,", os.path.join(work, "flaky", "s.mp3"), {"scene_index": 4})
+tts_mod.generate_speech = _orig_speech
+check(len(_calls) == 2 and (_audio_seconds(fixed) or 0) > 2.0, f"첫 응답이 잘리면 재시도해 정상 음성 확보 (호출 {len(_calls)}회)")
+
+# ---------------------------------------------------------------- 3. 씬 1: 후킹 먼저 읽고 → 서브 문장 (음성·자막 시간차)
+s1 = {"scene_index": 1, "duration_sec": 2.0, "hook_title": "국내 손꼽히는 끝판왕 오션뷰 풀",
+      "voiceover": "바다랑 수영장이 그냥 이어져 있거든요", "video_motion_prompt_en": "zoom_in"}
+v1 = gen.generate_voice(s1, force=True)
+v1_sec = _audio_seconds(v1)
+check(s1.get("hook_sec") == HOOK_SOLO_SEC and abs(v1_sec - (HOOK_SOLO_SEC + 2.0)) < 0.15,
+      f"씬 1 2단 음성: 후킹 {s1.get('hook_sec')}초 + 서브 2.0초 = {v1_sec:.2f}초")
+s2 = {"scene_index": 2, "duration_sec": 2.0, "hook_title": "", "voiceover": "x"}
+gen.generate_voice(s2, force=True)
+check("hook_sec" not in s2, "후킹 없는 씬은 1단 음성")
+cg = AssetGenerator(cache_dir=os.path.join(work, "commerce"), mock=True, mode="commerce")
+s3 = dict(s1)
+s3.pop("hook_sec", None)
+cg.generate_voice(s3, force=True)
+check("hook_sec" not in s3, "커머스는 기존대로 후킹을 읽지 않음 (상단 후킹 바 유지)")
+
+clip1 = gen.generate_video(s1, src, force=True)
+final = comp.assemble_ad([{**s1, "video_path": clip1, "audio_path": v1, "subtitle": s1["voiceover"]}],
+                         output_filename="s1.mp4", mode="travel")
+ff = frames(final)
+
+
+def yellow_px(fr):
+    return int(((fr[:, :, 0] > 220) & (fr[:, :, 1] > 180) & (fr[:, :, 2] < 70)).sum())
+
+
+def white_px(fr):
+    return int((fr[int(H * 0.40):int(H * 0.60)].min(axis=2) > 235).sum())
+
+
+early, late = ff[int(0.8 * 24)], ff[int((HOOK_SOLO_SEC + 0.8) * 24)]
+check(yellow_px(early) > 2000 and yellow_px(late) < 200 and white_px(late) > white_px(early) + 1000,
+      f"합성 결과: 0.8초엔 노란 후킹만({yellow_px(early)}px), {HOOK_SOLO_SEC + 0.8}초엔 후킹 사라지고 흰 서브 자막")
 
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)

@@ -1,6 +1,7 @@
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _support import ROOT, fixture, tmp, live_skip, finish  # noqa: E402  (레포 루트로 chdir + sys.path 설정)
+import json
 import os
 import sys
 
@@ -101,14 +102,84 @@ check(sb[1]["voiceover"] in SAFE_LINES["pool"], f"씬2 근거 없는 '온수' �
 check(sb[3]["voiceover"] != "마운틴 뷰 객실에서 꿀잠 자고 오세요!" and not find_promo_tone(sb[3]["voiceover"]),
       f"씬4 '~오세요' 강요형 → 감각 묘사 문구로 교체: {sb[3]['voiceover']}")
 check(all(not find_promo_tone(s["voiceover"]) for s in sb[:-1]), "CTA 제외 전 씬 홍보 어투 없음")
+from core.script_guard import VO_LIMIT, VO_MAX, strip_brochure_words
+check(strip_brochure_words("고급스러운 라운지에서 여유까지 챙기면 끝납니다.") == "라운지에서 여유까지 챙기면 끝납니다."
+      and strip_brochure_words("세련된 레스토랑 분위기가 진짜 좋은데,") == "레스토랑 분위기가 진짜 좋은데,"
+      and strip_brochure_words("솔직히 여기만 한 데가 없거든요") == "솔직히 여기만 한 데가 없거든요", "브로슈어 수식어(고급스러운·세련된) 제거, 일반 문장은 그대로")
+check(shorten_line("여기 오시면 객실이 깔끔해서 푹 쉬어가기에 진짜 너무 좋은데요,", VO_LIMIT, VO_MAX)[-3:-1] not in ("진짜", "너무")
+      and shorten_line("여기 오시면 객실 깔끔해서 푹 쉬어가기 진짜 좋은데,", VO_LIMIT, VO_MAX).endswith("좋은데,"),
+      "29자는 자르지 않고, 자를 때 '진짜!/너무!'로 끝나지 않음")
+long_story = "근데 진짜 대박인 건 해 질 때 루프탑에서 보는 노을이거든요"
+check(shorten_line("솔직히 여기만 한 데가 없거든요, 진짜로요", VO_LIMIT, VO_MAX) == "솔직히 여기만 한 데가 없거든요, 진짜로요"
+      and len(shorten_line(long_story, VO_LIMIT, VO_MAX)) <= VO_MAX, f"이야기형 대사 길이 상한 {VO_LIMIT}~{VO_MAX}자 (추임새 여유)")
 sys_inst = sent["config"].system_instruction
 user_prompt = sent["contents"][-1]
-check("홍보 어투 전면 금지" in sys_inst and "수영장이랑 바다 경계가 그냥 사라집니다" in sys_inst
-      and "'즐겨보세요', '놓치면 손해입니다'" not in sys_inst and '어미 예시: "즐겨보세요"' not in user_prompt,
-      "프롬프트: 홍보 어미 권장 문구 삭제 + 금지 규칙·감각 묘사 예시 주입")
-check("위아래로 붙어 함께 나갑니다" in user_prompt, "프롬프트: 씬 1 헤드라인과 나레이션을 한 블록으로 이어 쓰도록 지시")
+check("유튜버가 시청자 1명에게 꿀팁 썰 푸는" in sys_inst and "팜플렛·브로슈어 낭독 금지" in sys_inst and "근데 진짜 대박인 건" in sys_inst
+      and "금지 2 (개조식 단문)" in sys_inst and "'즐겨보세요', '놓치면 손해입니다'" not in sys_inst
+      and "사진에 실제로 보이는 공간만 묘사하세요" not in sys_inst and "(~됨, ~임" not in sys_inst,
+      "프롬프트: 유튜버 썰 구어체 + 브로슈어 낭독·홍보 어미·개조식 금지 + 추임새 (사진 묘사 지시 제거)")
+check('"story"' in user_prompt and "story를 순서대로 잘라" in user_prompt and "날씨 쌀쌀할 땐 통유리 실내 풀로" in user_prompt
+      and "15~20자" not in user_prompt and "15~26자" in user_prompt,
+      "프롬프트: 전체 독백(story) 먼저 → 씬별 분할, 씬당 15~26자, 이어지는 예시")
+check("hook_title을 먼저 읽고" in user_prompt, "프롬프트: 씬 1 = 후킹 먼저 읽고 서브 문장 이어 읽기 안내")
 check("침대 추가" not in sb[4]["voiceover"] and not sb[4]["voiceover"].endswith("보!"), f"씬5 '침대 추가' 차단 + 잘림 없음: {sb[4]['voiceover']}")
 check("레스토랑" in sb[5]["voiceover"], f"씬6 비전 확인 레스토랑 대사 유지: {sb[5]['voiceover']}")
 check(sb[-1]["voiceover"] == "숙소 정보는 댓글에 '여행' 남겨주세요!", "엔딩 CTA 고정 유지")
 check(all(s["subtitle"] == s["voiceover"] or s is sb[-1] for s in sb), "자막 = 나레이션 동기화")
-finish(fails)
+
+# 4. 해요체 통일 · 후킹 앵무새 · 화면 무관 주제 (세인트존스 렌더 실측 대본 재현)
+from core.script_guard import to_haeyo, has_hapsyo, is_hook_echo, find_off_scene_topic
+conv = {"실내 풀도 뷰가 장난 아닙니다.": "실내 풀도 뷰가 장난 아니에요.", "바다가 바로 보입니다.": "바다가 바로 보여요.",
+        "쏙 들어가면 끝납니다.": "쏙 들어가면 끝나요.", "힐링 끝입니다.": "힐링 끝이에요.", "그 바다입니다": "그 바다예요",
+        "말할 것도 없습니다": "말할 것도 없어요", "정말 편합니다, 다 됩니다": "정말 편해요, 다 돼요", "챙겨 줍니다": "챙겨 줘요",
+        "노을이 옵니다": "노을이 와요", "좋습니다": "좋아요", "작년에 갔습니다": "작년에 갔어요", "있었습니다": "있었어요",
+        "노을이 아름답습니다": "노을이 아름다워요", "바다가 느껴집니다": "바다가 느껴져요", "솔직히 없거든요": "솔직히 없거든요"}
+bad = {k: to_haeyo(k) for k, v in conv.items() if to_haeyo(k) != v}
+check(not bad, f"합쇼체 → 해요체 15종 변환 (아닙니다·보입니다·끝납니다·입니다·습니다·ㅂ 불규칙) {bad or ''}")
+check(is_hook_echo("국내 손꼽히는 역대급풀", "우리나라에서 손꼽히는 역대급 오션뷰 풀이거든요.")
+      and not is_hook_echo("국내 손꼽히는 역대급 풀", "수영장이 바다랑 그냥 맞닿아 있어서 뷰가 미쳤거든요."),
+      "후킹 앵무새 반복 감지 (손꼽히는·역대급 반복 → 차단, 구체 감탄으로 받으면 통과)")
+bedroom = "객실 사진: bed, room_interior | Clean and well-lit hotel twin bedroom"
+check(find_off_scene_topic("댕댕이 전용 용품도 풀세트로 챙겨줘서 정말 편하고,", [bedroom]) == "반려견"
+      and find_off_scene_topic("댕댕이랑 같이 누워도 넉넉하고,", ["객실 사진: bed, pet | dog bed by the window"]) is None
+      and find_off_scene_topic("저녁엔 바베큐 파티가 열리는데,", [bedroom, "부대시설 사진: bbq | grill terrace"]) is None,
+      "화면 무관 주제: 침실 사진에 '댕댕이' 차단, 반려견 사진이면 허용, 다음 씬 사진으로 넘겨주는 말은 허용")
+
+class StJohnsResp:
+    text = json.dumps({"story": "…", "scenes": [
+        {"voiceover": "우리나라에서 손꼽히는 역대급 오션뷰 풀이거든요.", "hook_title": "국내 손꼽히는 역대급풀"},
+        {"voiceover": "솔직히 체크인하자마자 수영장 안 가면 손해거든요."},
+        {"voiceover": "근데 진짜 대박인 건 실내 풀도 뷰가 장난 아닙니다."},
+        {"voiceover": "댕댕이 전용 용품도 풀세트로 챙겨줘서 정말 편하고,"},
+        {"voiceover": "객실 슬라이딩 도어만 열어도 바다가 바로 보입니다."},
+        {"voiceover": "세련된 라운지 다이닝까지 갖춰서 말할 것도 없어요."},
+        {"voiceover": "x"}]}, ensure_ascii=False)
+
+
+class StJohnsModels:
+    def generate_content(self, **kw):
+        sent.update(kw)
+        return StJohnsResp()
+
+
+an.genai.Client = lambda api_key=None: type("C", (), {"models": StJohnsModels()})()
+sj_notes = ["수영장 사진: infinity_pool, outdoor_pool, ocean_view | infinity pool with ocean horizon",
+            "수영장 사진: outdoor_pool, infinity_pool, ocean_view | rooftop infinity pool",
+            "수영장 사진: indoor_pool, ocean_view | glass-enclosed indoor pool with ocean view",
+            "객실 사진: bed, room_interior | Clean and well-lit hotel twin bedroom",
+            "객실 사진: bed, room_interior, ocean_view | guest room with ocean view",
+            "부대시설 사진: restaurant, lounge | stylish modern restaurant dining", "전경·뷰 사진: ocean_view, terrace | balcony"]
+sj = plan_storyboard(product_name="세인트존스 호텔", usp="반려견 동반 가능, 펫 용품 제공", mode="travel", api_key="fake",
+                     photo_inventory={"pool": 3, "bedroom": 2, "facility": 1, "view": 1}, slot_photo_notes=sj_notes, force=True)
+for s_ in sj:
+    print(f"     세인트존스 씬{s_['scene_index']}: {s_['voiceover']}")
+check(not is_hook_echo(sj[0]["hook_title"], sj[0]["voiceover"]), f"씬 1 앵무새 반복 → 교체: {sj[0]['voiceover']}")
+check(sj[2]["voiceover"] == "근데 진짜 대박인 건 실내 풀도 뷰가 장난 아니에요." and sj[4]["voiceover"] == "객실 슬라이딩 도어만 열어도 바다가 바로 보여요.",
+      "합쇼체 대사는 내용 그대로 해요체로 변환 (교체 아님)")
+check("댕댕" not in sj[3]["voiceover"] and sj[3]["voiceover"] in SAFE_LINES["bedroom"],
+      f"USP에 반려견 정보가 있어도 침실 사진 씬의 '댕댕이 용품' → 객실 문구로 교체: {sj[3]['voiceover']}")
+check(sj[5]["voiceover"].startswith("라운지") and all(not has_hapsyo(s_["voiceover"]) for s_ in sj[:-1]),
+      "브로슈어 수식어 제거 + 전 씬 합쇼체 없음")
+up = sent["contents"][-1]
+check("해요체" in up and "앵무새" in up and "댕댕이 전용 용품" in up and "금지 3 (합쇼체·뉴스체)" in sent["config"].system_instruction,
+      "프롬프트: 해요체 통일·후킹 반복 금지·화면 무관 주제 금지 규칙 주입")

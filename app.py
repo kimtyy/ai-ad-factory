@@ -77,6 +77,10 @@ st.markdown("""<style>
 .st-key-phone_frame{max-width:340px;margin:0 auto;border:3px solid rgba(139,92,246,.45);border-radius:32px;padding:14px 10px;background:#000}
 </style>""", unsafe_allow_html=True)
 
+# 외부 접속(Cloudflare 터널·다른 기기)은 PIN 통과 전까지 아래 앱(작업 폴더 생성·API 호출 포함)을 실행하지 않음
+from ui.auth import require_pin
+require_pin()
+
 # 세션 상태 초기화
 if "storyboard" not in st.session_state:
     st.session_state.storyboard = []

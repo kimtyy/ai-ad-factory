@@ -12,7 +12,8 @@ from google import genai
 from google.genai import types
 
 from core.guardrail import validate_model_call
-from core.script_guard import COPY_TONE_RULES, shorten_line, find_promo_tone, find_unsupported_claim, safe_line_for
+from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_MAX, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
+    find_off_scene_topic, find_promo_tone, find_unsupported_claim, safe_line_for
 from core.radar.hints import HookHints, copies_reference
 
 logger = logging.getLogger("ad_factory.analyzer")
@@ -115,18 +116,19 @@ SCRIPT_STYLE_PRESETS = {
     "info": {
         "name": "📢 정보/후킹형 (홍보·추천 스타일)",
         "instruction": (
-            "📢 [정보·후킹형 (기본 런비 스타일)]:\n"
-            "- 시청자의 호기심(Curiosity Gap)을 극대화하고 숙소의 핵심 비주얼과 특장점을 직격으로 추천하는 타격형 카피로 작성하세요.\n"
-            "- 예시: '호수 뷰가 객실 통창에 그대로 걸려 있음', '한겨울에도 김 모락모락 나는 야외 온수풀', '애들이 수영장에서 나올 생각을 안 함'"
+            "📢 [꿀팁 전수형 (여행 유튜버 스타일)]:\n"
+            "- 여행 유튜버가 시청자 한 명에게 '여기 이렇게 즐기면 된다'는 꿀팁을 알려주듯 호기심(Curiosity Gap)을 끌고 가는 썰로 작성하세요.\n"
+            "- 예시 흐름: '여기 오시면 솔직히 체크인하자마자 수영장부터 가게 되거든요.' → '근데 진짜 대박인 건 해 질 때예요.'"
         )
     },
     "experience": {
         "name": "✈️ 1인칭 경험형 (생생한 투숙 후기 스타일)",
         "instruction": (
             "✈️ [1인칭 경험/체류 후기형 (인스타/쇼츠 브이로그 감성)]:\n"
-            "- 여행자가 숙소에 직접 머무르며 온몸으로 체감한 1인칭 리얼 투숙 후기 톤앤매너로 작성하세요.\n"
-            "- 예시: '로비 들어서자마자 통창 뷰 보고 입이 떡 벌어졌어요', '김 모락모락 나는 온수풀에 누워있으니 피로가 싹 풀림', '체크아웃하기 진짜 싫었던 침구 맛집!'\n"
-            "- 진정성 있는 1인칭 개인 경험과 감탄을 살리되, 씬당 15~20자 이내의 간결한 구어체를 준수하세요."
+            "- 여행자가 숙소에 직접 머무르며 겪은 일을 친구한테 썰 풀듯 1인칭으로 이야기하세요.\n"
+            "- 예시 흐름: '저 여기 진짜 아무 기대 없이 갔거든요.' → '근데 로비 들어가자마자 통창 뷰에 말이 안 나오더라고요.' "
+            "→ '방은 말할 것도 없고요, 체크아웃하기 싫어서 혼났어요.'\n"
+            "- 진정성 있는 1인칭 경험과 감탄을 살리되, 씬당 공백 포함 15~26자 구어체를 지키세요."
         )
     }
 }
@@ -340,8 +342,8 @@ MOCK_TRAVEL_LINES = {
 }
 # 황금 비율 슬롯별 Mock 대사 (같은 역할이 연속돼도 대사가 반복되지 않도록 슬롯 위치별로 구분)
 MOCK_GOLDEN7_LINES = {
-    "info": ["물빛부터 다른 수영장 실화?", "끝없이 이어지는 풀 뷰에 감탄!", "물멍하며 완벽하게 힐링!",
-             "감성 가득한 객실에서 하룻밤!", "창밖으로 펼쳐지는 그림 같은 뷰!", "분위기 끝내주는 공간까지!"],
+    "info": ["물빛부터 진짜 다르거든요", "풀 뷰가 끝없이 이어지는데", "물멍하다 보면 시간이 순삭돼요",
+             "객실도 감성이 가득해서", "창밖 뷰가 그림처럼 펼쳐지고요", "분위기 좋은 공간까지 있어요"],
     "experience": ["수영장 보자마자 입 떡 벌어짐!", "풀 뷰 보면서 사진만 백 장 찍음!", "물멍하다 보니 시간 순삭!",
                    "객실 들어가자마자 감성 폭발!", "창밖 뷰 보다가 늦잠까지 완벽!", "마지막까지 꽉 찬 하루!"],
 }
@@ -513,7 +515,7 @@ def plan_storyboard(
         style_preset = SCRIPT_STYLE_PRESETS.get(script_style, SCRIPT_STYLE_PRESETS["info"])
         style_instruction = style_preset["instruction"]
 
-        # 숙소 제휴 모드: 숙소명 철저 은닉(Curiosity Gap), 템플릿 길이(씬당 15~20자), 사진 에셋 1:1 매칭 (뷔페 언급 금지)
+        # 숙소 제휴 모드: 숙소명 철저 은닉(Curiosity Gap), 유튜버 썰 독백 → 씬별 분할(씬당 15~VO_LIMIT자), 사진 공간 기준 이야기 (뷔페 언급 금지)
         system_instruction = (
             "당신은 인스타그램 릴스, 틱톡, 유튜브 쇼츠에서 수백만 조회수와 폭발적인 댓글 참여율을 이끌어내는 "
             "'대한민국 1등 여행/숙소 숏폼 크리에이티브 디렉터'입니다.\n\n"
@@ -521,14 +523,14 @@ def plan_storyboard(
             "다음 핵심 원칙을 철저히 준수해야 합니다:\n"
             f"1. [선택된 대본 기획 스타일 준수 ({style_preset['name']})]:\n"
             f"   {style_instruction}\n"
-            f"2. [영상 길이 {target_length} 규격 & 씬당 대본 15~20자 초압축 절대 준수]:\n"
-            "   - 각 씬의 voiceover(나레이션)는 반드시 '공백 포함 15~20자 이내'의 간결한 구어체 딱 한 줄로만 작성하세요!\n"
-            f"   - 20자를 초과하면 TTS 재생 시간이 늘어나 전체 영상이 {target_length} 규격을 초과하므로 절대 금지합니다.\n"
-            "   - 문장은 친구에게 비밀 장소를 자랑하듯 감각을 툭 던지는 구어체 평서문으로 쓰세요. "
-            "'~해보세요', '~마세요', '~딱!' 같은 권유·강요형 홍보 어미는 전면 금지입니다 (아래 [카피 톤] 참조).\n"
-            "3. [대본과 실제 사진 에셋의 1:1 시각적 정합성 보장]:\n"
+            f"2. [영상 길이 {target_length} 규격 & 씬당 대본 공백 포함 15~{VO_LIMIT}자]:\n"
+            f"   - 각 씬의 voiceover는 공백 포함 15~{VO_LIMIT}자의 구어체 조각으로 쓰세요. {VO_LIMIT}자를 넘으면 영상이 길어집니다.\n"
+            "   - 먼저 영상 전체 대본(story)을 유튜버가 시청자 한 명에게 썰 푸는 독백 하나로 쓰고, 그것을 순서대로 잘라 씬별 voiceover로 나누세요. "
+            "팜플렛 낭독체·홍보 어미·개조식 단문은 전면 금지입니다 (아래 [대본 톤] 참조).\n"
+            "3. [대본과 실제 사진 에셋의 정합성 - '사진 낭독' 아님]:\n"
             "   - 각 씬은 사용자 프롬프트에 배정된 시각 역할의 '실제 숙소 사진'과 함께 송출됩니다.\n"
-            "   - 대사는 그 씬 사진에 실제로 보이는 공간만 묘사하세요. 확보된 사진 구성과 특장점(USP)에 없는 시설·경관(수영장, 호수, 바다, 라운지 등)을 지어내면 허위광고가 됩니다.\n"
+            "   - 그 씬 대사는 화면 속 공간을 '이야기하는' 문장이어야 합니다(그 공간에서 뭘 하면 좋은지, 어떤 기분인지). 사진에 보이는 걸 나열해 읽지 마세요.\n"
+            "   - 확보된 사진 구성과 특장점(USP)에 없는 시설·경관(수영장, 호수, 바다, 라운지 등)을 지어내면 허위광고가 됩니다.\n"
             "   - 사진에 없는 '조식 뷔페', '식사' 등 허위 정보는 언급하지 마세요.\n"
             "4. [정보 은닉(Curiosity Gap) 절대 원칙 - 숙소명 직접 언급 엄격 금지]:\n"
             f"   - 크롤링된 실제 숙소명/상호명('{product_name}')을 대본 나레이션(voiceover) 및 자막(caption) 어디에도 직접 언급하는 것을 엄격히 금지합니다!\n"
@@ -557,15 +559,18 @@ def plan_storyboard(
         last_i = len(role_plan) - 1
         schema_example = json.dumps({
             "title": "<숙소명이 드러나지 않는 영상 제목>",
+            "story": f"<씬 1~{last_i} voiceover를 순서대로 이어 붙인 전체 독백 (유튜버 썰 풀기 한 단락)>",
             "scenes": [
                 {
                     "scene_index": i + 1,
                     "role": narrative_role_for(i, len(role_plan), r),
-                    "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else f"<{slot_plan[i]['desc']} 사진을 묘사하는 15~20자 대사>",
+                    "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else (
+                        f"<story의 첫 조각: 헤드라인을 받아 썰을 시작 ({slot_plan[i]['desc']} 화면), 15~{VO_LIMIT}자>" if i == 0 else
+                        f"<story의 {i + 1}번째 조각: 앞 조각에서 이어지는 말 ({slot_plan[i]['desc']} 화면), 15~{VO_LIMIT}자>"),
                     "subtitle": TRAVEL_CTA_SUBTITLE if i == last_i else "<voiceover와 동일>",
                     "target_visual_role": r,
                     "visual_keywords": ROLE_KEYWORDS.get(r, []),
-                    "hook_title": "<10~15자 후킹 헤드라인>" if i == 0 else "",
+                    "hook_title": "<8~12자 후킹 헤드라인>" if i == 0 else "",
                     "duration_sec": 2.5,
                     "video_motion_prompt_en": TRAVEL_MOTIONS[i % len(TRAVEL_MOTIONS)],
                 }
@@ -589,22 +594,32 @@ def plan_storyboard(
 - 오디오 모드: {audio_mode}
 
 [대본 선기획 작성 요구사항]
-1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "scenes": [...]}})으로 정확히 출력하세요.
-2. [{target_length} 규격 준수 - 씬당 나레이션 15~20자 이내]:
-   - voiceover는 공백 포함 15~20자 이내의 짧은 구어체 한 문장으로 작성하세요.
-   - '~해보세요', '~마세요', '~딱!', '~딱 좋아요' 어미 금지. 직접 가본 사람이 본 장면·느낀 감각을 말하듯 쓰세요.
-     (예: "수영장이랑 바다 경계가 그냥 사라집니다", "침대에 누워서 바로 일출 직관 가능한 룸 컨디션")
+1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "story": "...", "scenes": [...]}})으로 정확히 출력하세요.
+2. [대본 = 유튜버 썰 하나를 씬별로 자른 것]:
+   - 먼저 'story'에 씬 1~{last_i}에 해당하는 전체 독백을 쓰세요. 유튜버가 시청자 한 명에게 꿀팁을 전수하듯 말하는 100% 구어체입니다.
+   - 그다음 story를 순서대로 잘라 씬 1~{last_i}의 voiceover에 넣으세요 (각 공백 포함 15~{VO_LIMIT}자). voiceover를 이어 붙이면 story와 같아야 합니다.
+   - 추임새('솔직히', '근데 진짜 대박인 건', '여기 오시면', '말할 것도 없고요')를 2번 이상 자연스럽게 섞으세요.
+   - 예 (구조만 참고): "(지역)에서 수영장 하나로 끝내고 싶다? 솔직히 여기만 한 데가 없거든요." → "야외에서 바다 멍 때려도 좋은데,"
+     → "날씨 쌀쌀할 땐 통유리 실내 풀로 쏙 들어가면 끝납니다."
+   - 금지: 사진 낭독체('~가 보여요', '~도 있어서', '고급스러운·세련된 ~'), '~해보세요/~마세요/~딱!' 홍보 어미, '~가능함/~보임/~됨/~임' 개조식,
+     '~입니다/~습니다/~아닙니다' 합쇼체. 어미는 처음부터 끝까지 해요체(~거든요, ~있어요, ~돼요, ~나와요)로 통일하세요.
 3. [씬별 시각 역할은 아래 배정을 그대로 사용 (변경 금지)]:
 {scene_role_lines}
-   - 각 씬의 voiceover는 그 씬에 배정된 사진 종류만 묘사하세요.
-   - '이 씬에 실제로 나갈 사진' 설명이 있는 씬은 그 설명에 있는 것만 묘사하세요. 슬롯 이름보다 실제 사진 설명이 우선입니다.
-     (예: 슬롯이 '자쿠지·스파'여도 실제 사진이 '실내 수영장'이면 실내 수영장을 묘사)
+   - 각 씬의 voiceover는 그 씬 화면에 나오는 공간에 대한 이야기여야 합니다 (화면과 엉뚱한 공간 얘기 금지, 사진 나열 낭독도 금지).
+   - '이 씬에 실제로 나갈 사진' 설명이 있는 씬은 그 설명의 공간을 기준으로 이야기하세요. 슬롯 이름보다 실제 사진 설명이 우선입니다.
+     (예: 슬롯이 '자쿠지·스파'여도 실제 사진이 '실내 수영장'이면 실내 수영장 이야기)
    - 사진 설명과 특장점(USP)에 없는 시설·경관·속성(자쿠지, 온수, 인피니티, 호수, 바다, 조식 등)은 절대 지어내거나 단정하지 마세요.
+   - 특장점(USP)·숙소 정보에 있더라도 그 씬 화면에 안 보이는 주제(반려견 용품, 조식, 키즈, 바베큐, 셔틀 등)는 그 씬 대사에 넣지 마세요.
+     (예: 일반 침실 사진에 '댕댕이 전용 용품' 멘트 금지 - 시청자 몰입이 깨집니다)
 4. [정보 은닉 (Curiosity Gap) 강제]:
    - 크롤링된 숙소명('{product_name}')을 대본 나레이션 및 자막에 직접 언급하는 것을 엄격히 금지합니다.
-5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(10~15자)을 포함하세요! (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소')
-   - 씬 1의 hook_title과 voiceover는 화면 한 곳에 위아래로 붙어 함께 나갑니다. voiceover는 헤드라인을 받아 사진 속 장면으로
-     이어지는 한 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해', '아직도 여기 모르면')로 따로 놀지 않게 하세요.
+5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(공백 포함 8~12자, 읽는 데 2초 이내)을 포함하세요!
+   (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소') 헤드라인은 첫 1.5~2초 동안 단독으로 읽히고 보이므로 짧고 강해야 합니다.
+   - 씬 1은 나레이터가 hook_title을 먼저 읽고(이때 화면엔 헤드라인만), 이어서 voiceover를 읽습니다(이때 화면엔 voiceover 자막만).
+     voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해')는 쓰지 마세요.
+   - 씬 1 voiceover에서 헤드라인 단어를 앵무새처럼 반복하지 마세요. 헤드라인이 던진 말을 바로 구체적인 감탄·이유로 받으세요.
+     (예: 헤드라인 "국내 손꼽히는 역대급 풀" → voiceover "수영장이 바다랑 그냥 맞닿아 있어서 뷰가 미쳤거든요."
+      나쁜 예: "우리나라에서 손꼽히는 역대급 오션뷰 풀이거든요.")
 {hook_hint_block}
 6. 마지막 씬 {num_scenes} (엔딩 CTA 강제):
    - 마지막 씬 voiceover는 반드시 정확히: "{TRAVEL_CTA_VOICEOVER}"
@@ -718,8 +733,10 @@ JSON 출력 스키마 예시:
         
         parsed_json = json.loads(raw_text)
         
+        story = ""
         if isinstance(parsed_json, dict) and "scenes" in parsed_json:
             scenes = parsed_json["scenes"]
+            story = str(parsed_json.get("story") or "").strip()
         elif isinstance(parsed_json, list):
             scenes = parsed_json
         else:
@@ -767,6 +784,11 @@ JSON 출력 스키마 예시:
                 if not sc.get("video_motion_prompt_en"):
                     sc["video_motion_prompt_en"] = TRAVEL_MOTIONS[idx % len(TRAVEL_MOTIONS)]
 
+        # 이야기형 대본 검토용: Gemini가 먼저 쓴 전체 독백을 씬 1에 보관 (씬별 대사는 이를 잘라 쓴 것)
+        if story and scenes:
+            scenes[0]["story"] = story
+            logger.info(f"[대본 전체 독백] {story}")
+
         # 여행 상품 모드: 숙소명 철저 은닉(Curiosity Gap), 뷔페/조식 허위 차단, 15초 규격 초압축, 엔딩 CTA 고정
         if mode == "travel" and scenes:
             # 1. 숙소명 은닉 후처리 가드레일 (대본/자막 내 숙소 상호명 직접 노출 시 자동 감지 및 치환)
@@ -797,9 +819,22 @@ JSON 출력 스키마 예시:
 
                 note = photo_notes[idx] if idx < len(photo_notes) else None
                 if idx < len(scenes) - 1:
-                    claim = find_unsupported_claim(vo, [note], usp)
+                    # 말투 통일: 합쇼체(~입니다/~습니다) → 해요체 (내용·흐름은 유지)
+                    haeyo = to_haeyo(vo)
+                    if haeyo != vo:
+                        logger.info(f"[해요체 통일] 씬 {idx + 1}: '{vo}' → '{haeyo}'")
+                        vo = haeyo
+                    # 이야기형 대본은 다음 씬 공간을 미리 언급하기도 하므로(예: '날씨 쌀쌀할 땐 실내 풀로'), 시설 근거는 이 영상의 전체 사진 + USP 기준
+                    claim = find_unsupported_claim(vo, photo_notes or [note], usp)
                     if claim:
                         logger.info(f"[근거 없는 주장 차단] 씬 {idx + 1}: '{claim}' (대사: {vo}) → 사진 중립 문구로 교체")
+                        vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
+                        replaced += 1
+                    # 화면 무관 주제 난입: 숙소 정보에 있어도 이 씬(과 이어받는 다음 씬) 사진에 없으면 교체 (예: 침실 사진에 '댕댕이 용품')
+                    next_note = photo_notes[idx + 1] if idx + 1 < len(photo_notes) else None
+                    off = find_off_scene_topic(vo, [note, next_note])
+                    if off:
+                        logger.info(f"[화면 무관 주제 차단] 씬 {idx + 1}: '{off}' (대사: {vo}, 사진: {note}) → 사진 중립 문구로 교체")
                         vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
                         replaced += 1
                     hook = sc.get("hook_title") or ""
@@ -822,11 +857,16 @@ JSON 출력 스키마 예시:
                         used = hook_hints.pattern_used(sc.get("hook_pattern_used"))
                         sc["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
                                                    "pattern_template": used["pattern_template"]} if used else None
+                    # 씬 1 앵무새 반복: 후킹을 읽은 직후 같은 단어를 다시 읽으면 늘어짐 → 교체
+                    if idx == 0 and is_hook_echo(sc.get("hook_title", ""), vo):
+                        logger.info(f"[후킹 반복 차단] 헤드라인 '{sc.get('hook_title')}' ≈ 서브 '{vo}' → 사진 중립 문구로 교체")
+                        vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
+                        replaced += 1
 
-                # 3. 템플릿 길이 준수: 씬당 2.5초 기준, 나레이션은 어절 경계에서 15~20자로 (실제 길이는 TTS 길이 기준)
+                # 3. 템플릿 길이 준수: 나레이션은 어절 경계에서 VO_LIMIT자 이내로 (실제 길이는 TTS 길이 기준)
                 sc["duration_sec"] = 2.5
                 if idx < len(scenes) - 1:
-                    vo = shorten_line(vo)
+                    vo = shorten_line(strip_brochure_words(vo), VO_LIMIT, VO_MAX)
                 cap = vo   # 자막 = 나레이션 (앱에서도 동일하게 동기화)
 
                 sc["voiceover"] = vo
