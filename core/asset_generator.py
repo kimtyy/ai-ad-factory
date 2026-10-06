@@ -24,7 +24,7 @@ from core.guardrail import validate_model_call
 from core.media import normalize_ugc_clip, extract_thumbnail
 from core.media.normalize import DEFAULT_TRIM_START
 from core.render.commerce_layout import (COMMERCE_BG_BLUR, COMMERCE_BG_DIM, COMMERCE_BG_ZOOM, COMMERCE_CARD_BOX,
-                                         COMMERCE_CARD_RADIUS, COMMERCE_CARD_ZOOM)
+                                         COMMERCE_CARD_RADIUS, COMMERCE_CARD_ZOOM, shot_crop)
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
@@ -573,22 +573,27 @@ class AssetGenerator:
         out_path: str,
         fps: int = 24,
         motion_type: str = "zoom_in",
-        motion_sec: Optional[float] = None
+        motion_sec: Optional[float] = None,
+        shot: str = "full",
+        product_box=None
     ) -> str:
         """
+        shot: 대표 사진 1장으로 여러 씬을 만들 때의 앵글 (full 전체 / center 중앙 줌인 / top·bottom 디테일, commerce_layout.shot_crop)
         쇼핑 전용 9:16 클립: 흐린 배경(같은 사진) + 중앙~하단 상품 카드(원본 비율 그대로, 잘림 없이) + 카드 안 Ken Burns.
         자막은 컴포지터가 카드 위쪽(COMMERCE_CAPTION_CENTER_Y)에 올리므로 상품을 가리지 않음.
         """
         from PIL import ImageFilter, ImageEnhance
         W, H = 1080, 1920
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
-        img = Image.open(image_path).convert("RGB")
+        full_img = Image.open(image_path).convert("RGB")
+        img = shot_crop(full_img, shot, product_box)          # 카드에 들어갈 앵글 (배경은 원본 전체 사진으로 깔아 같은 상품임을 유지)
         iw, ih = img.size
+        fw, fh = full_img.size
 
         # 배경: 화면을 덮도록(+천천히 확대할 여유) 키운 뒤 크게 흐리고 어둡게
         bw0, bh0 = int(W * COMMERCE_BG_ZOOM), int(H * COMMERCE_BG_ZOOM)
-        cover = max(bw0 / iw, bh0 / ih)
-        bg = img.resize((int(iw * cover) + 1, int(ih * cover) + 1), Image.Resampling.LANCZOS)
+        cover = max(bw0 / fw, bh0 / fh)
+        bg = full_img.resize((int(fw * cover) + 1, int(fh * cover) + 1), Image.Resampling.LANCZOS)
         bg = bg.crop(((bg.width - bw0) // 2, (bg.height - bh0) // 2, (bg.width - bw0) // 2 + bw0, (bg.height - bh0) // 2 + bh0))
         bg = ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(COMMERCE_BG_BLUR))).enhance(COMMERCE_BG_DIM)
         bg_np = np.array(bg)
@@ -702,7 +707,8 @@ class AssetGenerator:
         if self.mode == "commerce":
             # 쇼핑: 상품을 가리지 않는 '상단 자막 + 중앙~하단 상품 카드' 배치
             self._create_product_card_video(image_path=image_path, duration_sec=duration_sec, out_path=out_path, fps=24,
-                                            motion_type=motion_type, motion_sec=motion_sec)
+                                            motion_type=motion_type, motion_sec=motion_sec, shot=scene.get("shot") or "full",
+                                            product_box=scene.get("product_box"))
             logger.info(f"씬 {scene_num} 상품 카드 클립 렌더링 완료 -> {out_path}")
             return out_path
         self._create_ken_burns_video(

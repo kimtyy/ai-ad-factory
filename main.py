@@ -210,6 +210,9 @@ def main():
                     api_key=keys.get("GEMINI_API_KEY"), mock=args.mock, thumb_dir=job.assets_dir,
                 )
                 media_cycle = [args.media[i % len(args.media)] for i in range(len(scenes))] if args.media else []
+                from core.render.commerce_layout import assign_shots
+                for sc, shot in zip(scenes, assign_shots(media_cycle)):
+                    sc["shot"] = shot          # 같은 사진 재사용 시 앵글 변경 (전체 → 중앙 줌인 → 상단·하단 디테일)
                 for sc, path in zip(scenes, media_cycle):
                     if is_video_file(path):
                         sc["media"] = {"type": "video", "path": os.path.abspath(path), "trim_start": DEFAULT_TRIM_START, "fit": "auto"}

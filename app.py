@@ -47,7 +47,8 @@ from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.coupang import SEARCH_LIMIT_PER_HOUR, CoupangAPIError, CoupangPartners
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
-                           plan_commerce_storyboard, plan_owner_storyboard)
+                           analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard)
+from core.render.commerce_layout import SHOT_LABELS, assign_shots
 from core.planners.travel import plan_travel_storyboard
 from core.radar.hints import load_hook_hints, vertical_for
 from core.radar.hooks import HOOK_TYPE_KO
@@ -141,6 +142,8 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
     st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
+    st.session_state.usp_auto = False
+    st.session_state.product_boxes = {}
     for k in [k for k in st.session_state.keys() if str(k).startswith("applied_upload_")]:
         del st.session_state[k]
     return st.session_state.job
@@ -207,6 +210,12 @@ def assign_uploads_to_scenes(scenes: list, paths: list, cycle: bool = False):
     """i번째 미디어 → i번째 씬. cycle=True(쇼핑)면 사진이 씬보다 적을 때 처음부터 돌려 씀 (Ken Burns 모션은 씬마다 다름)"""
     if cycle and paths:
         paths = [paths[i % len(paths)] for i in range(len(scenes))]
+        # 같은 사진을 다시 쓰는 씬은 앵글을 바꿔 잘라냄 (전체 → 중앙 줌인 → 상단·하단 디테일)
+        boxes = st.session_state.get("product_boxes", {})
+        for scene, shot, p in zip(scenes, assign_shots(paths), paths):
+            scene["shot"] = shot
+            if boxes.get(p):
+                scene["product_box"] = boxes[p]      # Gemini가 찾은 상품 본체 위치 (광고 글씨를 피해서 자름)
     for scene, p in zip(scenes, paths):
         assign_media_to_scene(scene, p, "uploaded")
 
@@ -237,7 +246,7 @@ def rematch_scenes(target_scenes: list, api_key: str):
 MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce"}
 MODE_LABELS = {v: k for k, v in MODES.items()}
 SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
-                     "room": "🛏 객실", "cta": "📍 CTA"}
+                     "room": "🛏 객실", "cta": "📍 CTA", "hero": "🛒 첫인상", "usage": "🙌 사용 장면"}
 
 
 def _on_mode_change():
@@ -480,6 +489,15 @@ if crawl_btn:
                     st.session_state.cutout_path = None
                     product_imgs = [p for p in scraped.get("product_images", []) if os.path.exists(p)]
                     st.session_state.uploaded_paths = product_imgs
+                    if "usp" in scraped.get("missing", []) and scraped.get("product_name") and not mock_mode:
+                        with st.spinner("🤖 상품명과 사진으로 특장점을 정리하는 중..."):
+                            ana = analyze_product_photo(scraped["product_name"], product_imgs[0] if product_imgs else None, api_key)
+                        pts = ana["points"]
+                        if ana["box"] and product_imgs:
+                            st.session_state.product_boxes = {product_imgs[0]: ana["box"]}
+                        if pts:
+                            st.session_state.scraped_data = {**scraped, "usp": ", ".join(pts)}
+                            st.session_state.usp_auto = True
                     if product_imgs:
                         st.toast(f"🛒 상품 사진 {len(product_imgs)}장 확보!", icon="📸")
                     else:
@@ -522,7 +540,11 @@ if is_commerce_mode and CoupangPartners().enabled:
                     start_new_job(source_url=item["partner_url"], mode="commerce")
                     imgs = core.scraper.download_product_images([{"url": item["image_url"]}], current_job().assets_dir, None)
                     st.session_state.uploaded_paths = imgs
-                    st.session_state.scraped_data = {"product_name": item["name"], "usp": ""}
+                    ana = {"points": [], "box": None} if mock_mode else analyze_product_photo(item["name"], imgs[0] if imgs else None, api_key)
+                    pts = ana["points"]
+                    st.session_state.product_boxes = {imgs[0]: ana["box"]} if (imgs and ana["box"]) else {}
+                    st.session_state.scraped_data = {"product_name": item["name"], "usp": ", ".join(pts)}
+                    st.session_state.usp_auto = bool(pts)
                     st.session_state.affiliate_link = (cp_client.deeplink(f"https://www.coupang.com/vp/products/{item['product_id']}")
                                                        or item["partner_url"])
                     st.session_state.coupang_results = []
@@ -557,6 +579,8 @@ else:
         usp_label = "숙소 특장점 (USP, 사실만)" if is_travel_mode else "핵심 소구점 (USP, 판매 페이지에 있는 사실만)"
         usp_desc = st.text_input(usp_label, value=scraped_now.get("usp", ""),
                                  placeholder="예: 오션뷰 인피니티 풀, 실내 수영장" if is_travel_mode else "예: 과열 방지, 2단 온도 조절")
+        if is_commerce_mode and st.session_state.get("usp_auto"):
+            st.caption("🤖 AI가 상품명·사진으로 정리한 특장점이에요 (상품명에 없는 수치·인증·효능은 자동 제외). 사실과 다르면 고쳐 주세요.")
 
 # 사장님 모드 브랜드 오버레이: 상호명/검색어는 본문 입력값을 사용
 brand_cfg = None
@@ -630,7 +654,9 @@ with col_plan_desc:
     else:
         st.caption(f"모드: **{production_mode}** | 스타일: **{script_style_options[selected_script_style]}** | **{selected_tone_label}** | 성우: **{selected_actor_label}**")
 
-if generate_plan_btn:
+# 원클릭(쇼핑): 콘티 없이 '영상 만들기'를 누르면 기획부터 자동으로 하고 이어서 렌더
+auto_flow = bool(st.session_state.pop("auto_plan_then_render", False))
+if generate_plan_btn or auto_flow:
     plan_spinner_msg = {
         "owner": "🧠 올린 사진·영상을 보고 우리 가게 홍보 대본을 쓰고 있습니다...",
         "travel": f"🧠 숙소 제휴 스토리보드({script_style_options[selected_script_style]})를 기획하고 있습니다...",
@@ -729,6 +755,8 @@ if generate_plan_btn:
                     st.warning(f"⚠️ {len(scenes) - matched}개 씬에 사진·영상이 없습니다. 아래 씬 카드에서 업로드해 주세요.")
 
             st.success(f"🎉 총 {len(scenes)}개 씬 콘티가 기획되었습니다! ({production_mode})")
+            if auto_flow:
+                st.session_state.auto_render_now = True
         except Exception as pe:
             st.error(f"기획 실패: {pe}")
 
@@ -822,7 +850,8 @@ if st.session_state.storyboard:
                 s_num = _scene_num(scene, idx + 1)
                 with st.container(border=True, key=f"scene_card_{s_num}"):
                     role_label = SCENE_ROLE_LABELS.get(str(scene.get("role", "")), "🎬 씬")
-                    st.markdown(f"**{s_num:02d} · {role_label}** · ⏱ {scene.get('duration_sec', 2.5)}초")
+                    st.markdown(f"**{s_num:02d} · {role_label}** · ⏱ {scene.get('duration_sec', 2.5)}초"
+                                + (f" · 🎯 {SHOT_LABELS.get(scene['shot'], scene['shot'])}" if is_commerce_mode and scene.get("shot") else ""))
 
                     img_p = scene.get("image_path")
                     video_media = scene.get("media") if (scene.get("media") or {}).get("type") == "video" else None
@@ -933,6 +962,12 @@ st.markdown("---")
 # 3단계: 최종 광고 영상 렌더링 및 플레이어
 # ==============================================================================
 render_btn = st.button("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기", type="primary", use_container_width=True, key="render_cta")
+if is_commerce_mode:
+    st.caption("🛒 쇼핑은 [상품 검색] → [이 상품 사용] → [영상 만들기] 세 번이면 끝나요. 기획은 자동으로 진행됩니다.")
+if render_btn and is_commerce_mode and not st.session_state.storyboard:
+    st.session_state.auto_plan_then_render = True
+    st.rerun()
+render_btn = render_btn or bool(st.session_state.pop("auto_render_now", False))
 
 if render_btn:
     if not st.session_state.storyboard:

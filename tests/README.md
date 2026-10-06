@@ -27,6 +27,7 @@ python tests/suite_script_guard.py # 스위트 하나만 직접 실행
 | `suite_app_radar_ui.py` | Streamlit 레이더 화면, 화면 전환 시 설정 유지, 기획 연동 |
 | `suite_app_travel_flow.py` | Streamlit 숙소 제휴 흐름 (실제 페이지 크롤링: `--live`에서만) |
 | `suite_stage3_render_e2e.py` | 작업 공간 격리 + 사진·영상·브랜드 오버레이 실제 렌더 (느림) |
+| `suite_app_commerce_flow.py` | 쇼핑 원클릭 흐름: 콘티 없이 [영상 만들기] → 자동 기획 → 렌더, 대표 사진 1장 다각도 앵글 (느림) |
 | `suite_app_owner_flow.py` | Streamlit 3개 모드 분기 + 사장님 기획→렌더 (느림) |
 
 ## 원칙

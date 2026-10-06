@@ -175,6 +175,69 @@ for label, (w, h) in (("세로 사진", (1200, 1500)), ("가로 사진", (1600, 
     check(card_lap > bg_lap * 5 and moved > 5 and sharp_bbox(fs[35])[:2] == (r0, r1),
           f"{label}: 상품은 선명(배경 대비 {card_lap / max(bg_lap, 1e-6):.0f}배) + 카드 안 Ken Burns(변화 {moved:.0f}), 카드 위치 고정")
 
+# ---------------------------------------------------------------- 4-2. 대표 사진 1장 → 다각도 (Smart Crop)
+from PIL import ImageDraw
+from core.render.commerce_layout import SHOT_SEQUENCE, assign_shots, product_bbox, shot_crop
+prod = Image.new("RGB", (1000, 1000), (255, 255, 255))
+ImageDraw.Draw(prod).rectangle([350, 150, 650, 850], fill=(230, 110, 60))         # 흰 배경 위 세로로 긴 상품
+bx = product_bbox(prod)
+check(all(abs(v - e) <= 12 for v, e in zip(bx, (350, 150, 651, 851))), f"상품 영역 감지 (흰 배경) {bx}")
+crops = {s_: shot_crop(prod, s_) for s_ in SHOT_SEQUENCE}
+check(crops["full"].size[1] > crops["center"].size[1] and abs(crops["top"].size[1] - 0.55 * 700) < 15
+      and abs(crops["bottom"].size[1] - 0.55 * 700) < 15,
+      f"앵글별 자르기: 전체 {crops['full'].size} > 중앙 줌인 {crops['center'].size}, 상단·하단 디테일 각 상품 높이 55%")
+check(assign_shots(["a", "a", "a", "a", "a", "b"]) == ["full", "center", "top", "bottom", "full", "full"],
+      "같은 사진 재사용 → 전체 → 중앙 줌인 → 상단 → 하단 순서, 새 사진은 전체 샷부터")
+cdir = tmp("commerce_shot_")
+prod.save(os.path.join(cdir, "prod.jpg"), quality=95)
+sizes = {}
+for s_ in ("full", "center"):
+    clip = os.path.join(cdir, f"{s_}.mp4")
+    cgen._create_product_card_video(os.path.join(cdir, "prod.jpg"), 1.0, clip, motion_sec=1.0, shot=s_)
+    fr = frames(clip)[0]
+    orange = (fr[:, :, 0] > 180) & (fr[:, :, 1] < 150) & (fr[:, :, 2] < 110)
+    sizes[s_] = int(orange.sum())
+check(sizes["center"] > sizes["full"] * 1.5, f"중앙 줌인 씬은 상품이 더 크게 보임 (상품 픽셀 {sizes['full']} → {sizes['center']})")
+
+# 광고 문구가 박힌 대표 사진: 배경 판별로는 사진 전체가 잡힘 → Gemini가 준 상품 본체 위치(box)로 자름
+ad = Image.new("RGB", (1000, 1000), (60, 30, 20))
+dr = ImageDraw.Draw(ad)
+dr.rectangle([120, 50, 460, 950], fill=(240, 240, 235))                            # 상품(왼쪽)
+dr.rectangle([560, 300, 960, 700], fill=(255, 200, 0))                             # 광고 글씨 덩어리(오른쪽)
+by_box = shot_crop(ad, "center", box=(0.12, 0.05, 0.46, 0.95))
+yellow = sum(1 for px in by_box.getdata() if px[0] > 240 and px[1] > 180 and px[2] < 40)
+check(yellow == 0 and by_box.size[0] < 500, f"상품 위치(box) 기준 자르기: 광고 글씨 영역 미포함 ({by_box.size})")
+top = shot_crop(ad, "top", box=(0.12, 0.05, 0.46, 0.95))
+check(top.size[0] / top.size[1] <= 1.31, f"상단 디테일이 가로로 긴 띠가 되지 않음 ({top.size})")
+check(cm._valid_box([50, 120, 950, 460]) == (0.12, 0.05, 0.46, 0.95) and cm._valid_box([0, 0, 10, 10]) is None
+      and cm._valid_box("x") is None, "Gemini 상품 위치 [ymin,xmin,ymax,xmax] 0~1000 → 비율 변환, 이상값은 무시")
+
+# ---------------------------------------------------------------- 4-3. 특장점 자동 정리 (상품명·사진 근거만)
+points_reply = {"product_box": [50, 120, 950, 460], "points": [{"text": "저소음 설계", "source": "name"}, {"text": "48시간 연속 보온", "source": "name"},
+                           {"text": "특허받은 PTC 기술", "source": "name"}, {"text": "한 손에 드는 크기", "source": "photo"},
+                           {"text": "꼭 사 보세요", "source": "name"}]}
+
+
+class PtsModels:
+    def generate_content(self, **kw):
+        captured["pts"] = kw
+        return type("R", (), {"text": json.dumps(points_reply, ensure_ascii=False)})()
+
+
+gg.Client = lambda api_key=None: type("C", (), {"models": PtsModels()})()
+pts = cm.suggest_selling_points("유파 PTC 전기히터 TSK-5318 저소음", fixture("photo_pool.jpg"), api_key="fake")
+gg.Client = _orig_client
+check(pts == ["저소음 설계", "한 손에 드는 크기"], f"특장점 자동 정리: 상품명에 없는 '48시간'·'특허'·홍보 어투는 버림 {pts}")
+ptxt = [c for c in captured["pts"]["contents"] if isinstance(c, str)][-1]
+check("상품명에 없는 숫자" in ptxt and any(isinstance(c, Image.Image) for c in captured["pts"]["contents"]),
+      "특장점 프롬프트: 상품명·사진 근거만 + 대표 사진 첨부")
+gg.Client = lambda api_key=None: type("C", (), {"models": PtsModels()})()
+ana = cm.analyze_product_photo("유파 PTC 전기히터 TSK-5318 저소음", fixture("photo_pool.jpg"), api_key="fake")
+gg.Client = _orig_client
+check(ana["box"] == (0.12, 0.05, 0.46, 0.95) and ana["points"] == pts, "한 번의 호출로 특장점 + 상품 본체 위치")
+check(cm.suggest_selling_points("유파 히터", None, api_key=None) == [] and cm.suggest_selling_points("유파 히터", mock=True, api_key="x") == [],
+      "API 키 없음·mock → 빈값 (지어내지 않음)")
+
 # ---------------------------------------------------------------- 5. 상품 사진 수집 (가짜 응답)
 import core.scraper as scr
 

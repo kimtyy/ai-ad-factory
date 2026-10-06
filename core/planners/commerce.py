@@ -151,6 +151,86 @@ def plan_commerce_storyboard(
     return scenes
 
 
+# ---------------------------------------------------------------- 특장점 자동 정리 (원클릭용)
+POINT_MAX_LEN = 22
+
+
+def _point_ok(text: str, product_name: str) -> bool:
+    """자동 특장점 검증: 수치·인증·효능·가격·순위는 상품명에 적힌 것만, 홍보 어투 금지, 짧은 한 줄"""
+    t = (text or "").strip()
+    return (2 <= len(t) <= POINT_MAX_LEN and not find_unsupported_spec(t, product_name)
+            and not find_unsupported_claim(t, usp=product_name, check_amenities=False) and not find_promo_tone(t))
+
+
+def analyze_product_photo(product_name: str, image_path: Optional[str] = None, api_key: Optional[str] = None,
+                          mock: bool = False) -> Dict[str, Any]:
+    """
+    상품명 + 대표 사진 → {"points": 셀링 포인트 최대 3개, "box": 상품 본체 위치 (x0, y0, x1, y1, 0~1 비율) 또는 None}.
+    - points: 근거는 '상품명에 적힌 특징'과 '사진에 보이는 특징'뿐, 상품명에 없는 수치·인증·효능은 검증 단계에서 버림
+      (지어낸 특장점이 대본의 '근거'가 되면 허위 주장이 통과하므로)
+    - box: 글씨·로고·배경을 뺀 상품 본체 영역. 광고 문구가 박힌 대표 사진에서도 다각도 자르기가 상품만 노리게 함
+    한 번의 Gemini 호출로 둘 다 얻음
+    """
+    out: Dict[str, Any] = {"points": [], "box": None}
+    if mock or not api_key or not (product_name or "").strip():
+        return out
+    try:
+        from google import genai
+        from google.genai import types
+        from core.guardrail import validate_model_call
+        contents: List[Any] = []
+        if image_path:
+            from core.planners.owner import _media_preview_image
+            img = _media_preview_image(image_path, None)
+            if img is not None:
+                contents += ["[대표 상품 사진]", img]
+        contents.append(f"""
+상품명: {product_name}
+
+1) 이 상품의 셀링 포인트를 3개 정리하세요. 쇼핑 숏폼 대본의 근거로 쓰이므로 사실만 적어야 합니다.
+- 근거는 두 가지뿐: (1) 상품명에 적힌 특징(예: 'PTC', '저소음', '2단', '무향료') (2) 사진에 눈으로 보이는 특징·문구(형태·구성품·크기감)
+- 상품명에 없는 숫자·시간·배수·퍼센트·와트·인증·특허·임상·효능·순위·가격·할인은 절대 쓰지 마세요
+- 각 포인트는 공백 포함 {POINT_MAX_LEN}자 이내 명사형 짧은 구절 (예: '저소음 설계', '과열 방지 기능', '한 손에 드는 크기')
+2) 사진에서 상품 본체(광고 글씨·로고·배경·소품 제외, 리모컨 같은 구성품은 포함)가 차지하는 영역을
+   [ymin, xmin, ymax, xmax] (각 0~1000 정수)로 알려 주세요. 사진이 없으면 null.
+JSON만 출력: {{"points": [{{"text": "...", "source": "name 또는 photo"}}], "product_box": [ymin, xmin, ymax, xmax]}}
+""")
+        client = genai.Client(api_key=api_key)   # 변수로 잡아 둬야 호출 중에 클라이언트가 닫히지 않음
+        res = client.models.generate_content(
+            model=validate_model_call("gemini-3.6-flash", category="llm"), contents=contents,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3))
+        data = json.loads(res.text)
+    except Exception as e:
+        logger.warning(f"상품 사진 분석 실패: {e}")
+        return out
+    raw = [str((p.get("text") if isinstance(p, dict) else p) or "").strip() for p in (data.get("points") or [])]
+    points = [p for p in dict.fromkeys(raw) if _point_ok(p, product_name)]
+    dropped = [p for p in raw if p and p not in points]
+    if dropped:
+        logger.info(f"[특장점 검증] 상품명·사진 근거 없는 표현 제외: {dropped}")
+    out["points"] = points[:3]
+    out["box"] = _valid_box(data.get("product_box"))
+    return out
+
+
+def _valid_box(box) -> Optional[tuple]:
+    """Gemini [ymin, xmin, ymax, xmax] (0~1000) → (x0, y0, x1, y1) 0~1 비율. 이상한 값이면 None"""
+    try:
+        y0, x0, y1, x1 = [float(v) / 1000.0 for v in box]
+    except Exception:
+        return None
+    x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(1.0, x1), min(1.0, y1)
+    if x1 - x0 < 0.08 or y1 - y0 < 0.08:
+        return None
+    return round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)
+
+
+def suggest_selling_points(product_name: str, image_path: Optional[str] = None, api_key: Optional[str] = None,
+                           mock: bool = False) -> List[str]:
+    """셀링 포인트만 필요할 때 (analyze_product_photo의 points)"""
+    return analyze_product_photo(product_name, image_path, api_key, mock)["points"]
+
+
 class _ScenesWithStory(list):
     story = ""
 

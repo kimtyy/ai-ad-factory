@@ -36,6 +36,7 @@ SUITES = [
     ("suite_app_radar_ui.py", "Streamlit 레이더 화면 + 기획 연동", False),
     ("suite_app_travel_flow.py", "Streamlit 숙소 제휴 흐름 (실크롤링, --live 전용)", False),
     ("suite_stage3_render_e2e.py", "작업 공간 격리 + 사진/영상/브랜드 실제 렌더", True),
+    ("suite_app_commerce_flow.py", "Streamlit 쇼핑 원클릭: [영상 만들기] → 자동 기획 → 렌더 (사진 1장 다각도)", True),
     ("suite_app_owner_flow.py", "Streamlit 모드 분기 + 사장님 기획→렌더", True),
 ]
 
