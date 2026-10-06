@@ -185,6 +185,19 @@ up = sent["contents"][-1]
 check("해요체" in up and "앵무새" in up and "댕댕이 전용 용품" in up and "금지 3 (합쇼체·뉴스체)" in sent["config"].system_instruction,
       "프롬프트: 해요체 통일·후킹 반복 금지·화면 무관 주제 금지 규칙 주입")
 
+# 4-1. 시설어 화면 일치 (테라스·스파·자쿠지·루프탑·피트니스)
+bed_only = "객실 사진: bed, room_interior | Clean and well-lit hotel twin bedroom"
+check(find_off_scene_topic("거기다 아늑한 객실에는 전용 테라스까지 마련돼 있어요.", [bed_only]) == "테라스"
+      and find_off_scene_topic("객실에서 바로 스파로 내려갈 수 있어요.", [bed_only]) == "스파"
+      and find_off_scene_topic("방에 자쿠지까지 있거든요.", [bed_only]) == "자쿠지"
+      and find_off_scene_topic("루프탑에서 보는 노을이 진짜예요.", [bed_only]) == "루프탑"
+      and find_off_scene_topic("아침엔 피트니스에서 땀 빼고요.", [bed_only]) == "피트니스",
+      "침실 사진에서 테라스·스파·자쿠지·루프탑·피트니스 언급 → 화면 무관 주제로 차단")
+check(find_off_scene_topic("발코니에 나가면 바다가 바로 앞이에요.", ["전경·뷰 사진: ocean_view, terrace | balcony overlooking ocean"]) is None
+      and find_off_scene_topic("루프탑 풀에서 수평선이 보여요.", ["수영장 사진: outdoor_pool | rooftop infinity pool"]) is None
+      and find_off_scene_topic("통유리 실내 풀도 좋거든요.", [bed_only]) is None,
+      "해당 공간 사진이면 허용, 대상이 아닌 말은 영향 없음")
+
 # 5. 종결 어미 검증 (세인트존스 4차 렌더 실측: 31자 대사가 기계적으로 잘려 '수영할 수!', '펼쳐지는 바다!')
 from core.script_guard import complete_sentence, is_complete_sentence
 check(complete_sentence("탁 트인 바다 보면서 수영할 수!") is None and complete_sentence("근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다!") is None,
