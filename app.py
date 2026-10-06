@@ -90,6 +90,16 @@ if "scraped_data" not in st.session_state:
     st.session_state.scraped_data = None
 if "cutout_path" not in st.session_state:
     st.session_state.cutout_path = None
+# 숙소·쇼핑 상품명/특장점 입력칸 값 (위젯 key와 직접 연결: value= 인자만 바꾸면 브라우저가 보낸 기존 빈 값이 이겨서 반영 안 됐음)
+st.session_state.setdefault("product_name_input", "")
+st.session_state.setdefault("product_usp_input", "")
+
+
+def set_product_info(data):
+    """크롤링·쿠팡 선택 결과를 저장하고 상품명·특장점 입력칸에 바로 채움 (입력칸이 그려지기 전에 호출해야 함)"""
+    st.session_state.scraped_data = data
+    st.session_state["product_name_input"] = (data or {}).get("product_name", "") or ""
+    st.session_state["product_usp_input"] = (data or {}).get("usp", "") or ""
 if "image_pool" not in st.session_state:
     st.session_state.image_pool = []
 if "gallery_images" not in st.session_state:
@@ -269,7 +279,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
                      ("page_switch", "make")):
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
-for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp",
+for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "product_name_input", "product_usp_input",
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
@@ -434,7 +444,7 @@ if crawl_btn:
         # 새 상품/숙소 = 새 작업 공간 (이전 작업의 씬·사진·거부 목록과 완전히 분리)
         start_new_job(source_url=target_url.strip(), mode=pipeline_mode)
         st.session_state.gallery_images = []
-        st.session_state.scraped_data = None
+        set_product_info(None)
 
         # 최신 크롤러 모듈 강제 핫 리로드 (Streamlit 장시간 구동 시 모듈 캐시 갱신 보장)
         import importlib
@@ -459,7 +469,7 @@ if crawl_btn:
             st.session_state.affiliate_link = scraped.get("affiliate_link", "")
 
             if scraped.get("success"):
-                st.session_state.scraped_data = scraped
+                set_product_info(scraped)
                 missing_ko = {"product_name": "이름", "usp": "특장점"}
                 if scraped.get("missing"):
                     st.warning("⚠️ 페이지에서 " + ", ".join(missing_ko.get(m, m) for m in scraped["missing"])
@@ -496,7 +506,7 @@ if crawl_btn:
                         if ana["box"] and product_imgs:
                             st.session_state.product_boxes = {product_imgs[0]: ana["box"]}
                         if pts:
-                            st.session_state.scraped_data = {**scraped, "usp": ", ".join(pts)}
+                            set_product_info({**scraped, "usp": ", ".join(pts)})
                             st.session_state.usp_auto = True
                     if product_imgs:
                         st.toast(f"🛒 상품 사진 {len(product_imgs)}장 확보!", icon="📸")
@@ -505,8 +515,8 @@ if crawl_btn:
                                    "아래에서 상품 사진을 직접 올려 주세요.")
             else:
                 # 실패해도 링크에서 확실히 알 수 있는 상품명(검색어)은 입력 칸에 제안으로 채움 (특장점은 비움)
-                st.session_state.scraped_data = {"product_name": scraped.get("product_name_hint", ""), "usp": ""} \
-                    if scraped.get("product_name_hint") else None
+                set_product_info({"product_name": scraped.get("product_name_hint", ""), "usp": ""}
+                                 if scraped.get("product_name_hint") else None)
                 st.error(f"❌ 크롤링 실패: {scraped.get('error')}.")
                 if scraped.get("affiliate_link"):
                     st.info(f"🔗 쿠팡 파트너스 링크는 만들어 두었어요: {scraped['affiliate_link']} (영상 설명·고정 댓글용)")
@@ -543,7 +553,7 @@ if is_commerce_mode and CoupangPartners().enabled:
                     ana = {"points": [], "box": None} if mock_mode else analyze_product_photo(item["name"], imgs[0] if imgs else None, api_key)
                     pts = ana["points"]
                     st.session_state.product_boxes = {imgs[0]: ana["box"]} if (imgs and ana["box"]) else {}
-                    st.session_state.scraped_data = {"product_name": item["name"], "usp": ", ".join(pts)}
+                    set_product_info({"product_name": item["name"], "usp": ", ".join(pts)})
                     st.session_state.usp_auto = bool(pts)
                     st.session_state.affiliate_link = (cp_client.deeplink(f"https://www.coupang.com/vp/products/{item['product_id']}")
                                                        or item["partner_url"])
@@ -569,15 +579,14 @@ if is_owner_mode:
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
 else:
     # 예시 문구는 placeholder로만 보여 주고 값으로 넣지 않음 (예전 기본값 '파노라마 오션뷰…'가 그대로 대본 근거로 쓰였음)
-    scraped_now = st.session_state.scraped_data or {}
     col_prod, col_usp = st.columns([1, 2])
     with col_prod:
         prod_label = "숙소명 (대본에서는 숨김 처리)" if is_travel_mode else "홍보 제품명"
-        product_name = st.text_input(prod_label, value=scraped_now.get("product_name", ""),
+        product_name = st.text_input(prod_label, key="product_name_input",
                                      placeholder="예: 강릉 세인트존스 호텔" if is_travel_mode else "예: 유파 PTC 전기히터 TSK-5318")
     with col_usp:
         usp_label = "숙소 특장점 (USP, 사실만)" if is_travel_mode else "핵심 소구점 (USP, 판매 페이지에 있는 사실만)"
-        usp_desc = st.text_input(usp_label, value=scraped_now.get("usp", ""),
+        usp_desc = st.text_input(usp_label, key="product_usp_input",
                                  placeholder="예: 오션뷰 인피니티 풀, 실내 수영장" if is_travel_mode else "예: 과열 방지, 2단 온도 조절")
         if is_commerce_mode and st.session_state.get("usp_auto"):
             st.caption("🤖 AI가 상품명·사진으로 정리한 특장점이에요 (상품명에 없는 수치·인증·효능은 자동 제외). 사실과 다르면 고쳐 주세요.")
