@@ -45,6 +45,7 @@ from core.compositor import AdCompositor
 from core.scraper import scrape_product_info
 from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
+from core.coupang import SEARCH_LIMIT_PER_HOUR, CoupangAPIError, CoupangPartners
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            plan_commerce_storyboard, plan_owner_storyboard)
 from core.planners.travel import plan_travel_storyboard
@@ -104,6 +105,10 @@ if "rejected_urls" not in st.session_state:
     st.session_state.rejected_urls = set()   # 사용자가 거부한 사진 URL (재선별 시 재등장 금지)
 if "vision_cache" not in st.session_state:
     st.session_state.vision_cache = {}       # 비전 판정 캐시 (이미지 해시:역할 -> 판정)
+if "affiliate_link" not in st.session_state:
+    st.session_state.affiliate_link = ""     # 쿠팡 파트너스 링크 (영상 설명·고정 댓글용)
+if "coupang_results" not in st.session_state:
+    st.session_state.coupang_results = []
 if "uploaded_paths" not in st.session_state:
     st.session_state.uploaded_paths = []     # 일괄 업로드 사진/영상 (씬 1부터 순서대로 배정)
 @st.cache_resource(show_spinner=False)
@@ -135,6 +140,7 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.final_video_path = None
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
+    st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
     for k in [k for k in st.session_state.keys() if str(k).startswith("applied_upload_")]:
         del st.session_state[k]
     return st.session_state.job
@@ -441,6 +447,7 @@ if crawl_btn:
                 max_gallery_images=7
             )
             print(f"[app.py] scrape_product_info 반환 결과: success={scraped.get('success')}, gallery_images={scraped.get('gallery_images')}")
+            st.session_state.affiliate_link = scraped.get("affiliate_link", "")
 
             if scraped.get("success"):
                 st.session_state.scraped_data = scraped
@@ -482,7 +489,45 @@ if crawl_btn:
                 # 실패해도 링크에서 확실히 알 수 있는 상품명(검색어)은 입력 칸에 제안으로 채움 (특장점은 비움)
                 st.session_state.scraped_data = {"product_name": scraped.get("product_name_hint", ""), "usp": ""} \
                     if scraped.get("product_name_hint") else None
-                st.error(f"❌ 크롤링 실패: {scraped.get('error')}. 직접 정보를 입력해 주세요.")
+                st.error(f"❌ 크롤링 실패: {scraped.get('error')}.")
+                if scraped.get("affiliate_link"):
+                    st.info(f"🔗 쿠팡 파트너스 링크는 만들어 두었어요: {scraped['affiliate_link']} (영상 설명·고정 댓글용)")
+
+# 쿠팡 상품 검색 (파트너스 공식 API): 상품명·고해상도 대표 사진·파트너스 링크를 한 번에
+if is_commerce_mode and CoupangPartners().enabled:
+    with st.expander("🔎 쿠팡 상품 검색 (파트너스 공식 API)", expanded=not st.session_state.uploaded_paths):
+        cp_client = CoupangPartners()
+        k1, k2 = st.columns([4, 1])
+        with k1:
+            cp_kw = st.text_input("쿠팡 검색어", key="coupang_kw", placeholder="예: PTC 전기히터", label_visibility="collapsed")
+        with k2:
+            cp_search = st.button("검색", key="coupang_search_btn", use_container_width=True)
+        st.caption(f"검색은 1시간에 {SEARCH_LIMIT_PER_HOUR}번까지 가능해요 (남은 횟수 {cp_client.searches_left()}번, 같은 검색어는 다시 세지 않음).")
+        if cp_search and cp_kw.strip():
+            try:
+                st.session_state.coupang_results = cp_client.search(cp_kw.strip())
+                if not st.session_state.coupang_results:
+                    st.info("검색 결과가 없어요. 다른 검색어로 찾아 주세요.")
+            except CoupangAPIError as ce:
+                st.error(str(ce))
+        for item in st.session_state.coupang_results:
+            c_img, c_txt, c_btn = st.columns([1, 4, 1.4], vertical_alignment="center")
+            with c_img:
+                st.image(item["image_url"], width=72)
+            with c_txt:
+                price = f"{int(item['price']):,}원" if str(item.get("price") or "").isdigit() else ""
+                st.markdown(f"**{html.escape(item['name'])}**  \n{price}{' · 로켓배송' if item.get('is_rocket') else ''}")
+            with c_btn:
+                if st.button("이 상품 사용", key=f"coupang_pick_{item['product_id']}_{item['image_url'][-12:]}", use_container_width=True):
+                    start_new_job(source_url=item["partner_url"], mode="commerce")
+                    imgs = core.scraper.download_product_images([{"url": item["image_url"]}], current_job().assets_dir, None)
+                    st.session_state.uploaded_paths = imgs
+                    st.session_state.scraped_data = {"product_name": item["name"], "usp": ""}
+                    st.session_state.affiliate_link = (cp_client.deeplink(f"https://www.coupang.com/vp/products/{item['product_id']}")
+                                                       or item["partner_url"])
+                    st.session_state.coupang_results = []
+                    st.toast("상품명·사진·파트너스 링크를 불러왔어요. 특장점은 판매 페이지를 보고 사실만 적어 주세요.", icon="🛒")
+                    st.rerun()
 
 # 상품/가게 정보 입력 폼 (모드별)
 business_type, owner_search_kw = None, ""
@@ -1016,7 +1061,8 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
         if is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
-            st.code(f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: (쿠팡 파트너스 링크를 붙여 넣으세요)", language=None)
+            link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
+            st.code(f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: {link}", language=None)
     with col_meta:
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:

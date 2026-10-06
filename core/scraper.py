@@ -41,6 +41,7 @@ import io
 import hashlib
 
 from core.guardrail import validate_model_call
+from core.coupang import CoupangPartners, is_coupang_url
 
 # -------------------------------------------------------------
 # [숙소 갤러리 이미지 카테고리 정의]
@@ -271,6 +272,7 @@ PRODUCT_IMAGE_MIN_SIDE = 400
 def download_product_images(candidates: List[Dict[str, Any]], output_dir: str, referer: Optional[str],
                             limit: int = COMMERCE_MAX_IMAGES) -> List[str]:
     """상품 사진 후보를 순서대로 받아 실물 사진만 저장 (작은 아이콘·가로 배너·중복 제외). 저장 경로 목록 반환"""
+    os.makedirs(output_dir, exist_ok=True)
     saved, seen = [], set()
     for cand in candidates:
         if len(saved) >= limit:
@@ -331,6 +333,27 @@ def resolve_link(url: str, max_hops: int = 6, timeout: int = 8) -> Dict[str, Any
     return {"url": current, "search_query": "", "is_search": False}
 
 
+def _scrape_coupang(url: str, output_dir: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    cp = CoupangPartners()
+    if not cp.enabled:
+        result["error"] = ("쿠팡은 자동 수집을 막고 있어 상품 정보를 가져올 수 없어요. 상품명·특장점을 직접 입력하고 상품 사진을 올려 주세요 "
+                           "(쿠팡 파트너스 API 키를 .env에 넣으면 자동 조회됩니다)")
+        return result
+    found = cp.find_product(url)
+    result["affiliate_link"] = found.get("partner_link") or ""
+    product = found.get("product")
+    if not product:
+        result["error"] = ("쿠팡 상품 페이지는 직접 열 수 없어 공식 파트너스 API로 찾아봤는데, 이 링크의 상품을 찾지 못했어요. "
+                           "아래 '쿠팡 상품 검색'에서 상품을 고르거나 상품명·사진을 직접 넣어 주세요")
+        return result
+    result["product_name"] = clean_text(product["name"])
+    result["missing"].append("usp")            # 파트너스 API에는 상품 설명이 없음 → 특장점은 판매 페이지를 보고 직접 입력
+    result["product_images"] = download_product_images([{"url": product["image_url"]}], output_dir, None)
+    result["image_path"] = result["product_images"][0] if result["product_images"] else ""
+    result["success"] = True
+    return result
+
+
 def scrape_product_info(
     url: str,
     output_image_dir: Optional[str] = None,
@@ -358,12 +381,16 @@ def scrape_product_info(
         "gallery_images": [],
         "gallery_urls": [],
         "product_images": [],   # 쇼핑 모드: 다운로드한 실물 상품 사진 경로
+        "affiliate_link": "",   # 쿠팡 파트너스 링크 (영상 설명·고정 댓글용)
         "missing": [],          # 페이지에서 못 찾은 항목 (화면에서 직접 입력 요청). 지어낸 기본값은 절대 넣지 않음
         "product_name_hint": "",
         "error": None
     }
 
     try:
+        # 쿠팡은 서버 자동 접속을 403으로 막음(약관상 우회 금지) → 페이지를 열지 않고 공식 파트너스 API로만 조회
+        if mode == "commerce" and is_coupang_url(url):
+            return _scrape_coupang(url, output_image_dir, result)
         link = resolve_link(url)
         if link["is_search"]:
             result["product_name_hint"] = link["search_query"]

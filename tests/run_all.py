@@ -24,6 +24,7 @@ SUITES = [
     ("suite_ugc_normalize.py", "스마트폰 영상 정규화 (회전·VFR·HDR·가로·짧은 클립)", False),
     ("suite_job_lazy_folders.py", "작업 폴더 지연 생성 + 빈 폴더 자동 정리", False),
     ("suite_travel_golden7.py", "숙소 7씬 황금 비율 + 비전 슬롯 배정 + BGM 제외", False),
+    ("suite_coupang.py", "쿠팡 파트너스 API: 서명·검색 캐시/한도·딥링크·쿠팡 페이지 미접속", False),
     ("suite_commerce.py", "쇼핑 제휴: 실물 사진 전용·리뷰 썰·근거 없는 효능 차단·쿠팡 파트너스 표시", False),
     ("suite_scraper_input.py", "크롤링 입력 정직성 (가짜 기본값 없음·공유 링크 추적)", False),
     ("suite_script_guard.py", "대본 길이(어절 경계) + 근거 없는 주장·홍보 어투 차단", False),
