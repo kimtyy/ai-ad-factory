@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 from core.guardrail import validate_model_call
-from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
+from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, diversify_exclamations, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
     find_off_scene_topic, find_promo_tone, find_unsupported_claim, safe_line_for
 from core.radar.hints import HookHints, copies_reference
 
@@ -886,6 +886,14 @@ JSON 출력 스키마 예시:
                 sc["voiceover"] = vo
                 sc["caption"] = cap
                 sc["subtitle"] = cap
+
+            # 3-1. 감탄사 다양성: '대박' 등 같은 감탄 표현은 영상 전체(헤드라인 포함) 1회, 이후 등장은 안 쓴 유의어로
+            body = scenes[:-1]
+            varied, changes = diversify_exclamations([sc["voiceover"] for sc in body], reserved=scenes[0].get("hook_title", ""))
+            for sc, vo in zip(body, varied):
+                sc["voiceover"] = sc["caption"] = sc["subtitle"] = vo
+            for c in changes:
+                logger.info(f"[감탄사 중복 분산] {c}")
 
             # 4. 씬 1 건물 외관 상단 로고 프레임 밖 제외 플래그 주입
             if scenes:

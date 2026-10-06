@@ -13,7 +13,7 @@ core/script_guard.py - 대본 후처리 가드 (트랙 A/B 공통)
 6. find_off_scene_topic: 숙소 정보에만 있고 그 씬 화면에 없는 주제(반려견 용품, 조식 …)가 대사에 난입했는지
 """
 import re
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------- 1. 길이 맞춤
 CONNECTIVE_ENDINGS = ("해서", "하고", "하며", "면서", "인데", "지만", "니까", "는데", "고", "며", "서")
@@ -179,7 +179,9 @@ COPY_TONE_RULES = """[대본 톤 - 유튜버가 시청자 1명에게 꿀팁 썰 
 - 금지 2 (개조식 단문): '~가능함', '~보임', '~됨', '~임', '~대박임'처럼 메모하듯 끊기는 어미
 - 어미 100% 해요체 통일: '~거든요', '~있어요', '~돼요', '~나와요', '~더라고요', '~이에요'. 한 영상 안에서 말투가 바뀌면 안 됩니다.
   금지 3 (합쇼체·뉴스체): '~입니다', '~습니다', '~아닙니다', '~보입니다', '~끝납니다'
-- 화면 일치: 숙소 정보에 있어도 그 씬 화면에 안 보이는 것(반려견 용품, 조식, 키즈, 셔틀 등)은 그 씬 대사에 넣지 마세요."""
+- 화면 일치: 숙소 정보에 있어도 그 씬 화면에 안 보이는 것(반려견 용품, 조식, 키즈, 셔틀 등)은 그 씬 대사에 넣지 마세요.
+- 감탄사 다양성: '대박', '미쳤어요', '장난 아니에요', '역대급', '레전드', '완벽해요' 같은 감탄 표현은 영상 전체(헤드라인 포함)에서
+  같은 것을 한 번만 쓰세요. 추임새 '근데 진짜 대박인 건'도 '대박' 1회로 셉니다. 두 번째부터는 다른 감탄사나 구체적인 감각 묘사로 바꾸세요."""
 
 # 근거 없는 대사·홍보 어투 대사를 대체할 사진 중립 문구 (카테고리별 2종을 번갈아 사용해 연속 반복 방지)
 # 시설·속성·가격 단어 없이(허위 방지) 감각 묘사 구어체로만 작성
@@ -365,3 +367,98 @@ def complete_sentence(text: str) -> Optional[str]:
 def is_complete_sentence(text: str) -> bool:
     t = (text or "").strip()
     return bool(t) and complete_sentence(t) == t.rstrip() and t.rstrip()[-1] in ".!?"
+
+
+# ---------------------------------------------------------------- 8. 감탄사 다양성
+# 같은 감탄 표현(어근)은 영상 전체(헤드라인 포함)에서 1회만. 두 번째부터는 아직 안 쓴 어근의 '같은 활용 자리'로 바꿈.
+# 서술형 감탄 어근별 활용형 (같은 키끼리 서로 바꿔 끼워도 문법이 맞음)
+PRED_EXCLAIMS = {
+    "미치": {"요": "미쳤어요", "거든요": "미쳤거든요", "더라고요": "미쳤더라고요", "고요": "미쳤고요", "는데요": "미쳤는데요", "adn": "미친 "},
+    "장난아니": {"요": "장난 아니에요", "거든요": "장난 아니거든요", "더라고요": "장난 아니더라고요", "고요": "장난 아니고요",
+             "는데요": "장난 아닌데요", "adn": "장난 아닌 "},
+    "끝내주": {"요": "끝내줘요", "거든요": "끝내주거든요", "더라고요": "끝내주더라고요", "고요": "끝내주고요", "는데요": "끝내주는데요",
+            "adn": "끝내주는 "},
+    "완벽": {"요": "완벽해요", "거든요": "완벽하거든요", "더라고요": "완벽하더라고요", "고요": "완벽하고요", "는데요": "완벽한데요",
+           "adn": "완벽한 "},
+    "흠잡을데없": {"요": "흠잡을 데가 없어요", "거든요": "흠잡을 데가 없거든요", "더라고요": "흠잡을 데가 없더라고요",
+              "고요": "흠잡을 데가 없고요", "는데요": "흠잡을 데가 없는데요", "adn": "흠잡을 데 없는 "},
+}
+# 명사형 감탄 (받침 있는 것끼리만 교체: 뒤 '이에요/인 건' 그대로 맞음)
+NOUN_EXCLAIMS = ("대박", "역대급")
+# 명사 감탄 + 서술격 조사 → 서술형 감탄의 같은 활용 자리 (명사 대체어가 바닥났을 때: '대박이에요' → '끝내줘요')
+COPULA_TO_SLOT = (("이더라고요", "더라고요"), ("이거든요", "거든요"), ("이에요", "요"), ("이고요", "고요"), ("인데요", "는데요"))
+# 명사 감탄이 부사로 쓰일 때('대박 편해요') 대신 쓸 부사
+EXCLAIM_ADVERBS = ("엄청", "완전", "정말")
+_PRED_INDEX = sorted(((form, root, slot) for root, forms in PRED_EXCLAIMS.items() for slot, form in forms.items()),
+                     key=lambda x: -len(x[0]))
+_EXCLAIM_RE = re.compile("|".join([re.escape(f) for f, _, _ in _PRED_INDEX] + [re.escape(n) for n in NOUN_EXCLAIMS]))
+_PREDICATE_TAIL = re.compile(r"(요|다|고|서|게|해|하|져|워|와|지|면|는데|어|아|돼|됨)[.,!?~]*$")
+
+
+def _exclaim_hits(text: str):
+    """(시작, 끝, 어근, 종류, 활용 자리) 목록. 종류: pred / noun / adverb"""
+    hits = []
+    for m in _EXCLAIM_RE.finditer(text or ""):
+        word = m.group(0)
+        pred = next(((root, slot) for f, root, slot in _PRED_INDEX if f == word), None)
+        if pred:
+            hits.append((m.start(), m.end(), pred[0], "pred", pred[1]))
+            continue
+        rest = text[m.end():]
+        nxt = rest.split(" ", 2)[1] if rest.startswith(" ") and len(rest.split(" ", 2)) > 1 else ""
+        kind = "adverb" if nxt and not rest.startswith((" 건", " 거")) and _PREDICATE_TAIL.search(nxt) else "noun"
+        hits.append((m.start(), m.end(), word, kind, None))
+    return hits
+
+
+def diversify_exclamations(lines: List[str], reserved: str = "") -> Tuple[List[str], List[str]]:
+    """
+    씬 대사(순서대로)에서 같은 감탄 어근의 두 번째 사용부터 아직 안 쓴 어근으로 바꿈. reserved(씬 1 헤드라인 등)에 나온 것은
+    이미 1회 쓴 것으로 셈. 바꿀 후보가 없으면 그대로 둠. 반환: (바뀐 대사 목록, 변경 기록)
+    """
+    used = {}
+    for _, _, root, kind, _ in _exclaim_hits(reserved):
+        used[root] = used.get(root, 0) + 1
+    adverb_i = 0
+    out, log = [], []
+    for line in lines:
+        text = line or ""
+        pieces, pos = [], 0
+        for start, end, root, kind, slot in _exclaim_hits(text):
+            pieces.append(text[pos:start])
+            original = text[start:end]
+            if used.get(root, 0) == 0:
+                used[root] = 1
+                pieces.append(original)
+            elif kind == "pred":
+                alt = next((r for r in PRED_EXCLAIMS if used.get(r, 0) == 0 and slot in PRED_EXCLAIMS[r]), None)
+                if alt:
+                    used[alt] = 1
+                    pieces.append(PRED_EXCLAIMS[alt][slot])
+                else:
+                    pieces.append(original)
+            elif kind == "adverb":
+                pieces.append(EXCLAIM_ADVERBS[adverb_i % len(EXCLAIM_ADVERBS)])
+                adverb_i += 1
+            else:
+                alt = next((n for n in NOUN_EXCLAIMS if used.get(n, 0) == 0), None)
+                if alt:
+                    used[alt] = 1
+                    pieces.append(alt)
+                else:
+                    # 명사 대체어가 없으면 '대박이에요'처럼 서술어로 쓰인 경우 안 쓴 서술형 감탄으로 ('끝내줘요')
+                    cop = next(((c, sl) for c, sl in COPULA_TO_SLOT if text.startswith(c, end)), None)
+                    pred = next((r for r in PRED_EXCLAIMS if used.get(r, 0) == 0), None) if cop else None
+                    if pred:
+                        used[pred] = 1
+                        pieces.append(PRED_EXCLAIMS[pred][cop[1]])
+                        end += len(cop[0])
+                    else:
+                        pieces.append(original)
+            pos = end
+        pieces.append(text[pos:])
+        new = "".join(pieces)
+        if new != text:
+            log.append(f"'{text}' → '{new}'")
+        out.append(new)
+    return out, log

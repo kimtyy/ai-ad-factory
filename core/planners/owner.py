@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, find_promo_tone,
+from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, diversify_exclamations, find_promo_tone,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo)
 from core.radar.hints import HookHints, copies_reference
 
@@ -172,6 +172,13 @@ def plan_owner_storyboard(
             scenes[0]["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
                                               "pattern_template": used["pattern_template"]} if used else None
 
+    # 감탄사 다양성: 같은 감탄 표현은 영상 전체(헤드라인 포함) 1회 (CTA 제외)
+    if len(scenes) > 1:
+        varied, changes = diversify_exclamations([sc["voiceover"] for sc in scenes[:-1]], reserved=scenes[0].get("hook_title", ""))
+        for sc, vo in zip(scenes[:-1], varied):
+            sc["voiceover"] = sc["subtitle"] = sc["caption"] = vo
+        for c in changes:
+            logger.info(f"[감탄사 중복 분산] {c}")
     if llm_story and scenes:
         scenes[0]["story"] = llm_story
     if output_plan_path:

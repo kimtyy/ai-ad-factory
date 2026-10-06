@@ -236,4 +236,35 @@ check(sj4[0]["voiceover"].endswith("아까운데요.") and sj4[3]["voiceover"].e
 check(all(is_complete_sentence(s_["voiceover"]) for s_ in sj4[:-1]), "CTA 제외 전 씬이 완결 문장(해요체 종결 어미)으로 끝남")
 check("정확히 6개의 완결 문장" in sent["contents"][-1] and "문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지" in sent["contents"][-1],
       "프롬프트: 씬마다 완결 문장 하나, 문장 중간에서 끊기 금지")
+
+# 6. 감탄사 다양성 (5차 렌더 메모: 씬 5 '대박이에요' → 씬 6 '대박이에요')
+from core.script_guard import diversify_exclamations
+dv = lambda ls, hook="": diversify_exclamations(ls, hook)[0]
+check(dv(["근데 진짜 대박인 건 통창 뷰예요.", "라운지 분위기도 대박이에요."]) == ["근데 진짜 대박인 건 통창 뷰예요.", "라운지 분위기도 역대급이에요."],
+      "두 번째 '대박' → '역대급' (추임새 '대박인 건'도 1회로 셈)")
+check(dv(["침구가 대박이에요.", "침구도 대박 편하거든요."]) == ["침구가 대박이에요.", "침구도 엄청 편하거든요."],
+      "부사로 쓰인 '대박 편해요' → '엄청 편해요'")
+out = dv(["바다 뷰가 미쳤어요.", "노을도 미쳤거든요.", "실내 풀도 장난 아니에요.", "객실도 장난 아니더라고요."])
+check(out == ["바다 뷰가 미쳤어요.", "노을도 장난 아니거든요.", "실내 풀도 끝내줘요.", "객실도 완벽하더라고요."],
+      f"서술형 감탄은 같은 활용 자리로 안 쓴 어근에 분산, 대체어끼리도 중복 없음 {out}")
+check(dv(["역대급 뷰가 펼쳐져요."], "국내 손꼽히는 역대급 풀") == ["대박 뷰가 펼쳐져요."], "헤드라인에서 쓴 감탄사도 1회로 셈 (꾸밈말 자리는 명사로 교체)")
+check(dv(["솔직히 여기만 한 데가 없거든요.", "바다랑 수영장이 이어져 있어요."]) == ["솔직히 여기만 한 데가 없거든요.", "바다랑 수영장이 이어져 있어요."],
+      "감탄사 없는 문장은 그대로")
+
+
+class RepeatResp:
+    text = json.dumps({"story": "…", "scenes": [
+        {"voiceover": "솔직히 바다랑 맞닿은 뷰에 반하거든요.", "hook_title": "국내 손꼽히는 오션뷰 풀"},
+        {"voiceover": "통유리 실내 풀도 진짜 좋은데요."}, {"voiceover": "근데 진짜 대박인 건 객실 침구예요."},
+        {"voiceover": "통창 너머 오션뷰도 대박이에요."}, {"voiceover": "라운지 분위기까지 대박이에요."},
+        {"voiceover": "밤 풍경도 그냥 대박이거든요."}, {"voiceover": "x"}]}, ensure_ascii=False)
+
+
+an.genai.Client = lambda api_key=None: type("C", (), {"models": type("M", (), {"generate_content": lambda self, **kw: RepeatResp()})()})()
+rp = plan_storyboard(product_name="세인트존스 호텔", usp="", mode="travel", api_key="fake",
+                     photo_inventory={"pool": 3, "bedroom": 2, "facility": 1, "view": 1}, slot_photo_notes=sj_notes, force=True)
+n_daebak = sum(s_["voiceover"].count("대박") for s_ in rp[:-1])
+for s_ in rp:
+    print(f"     감탄사 재현 씬{s_['scene_index']}: {s_['voiceover']}")
+check(n_daebak == 1 and all(s_["caption"] == s_["subtitle"] == s_["voiceover"] for s_ in rp[:-1]), f"기획 결과: '대박' 4회 → 1회 (자막도 동기화)")
 finish(fails)
