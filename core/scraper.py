@@ -263,6 +263,37 @@ CDN_DOWNLOAD_HEADERS = {
 }  # Referer는 cdn_headers_for()에서 원본 페이지 기준으로 설정
 
 
+# 공유 링크가 판매 페이지가 아닌 검색 결과로 이어지는 경우 (검색 페이지는 크롤링 금지 대상이라 열지 않음)
+SEARCH_RESULT_HOSTS = ("google.", "search.naver.com", "search.daum.net", "bing.com")
+
+
+def resolve_link(url: str, max_hops: int = 6, timeout: int = 8) -> Dict[str, Any]:
+    """
+    단축·공유 링크(share.google, naver.me, link.coupang.com 등)를 본문을 받지 않고 한 홉씩 따라가 최종 주소를 확인.
+    반환: {"url": 최종 주소, "search_query": 검색 결과 페이지면 검색어(아니면 ""), "is_search": bool}
+    """
+    current = url
+    for _ in range(max_hops):
+        host = urllib.parse.urlparse(current).netloc.lower()
+        path = urllib.parse.urlparse(current).path
+        if any(h in host for h in SEARCH_RESULT_HOSTS) and (path.startswith("/search") or "search." in host):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(current).query).get("q") or \
+                urllib.parse.parse_qs(urllib.parse.urlparse(current).query).get("query") or [""]
+            return {"url": current, "search_query": clean_text(q[0]), "is_search": True}
+        try:
+            resp = requests.get(current, headers={"User-Agent": DEFAULT_HEADERS.get("User-Agent", "Mozilla/5.0")},
+                                timeout=timeout, allow_redirects=False, stream=True)
+            location = resp.headers.get("Location")
+            resp.close()
+        except Exception:
+            break
+        if resp.status_code in (301, 302, 303, 307, 308) and location:
+            current = urllib.parse.urljoin(current, location)
+            continue
+        break
+    return {"url": current, "search_query": "", "is_search": False}
+
+
 def scrape_product_info(
     url: str,
     output_image_dir: Optional[str] = None,
@@ -289,10 +320,24 @@ def scrape_product_info(
         "image_path": "",
         "gallery_images": [],
         "gallery_urls": [],
+        "missing": [],          # 페이지에서 못 찾은 항목 (화면에서 직접 입력 요청). 지어낸 기본값은 절대 넣지 않음
+        "product_name_hint": "",
         "error": None
     }
 
     try:
+        link = resolve_link(url)
+        if link["is_search"]:
+            result["product_name_hint"] = link["search_query"]
+            result["error"] = ("공유 링크가 상품 페이지가 아니라 검색 결과 페이지로 연결됩니다. "
+                               "쿠팡 등 실제 판매 페이지 링크를 넣거나, 상품 사진을 직접 올려 주세요")
+            logger.info(f"검색 결과 링크 감지 → 크롤링 중단 (검색어 '{link['search_query']}'): {link['url'][:120]}")
+            return result
+        if link["url"] != url:
+            logger.info(f"공유 링크 최종 주소: {link['url'][:120]}")
+            url = link["url"]
+            result["url"] = url
+
         headers = dict(DEFAULT_HEADERS)
         headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         origin = page_origin(url)
@@ -358,9 +403,11 @@ def scrape_product_info(
                     title = title.split(suffix)[0].strip()
             title = re.sub(r"\[.*?\]|\(.*?\)", "", title).strip() or title
 
+        # 못 찾으면 비워 두고 사용자 입력을 요청 (예전처럼 화장품 이름 같은 가짜 기본값을 넣으면
+        # 엉뚱한 상품 영상이 만들어짐: 전기히터 링크 → 수분 앰플 광고)
         if not title:
-            title = "제주 애월 프라이빗 감성 풀빌라" if mode == "travel" else "인기 뷰티 수분 앰플"
-        result["product_name"] = title
+            result["missing"].append("product_name")
+        result["product_name"] = title or ""
         print(f"[Scraper] 추출된 제품/숙소명: {title}")
 
         # 2. 핵심 소구점 / 상세 설명 (USP) 추출
@@ -394,13 +441,10 @@ def scrape_product_info(
             if meta_desc and meta_desc.get("content"):
                 desc = clean_text(meta_desc["content"])
 
+        # 특장점도 지어내지 않음: 가짜 USP는 대본의 '근거'로 쓰여 없는 시설·효능 주장을 통과시킴
         if not desc:
-            desc = (
-                "전 객실 파노라마 오션뷰, 야외 온수 인피니티 풀, 프라이빗 자쿠지 및 숲속 힐링 공간"
-                if mode == "travel"
-                else "속당김 즉각 해결, 48시간 고보습 지속 및 피부 장벽 강화"
-            )
-        result["usp"] = desc
+            result["missing"].append("usp")
+        result["usp"] = desc or ""
         print(f"[Scraper] 추출된 USP: {desc}")
 
         # 3. 고화질 이미지 수집 및 메타데이터 태깅

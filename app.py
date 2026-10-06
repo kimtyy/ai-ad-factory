@@ -440,7 +440,11 @@ if crawl_btn:
 
             if scraped.get("success"):
                 st.session_state.scraped_data = scraped
-                st.success(f"✅ 크롤링 성공! '{scraped['product_name']}' 정보를 불러왔습니다.")
+                missing_ko = {"product_name": "이름", "usp": "특장점"}
+                if scraped.get("missing"):
+                    st.warning("⚠️ 페이지에서 " + ", ".join(missing_ko.get(m, m) for m in scraped["missing"])
+                               + "을(를) 찾지 못했습니다. 아래 칸에 직접 입력해 주세요 (사실만 입력).")
+                st.success(f"✅ 크롤링 성공! '{scraped['product_name'] or '(이름 없음)'}' 정보를 불러왔습니다.")
                 
                 if is_travel_mode:
                     # [Step 1 원칙: 실물 파일(.jpg)을 미리 다운로드하지 않고 메타데이터 풀만 적재]
@@ -471,6 +475,9 @@ if crawl_btn:
                             except Exception as e:
                                 st.warning(f"누끼 추출 실패: {e}")
             else:
+                # 실패해도 링크에서 확실히 알 수 있는 상품명(검색어)은 입력 칸에 제안으로 채움 (특장점은 비움)
+                st.session_state.scraped_data = {"product_name": scraped.get("product_name_hint", ""), "usp": ""} \
+                    if scraped.get("product_name_hint") else None
                 st.error(f"❌ 크롤링 실패: {scraped.get('error')}. 직접 정보를 입력해 주세요.")
 
 # 상품/가게 정보 입력 폼 (모드별)
@@ -490,16 +497,17 @@ if is_owner_mode:
                                  placeholder="예: 성수역 2분 / 단체석 30명 / 숙성 삼겹살")
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
 else:
-    default_name = "제주 애월 프라이빗 감성 풀빌라" if is_travel_mode else "히알루론산 수분 앰플"
-    default_usp = "전 객실 파노라마 오션뷰, 야외 온수 인피니티 풀, 프라이빗 자쿠지" if is_travel_mode else "속당김 즉각 해결, 48시간 고보습 지속"
+    # 예시 문구는 placeholder로만 보여 주고 값으로 넣지 않음 (예전 기본값 '파노라마 오션뷰…'가 그대로 대본 근거로 쓰였음)
     scraped_now = st.session_state.scraped_data or {}
     col_prod, col_usp = st.columns([1, 2])
     with col_prod:
         prod_label = "숙소명 (대본에서는 숨김 처리)" if is_travel_mode else "홍보 제품명"
-        product_name = st.text_input(prod_label, value=scraped_now.get("product_name", default_name))
+        product_name = st.text_input(prod_label, value=scraped_now.get("product_name", ""),
+                                     placeholder="예: 강릉 세인트존스 호텔" if is_travel_mode else "예: 유파 PTC 전기히터 TSK-5318")
     with col_usp:
-        usp_label = "숙소 특장점 (USP)" if is_travel_mode else "핵심 소구점 (USP)"
-        usp_desc = st.text_input(usp_label, value=scraped_now.get("usp", default_usp))
+        usp_label = "숙소 특장점 (USP, 사실만)" if is_travel_mode else "핵심 소구점 (USP, 판매 페이지에 있는 사실만)"
+        usp_desc = st.text_input(usp_label, value=scraped_now.get("usp", ""),
+                                 placeholder="예: 오션뷰 인피니티 풀, 실내 수영장" if is_travel_mode else "예: 과열 방지, 2단 온도 조절")
 
 # 사장님 모드 브랜드 오버레이: 상호명/검색어는 본문 입력값을 사용
 brand_cfg = None
@@ -588,6 +596,8 @@ if generate_plan_btn:
         try:
             if is_owner_mode and not product_name.strip():
                 raise ValueError("상호명을 입력해 주세요.")
+            if not is_owner_mode and not product_name.strip():
+                raise ValueError("숙소명(또는 상품명)을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
             # 여행 모드: 크롤링 사진 인벤토리를 넘겨 실제 없는 시설을 대본에 쓰지 못하게 함
             photo_inventory = None
             travel_photo_first = is_travel_mode and bool(st.session_state.get("image_pool")) and not st.session_state.uploaded_paths

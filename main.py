@@ -129,11 +129,11 @@ def main():
     setup_logging()
     print_banner()
 
-    # 모드별 기본값 세팅
-    if not args.product:
-        args.product = "제주 애월 프라이빗 감성 풀빌라" if args.mode == "travel" else "히알루론산 수분 앰플"
-    if not args.usp:
-        args.usp = "전 객실 파노라마 오션뷰, 야외 온수 인피니티 풀, 프라이빗 자쿠지" if args.mode == "travel" else "속당김 즉각 해결, 48시간 고보습 지속"
+    # 상품명·특장점은 지어내지 않음: URL 크롤링 결과나 사용자가 넣은 사실만 사용
+    if not args.product and not args.url:
+        console.print("[bold red]오류:[/bold red] --product(상품/숙소명) 또는 --url을 지정해 주세요. (기본값을 지어내지 않습니다)")
+        sys.exit(1)
+    args.usp = args.usp or ""
 
     # 작업 공간: 새 작업이면 생성, 단계별 이어서 실행이면 기존 job 로드
     if args.job_id:

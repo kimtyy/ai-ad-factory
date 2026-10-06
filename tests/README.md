@@ -15,6 +15,7 @@ python tests/suite_script_guard.py # 스위트 하나만 직접 실행
 | `suite_ugc_normalize.py` | 스마트폰 영상 정규화: 회전 메타·가변 프레임·HDR 톤매핑·가로 영상 블러 채움·짧은 클립 슬로모션/반복 |
 | `suite_job_lazy_folders.py` | 작업 폴더 지연 생성, 24시간 넘은 빈 폴더 자동 정리 (결과물 있는 폴더 보존) |
 | `suite_travel_golden7.py` | 숙소 7씬 황금 비율(수영장3·객실2·부대시설2), 비전 슬롯 배정, 엔딩 야경 뷰, BGM 제외 |
+| `suite_scraper_input.py` | 가짜 상품명·특장점 기본값 제거, 공유·단축 링크 추적, 검색 결과 페이지(구글 공유 링크) 차단 + 상품명 제안 |
 | `suite_script_guard.py` | 어절 경계 길이 맞춤, 사진·USP 근거 없는 주장 차단, 홍보 어투(~해보세요·~마세요·~딱!) 차단 |
 | `suite_render_visuals.py` | 화면 중앙(48~52%) 자막·우측 버튼 열 회피(배경 박스 없이 외곽선+그림자), 씬 1 후킹→서브 시간차(음성·자막), TTS 앞뒤 무음 제거·잘린 응답 재시도, 커머스 레이아웃 유지, Ken Burns 1.2배 줌·ease-out |
 | `suite_radar_core.py` | 쇼츠 레이더: 점수·필터, API 래퍼(파라미터·배치·쿼터 예산), 수집, SQLite, CLI dry-run |
