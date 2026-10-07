@@ -98,7 +98,7 @@ plan_commerce_storyboard(HEATER, HEATER_USP, [fixture("photo_pool.jpg"), fixture
 gg.Client = _orig_client
 prompt = [c for c in captured["contents"] if isinstance(c, str)][-1]
 images = [c for c in captured["contents"] if isinstance(c, Image.Image)]
-check(len(images) == 2 and "[씬 1 상품 사진]" in captured["contents"], "Gemini에 실물 상품 사진을 씬 순서대로 첨부")
+check(len(images) >= 4 and len(images) == sum(1 for c in captured["contents"] if isinstance(c, str) and c.startswith("[씬 ")) and any(isinstance(c, str) and c.startswith("[씬 1 상품 사진") for c in captured["contents"]), "Gemini에 실물 상품 사진을 씬마다 1장씩(앵글 컷 포함) 첨부")
 check("상품 종류에 맞는 말" in prompt and "화장품이 아닌데 '보습·피부'" in prompt and "USP에 그대로 적힌 것만" in prompt
       and COMMERCE_CTA in prompt and "직접 써 본 사람이 친구 1명에게 추천 썰" in prompt and HEATER_USP in prompt,
       "프롬프트: 상품 종류 맞춤(화장품 고정 예시 없음), 효능·수치는 USP 근거만, 리뷰 썰 톤, 고정 CTA")
@@ -237,6 +237,49 @@ gg.Client = _orig_client
 check(ana["box"] == (0.12, 0.05, 0.46, 0.95) and ana["points"] == pts, "한 번의 호출로 특장점 + 상품 본체 위치")
 check(cm.suggest_selling_points("유파 히터", None, api_key=None) == [] and cm.suggest_selling_points("유파 히터", mock=True, api_key="x") == [],
       "API 키 없음·mock → 빈값 (지어내지 않음)")
+
+# ---------------------------------------------------------------- 4-4. Gemini 비전: 사진 종류 판정 → 씬 역할 1:1 매칭
+from core.planners.commerce import classify_product_media, commerce_roles, match_scene_media
+ana = [{"kind": "usage", "shows": "거실에 놓인 히터", "box": None}, {"kind": "detail", "shows": "리모컨 클로즈업", "box": None},
+       {"kind": "overview", "shows": "히터 전체", "box": (0.1, 0.0, 0.5, 1.0)}]
+m4 = match_scene_media(commerce_roles(4), ["u", "d", "o"], ana)
+check([(m["path"], m["shot"]) for m in m4] == [("o", "full"), ("d", "full"), ("d", "center"), ("u", "full")]
+      and m4[0]["box"] == (0.1, 0.0, 0.5, 1.0),
+      "역할 매칭: 1번 전체 소개 → 2·3번 디테일(같은 사진 다른 앵글) → 4번 실사용 (올린 순서와 무관)")
+m6 = match_scene_media(commerce_roles(6), ["u", "d", "o"], ana)
+check(len({(m["path"], m["shot"]) for m in m6}) == 6 and m6[-1]["path"] == "u", "씬이 많으면 같은 컷 반복 없이 앵글을 바꿔 재사용, 마지막은 실사용")
+check([m["path"] for m in match_scene_media(commerce_roles(4), ["a", "b"], [])] == ["a", "b", "a", "b"],
+      "판정 없음(키 없음·mock) → 올린 순서대로 돌려 쓰기")
+
+
+class KindModels:
+    def generate_content(self, **kw):
+        captured.setdefault("calls", []).append(kw)
+        txt = [c for c in kw["contents"] if isinstance(c, str)][-1]
+        if "어떤 컷으로 쓰기 좋은지" in txt:
+            body = {"images": [{"index": 1, "kind": "usage", "shows": "거실에 놓인 히터", "product_box": [0, 100, 1000, 500]},
+                               {"index": 2, "kind": "overview", "shows": "히터 정면 전체", "product_box": [0, 0, 1000, 1000]},
+                               {"index": 3, "kind": "nonsense", "shows": "?", "product_box": "x"}]}
+        else:
+            body = reply
+        return type("R", (), {"text": json.dumps(body, ensure_ascii=False)})()
+
+
+gg.Client = lambda api_key=None: type("C", (), {"models": KindModels()})()
+media3 = [fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("phone_landscape.mp4")]
+kinds = classify_product_media(HEATER, media3, api_key="fake", thumb_dir=tmp("kind_thumb_"))
+captured["calls"] = []
+vplan = plan_commerce_storyboard(HEATER, HEATER_USP, media3, api_key="fake", thumb_dir=tmp("kind_thumb2_"))
+gg.Client = _orig_client
+check([k["kind"] for k in kinds] == ["usage", "overview", None] and kinds[0]["box"] == (0.1, 0.0, 0.5, 1.0) and kinds[2]["box"] is None,
+      "사진 종류 판정 파싱 (이상한 종류·위치 값은 무시)")
+check(vplan[0]["source_path"] == media3[1] and vplan[0]["media_kind"] == "overview" and vplan[-1]["source_path"] == media3[0]
+      and vplan[0]["visual_description"] == "히터 정면 전체" and all(s.get("shot") for s in vplan),
+      "콘티: 씬 1 = 전체 모습 사진, 마지막 = 실사용 사진, 씬마다 원본·앵글·화면 설명 기록")
+plan_call = captured["calls"][-1]
+labels = [c for c in plan_call["contents"] if isinstance(c, str) and c.startswith("[씬 ")]
+check(labels and labels[0].startswith("[씬 1 상품 사진 - 전체 모습") and "1:1 매칭" in [c for c in plan_call["contents"] if isinstance(c, str)][-1],
+      f"대본 프롬프트: 씬마다 실제로 나갈 화면(종류·앵글·설명)을 붙여 1:1로 쓰게 함 {labels[:2]}")
 
 # ---------------------------------------------------------------- 5. 상품 사진 수집 (가짜 응답)
 import core.scraper as scr

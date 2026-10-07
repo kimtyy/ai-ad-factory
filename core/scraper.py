@@ -348,7 +348,8 @@ def _scrape_coupang(url: str, output_dir: str, result: Dict[str, Any]) -> Dict[s
         return result
     result["product_name"] = clean_text(product["name"])
     result["missing"].append("usp")            # 파트너스 API에는 상품 설명이 없음 → 특장점은 판매 페이지를 보고 직접 입력
-    result["product_images"] = download_product_images([{"url": product["image_url"]}], output_dir, None)
+    images = list(dict.fromkeys(found.get("images") or [product["image_url"]]))
+    result["product_images"] = download_product_images([{"url": u} for u in images], output_dir, None)
     result["image_path"] = result["product_images"][0] if result["product_images"] else ""
     result["success"] = True
     return result

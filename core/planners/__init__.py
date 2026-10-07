@@ -16,6 +16,8 @@ from core.planners.commerce import (
     COUPANG_DISCLOSURE,
     COUPANG_DISCLOSURE_FULL,
     analyze_product_photo,
+    classify_product_media,
+    match_scene_media,
     plan_commerce_storyboard,
     suggest_selling_points,
 )

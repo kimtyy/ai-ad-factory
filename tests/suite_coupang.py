@@ -63,6 +63,9 @@ class Resp:
 PRODUCTS = [{"productId": 9099469196, "productName": "유파 PTC 전기히터 TSK-5318", "productPrice": 49900,
              "productImage": "https://ads-partners.coupang.com/image1/AAA", "productUrl": "https://link.coupang.com/re/AFFSDP?pageKey=9099469196",
              "categoryName": "계절가전", "isRocket": True},
+            {"productId": 9099469196, "productName": "유파 PTC 전기히터 TSK-5318 (옵션)", "productPrice": 51900,
+             "productImage": "https://ads-partners.coupang.com/image1/AAA2", "productUrl": "https://link.coupang.com/re/AFFSDP?pageKey=9099469196",
+             "categoryName": "계절가전", "isRocket": False},
             {"productId": 111, "productName": "다른 히터", "productPrice": 10000, "productImage": "https://ads-partners.coupang.com/image1/BBB",
              "productUrl": "https://link.coupang.com/re/AFFSDP?pageKey=111", "categoryName": "계절가전", "isRocket": False}]
 
@@ -79,7 +82,7 @@ cp._search_cache.clear()
 cp._search_calls.clear()
 items = client.search("전열기")
 again = client.search("전열기")
-check(len(items) == 2 and items[0]["name"] == "유파 PTC 전기히터 TSK-5318" and items[0]["product_id"] == "9099469196"
+check(len(items) == 3 and items[0]["name"] == "유파 PTC 전기히터 TSK-5318" and items[0]["product_id"] == "9099469196"
       and items[0]["is_rocket"] and len(calls) == 1 and again == items, "검색 결과 정리 + 같은 검색어는 1시간 캐시 (API 1회)")
 for i in range(cp.SEARCH_LIMIT_PER_HOUR - 1):
     client.search(f"kw{i}")
@@ -92,7 +95,8 @@ cp._search_cache.clear()
 cp._search_calls.clear()
 check(client.deeplink(URL) == "https://link.coupang.com/a/TEST1", "딥링크 → 파트너스 단축 링크")
 found = client.find_product(URL)
-check(found["product"] and found["product"]["product_id"] == "9099469196" and found["partner_link"].endswith("TEST1"),
+check(found["product"] and found["product"]["product_id"] == "9099469196" and found["partner_link"].endswith("TEST1")
+      and found["images"] == ["https://ads-partners.coupang.com/image1/AAA", "https://ads-partners.coupang.com/image1/AAA2"],
       "URL 속 검색어로 검색해 같은 상품 번호를 찾음 (상품명·사진·링크)")
 cp._search_cache.clear()
 miss = client.find_product(URL.replace("9099469196", "555"))
@@ -107,7 +111,7 @@ def _img_resp(url):
     if "coupang.com/vp" in url or url.startswith("https://www.coupang.com"):
         return type("R", (), {"status_code": 403, "content": b"", "headers": {}})()
     buf = io.BytesIO()
-    Image.fromarray(np.random.default_rng(1).integers(0, 255, (900, 900, 3), dtype=np.uint8)).save(buf, "JPEG", quality=90)
+    Image.fromarray(np.random.default_rng(len(url)).integers(0, 255, (900, 900, 3), dtype=np.uint8)).save(buf, "JPEG", quality=90)
     return type("R", (), {"status_code": 200, "content": buf.getvalue(), "headers": {}})()
 
 
@@ -117,7 +121,7 @@ cp._search_calls.clear()
 out = tmp("coupang_scrape_")
 res = sc.scrape_product_info(URL, output_image_dir=out, mode="commerce")
 check(res["success"] and res["product_name"] == "유파 PTC 전기히터 TSK-5318" and res["affiliate_link"].endswith("TEST1")
-      and len(res["product_images"]) == 1 and "usp" in res["missing"], "쿠팡 URL → API로 상품명·고해상도 사진·파트너스 링크, 특장점은 직접 입력 요청")
+      and len(res["product_images"]) == 2 and "usp" in res["missing"], "쿠팡 URL → API로 상품명·같은 상품의 사진 전부(옵션별)·파트너스 링크")
 check(not any("coupang.com/vp" in u for u in opened), "쿠팡 상품 페이지에는 접속하지 않음 (403·약관 회피)")
 os.environ["COUPANG_ACCESS_KEY"] = ""
 res2 = sc.scrape_product_info(URL, output_image_dir=out, mode="commerce")

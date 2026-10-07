@@ -619,8 +619,10 @@ if is_commerce_mode and CoupangPartners().enabled:
                 st.markdown(f"**{html.escape(item['name'])}**  \n{price}{' · 로켓배송' if item.get('is_rocket') else ''}")
             with c_btn:
                 if st.button("이 상품 사용", key=f"coupang_pick_{item['product_id']}_{item['image_url'][-12:]}", use_container_width=True):
+                    # 같은 상품 번호의 검색 결과(옵션·판매처별)에 다른 이미지가 있으면 모두 모음 (파트너스 API는 상품당 대표 이미지 1장)
+                    same = [it["image_url"] for it in st.session_state.coupang_results if it["product_id"] == item["product_id"]]
                     start_new_job(source_url=item["partner_url"], mode="commerce")
-                    imgs = core.scraper.download_product_images([{"url": item["image_url"]}], current_job().assets_dir, None)
+                    imgs = core.scraper.download_product_images([{"url": u} for u in dict.fromkeys(same)], current_job().assets_dir, None)
                     st.session_state.uploaded_paths = imgs
                     ana = {"points": [], "box": None} if mock_mode else analyze_product_photo(item["name"], imgs[0] if imgs else None, api_key)
                     pts = ana["points"]
@@ -832,6 +834,7 @@ if generate_plan_btn or auto_flow:
                     mock=mock_mode,
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
+                    product_boxes=st.session_state.get("product_boxes", {}),
                 )
             elif travel_photo_first:
                 # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
@@ -875,7 +878,11 @@ if generate_plan_btn or auto_flow:
             st.session_state.storyboard_mode = pipeline_mode
 
             # [씬별 에셋 배정] 업로드 미디어 우선 배정 → (숙소 제휴) 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
-            if uses_scene_media:
+            if is_commerce_mode and scenes and all(s.get("source_path") for s in scenes):
+                # 쇼핑: Gemini 비전이 고른 컷(전체 소개 → 기능·디테일 → 실사용/마무리)대로 1:1 배정 (앵글·상품 위치 포함)
+                for s in scenes:
+                    assign_media_to_scene(s, s["source_path"], "matched")
+            elif uses_scene_media:
                 assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths, cycle=is_commerce_mode)
                 pending = [s for s in scenes if not scene_has_media(s)]
                 if is_travel_mode and pending and st.session_state.get("image_pool"):

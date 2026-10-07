@@ -66,6 +66,106 @@ def _scene(i: int, role: str, text: str, hook: str = "") -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- 사진 종류 판정 → 씬 역할 1:1 매칭
+MEDIA_KINDS = ("overview", "feature", "detail", "usage")
+MEDIA_KIND_KO = {"overview": "전체 모습", "feature": "핵심 기능", "detail": "디테일", "usage": "실사용 장면"}
+# 씬 역할별로 선호하는 사진 종류 (앞일수록 우선). 1번 전체 소개 → 2~3번 기능·디테일 → 마지막 실사용/마무리
+ROLE_KIND_PREF = {
+    "hero": ("overview", "feature", "detail", "usage"),
+    "feature": ("feature", "detail", "overview", "usage"),
+    "detail": ("detail", "feature", "overview", "usage"),
+    "usage": ("usage", "feature", "detail", "overview"),
+    "cta": ("usage", "overview", "feature", "detail"),
+}
+
+
+def classify_product_media(product_name: str, media_paths: List[str], api_key: Optional[str] = None,
+                           thumb_dir: Optional[str] = None, mock: bool = False) -> List[Dict[str, Any]]:
+    """
+    상품 사진·영상을 한 번의 Gemini 비전 호출로 분석 → 사진마다 {kind, shows, box}
+      kind: overview(전체 모습) / feature(기능·작동 모습) / detail(부분 확대·소재·버튼) / usage(사람이 쓰는 장면·공간 연출)
+      shows: 화면에 보이는 것 한 줄 (대본이 그 화면을 말하게 하는 근거)
+      box: 상품 본체 위치 (x0, y0, x1, y1, 0~1) - 광고 글씨를 피해 자르기용
+    실패하면 [] (사진 순서대로 배정)
+    """
+    media = [m for m in (media_paths or []) if m][:MAX_SCENES]
+    if mock or not api_key or not media:
+        return []
+    try:
+        from google import genai
+        from google.genai import types
+        from core.guardrail import validate_model_call
+        from core.planners.owner import _media_preview_image
+        contents: List[Any] = []
+        for i, path in enumerate(media):
+            img = _media_preview_image(path, thumb_dir)
+            if img is not None:
+                contents += [f"[이미지 {i + 1}]", img]
+        contents.append(f"""
+상품: {product_name}
+위 이미지들을 하나씩 보고 각 이미지가 쇼핑 숏폼의 어떤 컷으로 쓰기 좋은지 판정하세요.
+- kind: overview(상품 전체 모습) / feature(기능·작동 모습, 화면·불빛 등) / detail(부분 확대, 버튼·소재·구성품) / usage(사람이 쓰거나 공간에 놓인 장면)
+- shows: 이미지에 실제로 보이는 것 한 줄 (한국어, 25자 이내, 보이지 않는 기능·수치는 쓰지 말 것)
+- product_box: 상품 본체 영역 [ymin, xmin, ymax, xmax] (0~1000, 광고 글씨·로고·배경 제외)
+JSON만 출력: {{"images": [{{"index": 1, "kind": "...", "shows": "...", "product_box": [0, 0, 1000, 1000]}}]}}
+""")
+        client = genai.Client(api_key=api_key)   # 변수로 잡아 둬야 호출 중에 클라이언트가 닫히지 않음
+        res = client.models.generate_content(
+            model=validate_model_call("gemini-3.6-flash", category="llm"), contents=contents,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2))
+        rows = json.loads(res.text).get("images") or []
+    except Exception as e:
+        logger.warning(f"상품 사진 종류 판정 실패: {e}")
+        return []
+    out: List[Dict[str, Any]] = [{"kind": None, "shows": "", "box": None} for _ in media]
+    for r in rows:
+        try:
+            k = int(r.get("index")) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= k < len(media):
+            kind = str(r.get("kind") or "").strip().lower()
+            out[k] = {"kind": kind if kind in MEDIA_KINDS else None, "shows": str(r.get("shows") or "").strip()[:40],
+                      "box": _valid_box(r.get("product_box"))}
+    return out
+
+
+REUSE_PENALTY = 1.5          # 같은 사진을 한 번 더 쓸 때 더하는 비용 (선호 순위 1.5칸만큼)
+
+
+def match_scene_media(roles: List[str], media_paths: List[str], analysis: Optional[List[Dict[str, Any]]] = None,
+                      boxes: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """
+    씬 역할 순서대로 사진을 1:1 배정 → [{path, shot, box, kind, shows}]
+    - 판정 결과(analysis)가 있으면 역할별 선호 종류(ROLE_KIND_PREF)의 아직 안 쓴 사진을 고름
+    - 사진이 씬보다 적으면 같은 사진을 다시 쓰되 앵글을 바꿈 (전체 → 중앙 줌인 → 상단·하단 디테일)
+    - 판정이 없으면(키 없음·mock·실패) 올린 순서대로
+    """
+    from core.render.commerce_layout import SHOT_SEQUENCE
+    media = list(media_paths or [])
+    if not media:
+        return []
+    info = list(analysis or [])
+    info += [{"kind": None, "shows": "", "box": None}] * (len(media) - len(info))
+    boxes = boxes or {}
+    used: Dict[int, int] = {}
+    judged = any(i.get("kind") for i in info)
+    out = []
+    for slot, role in enumerate(roles):
+        pref = ROLE_KIND_PREF.get(role, MEDIA_KINDS)
+        # 비용 = 역할 적합도(선호 순위) + 재사용 벌점 → 안 맞는 새 사진보다 잘 맞는 사진의 다른 앵글을 고르기도 함
+        # (예: 디테일 칸에 실사용 사진을 쓰지 않고 디테일 사진을 중앙 줌인으로, 실사용 사진은 마지막 칸에 아껴 둠)
+        def cost(k):
+            fit = (pref.index(info[k]["kind"]) if info[k].get("kind") in pref else len(pref)) if judged else 0
+            return (fit + REUSE_PENALTY * used.get(k, 0) if judged else used.get(k, 0), k)
+        k = min(range(len(media)), key=cost)
+        n = used.get(k, 0)
+        used[k] = n + 1
+        out.append({"path": media[k], "shot": SHOT_SEQUENCE[n % len(SHOT_SEQUENCE)],
+                    "box": info[k].get("box") or boxes.get(media[k]), "kind": info[k].get("kind"), "shows": info[k].get("shows", "")})
+    return out
+
+
 def _claim(text: str, usp: str) -> Optional[str]:
     """판매 페이지(USP)에 근거 없는 가격·할인·순위 또는 효능·수치·인증 주장"""
     return find_unsupported_claim(text, usp=usp, check_amenities=False) or find_unsupported_spec(text, usp)
@@ -81,10 +181,13 @@ def plan_commerce_storyboard(
     thumb_dir: Optional[str] = None,
     output_plan_path: Optional[str] = None,
     hook_hints: Optional[HookHints] = None,
+    product_boxes: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    쇼핑 제휴 콘티. 씬 수 = 사진·영상 수 (MIN_SCENES~MAX_SCENES, 부족하면 앱에서 사진을 돌려 씀).
-    i번째 씬 = i번째 미디어 (마지막 씬은 CTA). 상품명은 판매 페이지/사용자 입력값 그대로 (지어내지 않음)
+    쇼핑 제휴 콘티. 씬 수 = 사진·영상 수 (MIN_SCENES~MAX_SCENES, 부족하면 같은 사진을 앵글을 바꿔 재사용).
+    Gemini 비전으로 사진 종류를 판정해 씬 역할(전체 소개 → 기능·디테일 → 실사용/마무리)에 1:1 배정하고,
+    각 씬이 실제로 보여 줄 화면(앵글로 자른 이미지)을 보며 그 씬 대사를 씀. 씬마다 source_path·shot·product_box 기록.
+    상품명은 판매 페이지/사용자 입력값 그대로 (지어내지 않음)
     """
     product_name = (product_name or "").strip()
     if not product_name:
@@ -92,10 +195,16 @@ def plan_commerce_storyboard(
     media = list(media_paths or [])[:MAX_SCENES]
     roles = commerce_roles(len(media) if len(media) >= MIN_SCENES else (num_scenes or MIN_SCENES))
 
+    analysis = classify_product_media(product_name, media, api_key, thumb_dir, mock) if media else []
+    scene_media = match_scene_media(roles, media, analysis, product_boxes)
+    if analysis:
+        logger.info("[씬 컷 매칭] " + " / ".join(f"씬{i + 1}={MEDIA_KIND_KO.get(m['kind'], '?')}({m['shot']})"
+                                               for i, m in enumerate(scene_media)))
+
     llm, llm_story = None, ""
     if api_key and not mock:
         try:
-            llm = _plan_with_gemini(product_name, usp, roles, media, api_key, thumb_dir, hook_hints)
+            llm = _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints)
             llm_story = getattr(llm, "story", "")
         except Exception as e:
             logger.warning(f"쇼핑 플래너 Gemini 호출 실패, 템플릿 대사로 대체: {e}")
@@ -132,6 +241,11 @@ def plan_commerce_storyboard(
             logger.info(f"[미완성 문장 차단] 씬 {i + 1}: '{text}' → 템플릿 대사")
             done = fallback()
         scenes.append(_scene(i, role, done, hook))
+
+    for sc, sm in zip(scenes, scene_media):
+        sc.update({"source_path": sm["path"], "shot": sm["shot"], "product_box": sm["box"], "media_kind": sm["kind"]})
+        if sm.get("shows"):
+            sc["visual_description"] = sm["shows"]
 
     body = scenes[:-1]
     varied, changes = diversify_exclamations([s["voiceover"] for s in body], reserved=scenes[0]["hook_title"])
@@ -235,17 +349,28 @@ class _ScenesWithStory(list):
     story = ""
 
 
-def _plan_with_gemini(product_name, usp, roles, media, api_key, thumb_dir, hook_hints=None):
+def _scene_preview(sm: Dict[str, Any], thumb_dir: Optional[str]):
+    """씬이 실제로 보여 줄 화면 미리보기: 사진(영상은 대표 프레임)을 그 씬 앵글로 자른 것"""
+    from core.planners.owner import _media_preview_image
+    from core.render.commerce_layout import shot_crop
+    img = _media_preview_image(sm["path"], thumb_dir)
+    if img is None:
+        return None
+    return shot_crop(img, sm.get("shot") or "full", sm.get("box")) if sm.get("shot") not in (None, "full") else img
+
+
+def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints=None):
     from google import genai
     from google.genai import types
     from core.guardrail import validate_model_call
-    from core.planners.owner import _media_preview_image
+    from core.render.commerce_layout import SHOT_LABELS
 
     contents: List[Any] = []
-    for i, path in enumerate(media[:len(roles)]):
-        img = _media_preview_image(path, thumb_dir)
+    for i, sm in enumerate(scene_media[:len(roles)]):
+        img = _scene_preview(sm, thumb_dir)
         if img is not None:
-            contents += [f"[씬 {i + 1} 상품 사진]", img]
+            note = " · ".join(x for x in (MEDIA_KIND_KO.get(sm.get("kind"), ""), SHOT_LABELS.get(sm.get("shot"), ""), sm.get("shows", "")) if x)
+            contents += [f"[씬 {i + 1} 상품 사진" + (f" - {note}" if note else "") + "]", img]
     n = len(roles)
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
     persona_rules = COPY_TONE_RULES.replace("유튜버가 시청자 1명에게 꿀팁 썰 푸는", "직접 써 본 사람이 친구 1명에게 추천 썰 푸는")
@@ -257,7 +382,8 @@ def _plan_with_gemini(product_name, usp, roles, media, api_key, thumb_dir, hook_
 [작성 규칙]
 1. 먼저 사진과 상품명으로 이 상품이 어떤 종류인지 파악하세요. 대사는 반드시 그 상품 종류에 맞는 말이어야 합니다
    (예: 히터라면 따뜻함·안전·크기 이야기. 화장품이 아닌데 '보습·피부' 같은 말을 쓰면 안 됩니다).
-2. 총 {n}개 씬. [씬 i 상품 사진]이 있으면 i번째 씬 대사는 그 사진에 보이는 부분(외관·기능·디테일·사용 장면)에 대한 이야기여야 합니다.
+2. 총 {n}개 씬. [씬 i 상품 사진]은 i번째 씬에 실제로 나갈 화면입니다(앵글로 잘린 컷 포함). i번째 씬 대사는 반드시 그 화면에 보이는
+   부분(전체 모습·기능·디테일·사용 장면)에 대한 이야기여야 합니다. 화면 1:1 매칭: 1번은 전체 소개, 중간은 기능·디테일, 마지막은 실사용·마무리.
    사진이 없는 씬은 기본 구성({role_hint})을 따르세요.
 3. 먼저 직접 써 본 사람이 친구 한 명에게 추천 썰을 푸는 독백(story)을 정확히 {n - 1}개의 완결 문장으로 쓰고,
    문장 하나씩 씬 1~{n - 1}의 voiceover로 넣으세요. 각 voiceover는 공백 포함 15~{VO_LIMIT}자, 해요체 종결 어미로 끝나는 완결 문장.

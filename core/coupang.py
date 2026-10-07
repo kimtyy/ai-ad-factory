@@ -134,9 +134,12 @@ class CoupangPartners:
         """
         info = parse_coupang_url(url)
         out = {"product": None, "partner_link": self.deeplink(url), "keyword": info["keyword"], "product_id": info["product_id"]}
+        out["images"] = []
         if info["keyword"] and info["product_id"]:
             try:
-                out["product"] = next((p for p in self.search(info["keyword"]) if p["product_id"] == info["product_id"]), None)
+                same = [p for p in self.search(info["keyword"]) if p["product_id"] == info["product_id"]]
+                out["product"] = same[0] if same else None
+                out["images"] = list(dict.fromkeys(p["image_url"] for p in same if p.get("image_url")))   # 옵션·판매처별 이미지
             except CoupangAPIError as e:
                 logger.warning(f"쿠팡 검색 실패: {e}")
         return out
