@@ -473,6 +473,9 @@ with st.sidebar:
         }
 
     st.markdown("---")
+    _url_file = os.path.join("outputs", "tunnel_url.txt")       # scripts/watchdog.ps1이 터널을 재시작하면 새 주소를 기록
+    if os.path.exists(_url_file):
+        st.caption(f"📱 모바일 접속 주소: {open(_url_file, encoding='utf-8-sig').read().strip()}")
     st.caption(f"📁 작업 ID: `{current_job().job_id}`")
     if st.button("🆕 새 작업 시작", use_container_width=True, help="새 작업 공간을 만듭니다. 이전 작업 파일은 outputs/jobs/에 보존됩니다."):
         start_new_job()
