@@ -48,17 +48,44 @@ _req = []
 
 class R:
     status_code = 200
+    second = False   # True면 결과 2건 (고르기 화면)
 
     def json(self):
-        return {"items": [{"title": "<b>성수</b> 불판 성수점", "category": "음식점>한식>육류,고기요리",
-                           "address": "서울특별시 성동구 성수동2가 1-1", "roadAddress": "서울특별시 성동구 성수이로 1",
-                           "telephone": "", "link": "https://example.com"}]}
+        items = [{"title": "<b>성수</b> 불판 성수점", "category": "음식점>한식>육류,고기요리",
+                  "address": "서울특별시 성동구 성수동2가 1-1", "roadAddress": "서울특별시 성동구 성수이로 1",
+                  "telephone": "", "link": "https://example.com"}]
+        if R.second:
+            items.append({"title": "성수 불판 건대점", "category": "음식점>한식", "address": "서울특별시 광진구 화양동 1",
+                          "roadAddress": "", "telephone": "", "link": ""})
+        return {"items": items}
 
 
 nl.requests.get = lambda url, params=None, timeout=None, headers=None: (_req.append((url, params, headers)), R())[1]
 items = nl.NaverLocalSearch("ID", "SECRET").search("성수 불판")
 check(items[0]["name"] == "성수 불판 성수점" and items[0]["business_type"] == "food" and items[0]["road_address"].endswith("성수이로 1")
       and _req[0][2]["X-Naver-Client-Id"] == "ID" and "openapi.naver.com" in _req[0][0], "지역 검색: 태그 제거·업종·도로명 주소, 공식 API 헤더")
+
+_ok_get = nl.requests.get
+for code, word in ((401, "키가 맞지 않"), (403, "'검색'을 추가"), (429, "한도")):
+    nl.requests.get = lambda *a, _c=code, **k: type("E", (), {"status_code": _c})()
+    try:
+        nl.NaverLocalSearch("ID", "SECRET").search("x")
+        check(False, f"HTTP {code}")
+    except nl.NaverAPIError as e:
+        check(word in str(e), f"HTTP {code} → 바로 고칠 수 있는 안내 ({e})")
+
+
+def _down(*a, **k):
+    raise nl.requests.ConnectionError("down")
+
+
+nl.requests.get = _down
+try:
+    nl.NaverLocalSearch("ID", "SECRET").search("x")
+    check(False, "네트워크 오류")
+except nl.NaverAPIError as e:
+    check("연결하지 못했어요" in str(e), "네트워크 끊김·타임아웃 → 화면이 죽지 않고 안내 (예전엔 예외로 화면 오류)")
+nl.requests.get = _ok_get
 
 # ---------------------------------------------------------------- 3. 사진 기반 매장 특징 정리 (가짜 Gemini)
 import google.genai as gg
@@ -99,11 +126,21 @@ try:
     os.environ["NAVER_CLIENT_ID"], os.environ["NAVER_CLIENT_SECRET"] = "ID", "SECRET"
     at.text_input(key="place_query").input("성수 불판").run()
     at.button(key="place_fetch").click().run()
-    at.button(key="place_pick_0").click().run()
-    os.environ["NAVER_CLIENT_ID"], os.environ["NAVER_CLIENT_SECRET"] = "", ""
     check(at.text_input(key="owner_name").value == "성수 불판 성수점" and at.selectbox(key="owner_type").value == "food"
-          and at.text_input(key="owner_address").value == "서울특별시 성동구 성수이로 1",
-          "API 키 있음: 검색 결과 고르면 상호명·업종·주소 자동 채움")
+          and at.text_input(key="owner_address").value == "서울특별시 성동구 성수이로 1" and not at.session_state.place_results
+          and any("정보를 채웠어요" in (s.value or "") for s in at.success),
+          "API 키 있음 + 결과 1건: 버튼 한 번에 상호명·업종·주소 바로 채움")
+    R.second = True
+    at.text_input(key="owner_name").set_value("").run()
+    at.text_input(key="place_query").input("성수 불판 지점").run()
+    at.button(key="place_fetch").click().run()
+    n_found = len(at.session_state.place_results)
+    at.button(key="place_pick_1").click().run()
+    R.second = False
+    os.environ["NAVER_CLIENT_ID"], os.environ["NAVER_CLIENT_SECRET"] = "", ""
+    check(n_found == 2 and at.text_input(key="owner_name").value == "성수 불판 건대점"
+          and at.text_input(key="owner_address").value == "서울특별시 광진구 화양동 1",
+          "결과 여러 건: 목록에서 고르면 그 가게로 채움 (도로명 없으면 지번 주소)")
 
     at.sidebar.checkbox[0].check().run()                                          # Mock
     media = [fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("phone_portrait.mov")]

@@ -3,6 +3,7 @@ app.py - AI Short-form Ad Video Factory 반응형 Streamlit 웹 대시보드
 쇼핑몰 크롤링, 누끼 추출, 톤앤매너/길이/성우 선택, 실시간 콘티 편집 및 9:16 광고 영상 원클릭 렌더링
 """
 import os
+import re
 import sys
 import html
 import json
@@ -47,6 +48,7 @@ from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.coupang import SEARCH_LIMIT_PER_HOUR, CoupangAPIError, CoupangPartners
 from core.media.library import MAX_MEDIA, add_media, move_media, remove_media
+from core.tts import owner_readings
 from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, place_id_from_link, region_of
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
@@ -347,7 +349,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
                      ("page_switch", "make")):
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
-for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "place_query",
+for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query",
            "product_name_input", "product_usp_input",
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
@@ -649,6 +651,14 @@ def _fill_store_points(api_key_: str, mock_: bool):
                                              if not mock_ else "Mock 모드에서는 AI 특징 정리를 건너뜁니다.")
 
 
+def _fill_place(it: dict):
+    """네이버 검색 결과 1건 → 상호명·업종·주소 칸 (위젯이 만들어지기 전에 호출: 같은 실행에서 바로 반영)"""
+    st.session_state.owner_name = it["name"]
+    st.session_state.owner_type = it["business_type"]
+    st.session_state.owner_address = it["road_address"] or it["address"]
+    st.session_state.place_results = []
+
+
 # 사장님: 네이버 플레이스 링크·상호명 → 공식 지역 검색 API로 상호명·업종·주소 (사진·리뷰는 가져오지 않음)
 if is_owner_mode:
     naver = NaverLocalSearch()
@@ -677,9 +687,14 @@ if is_owner_mode:
                     st.warning("링크만으로는 상호명을 알 수 없어요 (네이버 페이지는 열지 않습니다). 아래 상호명 칸을 채우고 다시 눌러 주세요.")
                 else:
                     try:
-                        st.session_state.place_results = naver.search(query)
-                        if not st.session_state.place_results:
-                            st.info("검색 결과가 없어요. 상호명을 조금 바꿔 다시 찾아 주세요.")
+                        found = naver.search(query)
+                        st.session_state.place_results = found
+                        if not found:
+                            st.info("검색 결과가 없어요. 상호명에 지역을 붙여(예: 성수 불판) 다시 찾거나 아래에 직접 입력해 주세요.")
+                        elif len(found) == 1:
+                            # 결과가 하나면 고를 필요 없이 바로 채움 (한 번 클릭으로 끝)
+                            _fill_place(found[0])
+                            st.success(f"'{found[0]['name']}' 정보를 채웠어요 ({found[0]['category']}). 사진·영상은 아래에서 직접 올려 주세요.")
                     except NaverAPIError as ne:
                         st.error(str(ne))
         for i, it in enumerate(st.session_state.get("place_results", [])):
@@ -689,10 +704,7 @@ if is_owner_mode:
                             f"{html.escape(it['road_address'] or it['address'])}")
             with r2:
                 if st.button("이 가게로 채우기", key=f"place_pick_{i}", use_container_width=True):
-                    st.session_state.owner_name = it["name"]
-                    st.session_state.owner_type = it["business_type"]
-                    st.session_state.owner_address = it["road_address"] or it["address"]
-                    st.session_state.place_results = []
+                    _fill_place(it)
                     st.toast("상호명·업종·주소를 채웠어요. 사진·영상은 아래에서 직접 올려 주세요.", icon="🏢")
                     st.rerun()
         st.caption("📷 사진·리뷰는 네이버에서 가져오지 않아요 (이용 약관·방문자 사진 저작권). 아래에서 직접 찍은 사진·영상을 올려 주세요.")
@@ -720,6 +732,13 @@ if is_owner_mode:
                   args=(api_key, mock_mode), help="올린 사진·영상을 보고 손님 눈길을 끌 특징을 자랑 칸에 보탭니다 (숫자·가격은 넣지 않음)")
     if st.session_state.get("store_points_msg"):
         st.caption(st.session_state.pop("store_points_msg"))
+    # 영문·숫자·기호가 섞인 상호는 TTS가 철자로 읽거나 엉킴 → 소리 나는 대로 적으면 나레이션에만 적용 (자막·워터마크는 원래 표기)
+    tricky_name = bool(re.search(r"[A-Za-z0-9&'·|]", product_name or ""))
+    st.text_input("🗣️ 상호명 읽는 법 (선택, 나레이션에만 적용)", key="owner_reading",
+                  placeholder="예: 세인트존스 호텔" if tricky_name else "예: 성수 불판 (영문·숫자가 섞인 상호일 때 적어 주세요)",
+                  help="자막·워터마크는 상호명 그대로, AI 성우만 이 발음으로 읽어요. 예: 'St. John's' → '세인트존스'")
+    if tricky_name and not st.session_state.get("owner_reading", "").strip():
+        st.caption("💡 상호명에 영문·숫자가 있어요. 성우가 철자로 읽을 수 있으니 '읽는 법'에 한글 발음을 적어 주시면 깔끔해요.")
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
 else:
     # 예시 문구는 placeholder로만 보여 주고 값으로 넣지 않음 (예전 기본값 '파노라마 오션뷰…'가 그대로 대본 근거로 쓰였음)
@@ -1140,7 +1159,8 @@ if render_btn:
                 audio_mode=selected_audio_mode,
                 mock=mock_mode,
                 mode=pipeline_mode,
-                cache_dir=current_job().assets_dir
+                cache_dir=current_job().assets_dir,
+                readings=owner_readings(product_name, st.session_state.get("owner_reading", "")) if is_owner_mode else None
             )
 
             manifest = []

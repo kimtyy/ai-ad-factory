@@ -92,6 +92,72 @@ def sino_korean_number(num: int) -> str:
     return " ".join(out)
 
 
+_NATIVE_ONES = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉"]
+_NATIVE_TENS = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"]
+# 고유어로 세는 단위 (1~99만): '3개' → '세 개', '2명' → '두 명', '3시간' → '세 시간'. '개월'·'번'(출구 번호와 횟수가 섞임)은 제외
+NATIVE_COUNTERS = r"(?:개(?!월)|명|시간|시(?![가-힣])|잔|마리|살|그릇|가지|곳|번째|병|켤레|송이|시간째)"
+
+
+def native_korean_number(num: int) -> str:
+    """단위 앞 고유어 수사 (1 → 한, 20 → 스무, 21 → 스물한, 99 → 아흔아홉). 1~99만"""
+    tens, ones = divmod(num, 10)
+    if tens == 2 and ones == 0:
+        return "스무"
+    return _NATIVE_TENS[tens] + _NATIVE_ONES[ones]
+
+
+def apply_readings(text: str, readings: Optional[Dict[str, str]] = None) -> str:
+    """
+    읽는 법 사전 적용 (TTS 입력에만, 자막은 원문): {'St. John's': '세인트존스'} 처럼 상호명·지명을 소리 나는 대로.
+    긴 표기부터 바꿔 'St. John's 호텔'과 'St. John's'가 겹쳐도 안전
+    """
+    if not text or not readings:
+        return text or ""
+    for src in sorted((k for k in readings if k and k.strip() and (readings.get(k) or "").strip()), key=len, reverse=True):
+        text = text.replace(src, readings[src].strip())
+    return text
+
+
+def owner_readings(business_name: str, reading: str) -> Dict[str, str]:
+    """
+    사장님 상호명 읽는 법 → TTS 사전. 'St. John's 강릉점' + '세인트존스 강릉점'이면 전체 표기와,
+    대본에 지점명을 뺀 이름만 나와도 바뀌도록 앞부분('St. John's' → '세인트존스')도 함께 등록
+    """
+    name, say = (business_name or "").strip(), (reading or "").strip()
+    if not name or not say or name == say:
+        return {}
+    out = {name: say}
+    nw, sw = name.split(), say.split()
+    if len(nw) == len(sw) and len(nw) > 1:
+        for a, b in zip(nw, sw):
+            if a != b and len(a) >= 2:
+                out.setdefault(a, b)
+    # 끝 어절(지점명 등)이 같으면 앞부분끼리도 등록: 'St. John's 강릉점'/'세인트존스 강릉점' → 'St. John's' → '세인트존스'
+    while len(nw) > 1 and len(sw) > 1 and nw[-1] == sw[-1]:
+        nw, sw = nw[:-1], sw[:-1]
+        if " ".join(nw) != " ".join(sw):
+            out.setdefault(" ".join(nw), " ".join(sw))
+    return out
+
+
+# 붙어 쓴 행정구역 ('경기도가평군청평면') → 끊어 읽기. 광역 단위는 이름 목록으로만 (일반 단어 '…도'를 건드리지 않게)
+_PROVINCES = ("서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|서울시|부산시|대구시|인천시|광주시|대전시|울산시|세종시|경기도|강원특별자치도|강원도|"
+              "충청북도|충청남도|전북특별자치도|전라북도|전라남도|경상북도|경상남도|제주특별자치도|제주도")
+_PROVINCE_GLUE = re.compile(rf"({_PROVINCES})(?=[가-힣]{{1,4}}[시군구])")   # 뒤에 시·군·구가 올 때만 ('광주시청', '경기도민'은 그대로)
+_LOCAL_GLUE = re.compile(r"(?<![가-힣])([가-힣]{1,4}[시군구])([가-힣]{1,4}[시군구읍면동리])"
+                         r"(?=(?:에서|까지|부터|으로|로|에|은|는|이|가|도|의)?(?![가-힣]))")
+
+
+def space_region_names(text: str) -> str:
+    text = _PROVINCE_GLUE.sub(r"\1 ", text)
+    for _ in range(2):   # 시+구+동처럼 세 단계로 붙은 경우
+        text = _LOCAL_GLUE.sub(r"\1 \2", text)
+    return text
+
+
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200d]")
+
+
 def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     """
     [TTS 음성 합성용 텍스트 정제기]
@@ -104,7 +170,16 @@ def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     if not text:
         return ""
 
-    # 0. 한자어 숫자 변환 - 쉼표 제거 전에 ('1,200' 보존) (자릿값 포함: 48 → 사십팔, 1200 → 천이백). 예전엔 한 자리씩 읽어 '48시간'이 '사팔 시간'이 됐음
+    # 0-1. 이모지·장식 기호 제거, 붙어 쓴 지역명 끊기, 영문 상호 정리 ("John's" → "Johns", '카페ONE' → '카페 ONE')
+    text = _EMOJI.sub(" ", text)
+    text = re.sub(r"[·•|｜ㅣ★☆♥♡※▶►◆◇■□●○『』「」【】〈〉《》–—]", " ", text)
+    text = re.sub(r"(?<=[A-Za-z])['’](?=[A-Za-z])", "", text)
+    text = re.sub(r"(?<=[가-힣])(?=[A-Za-z])", " ", text)
+    text = re.sub(r"\s*-\s*", " ", text)
+    text = space_region_names(text)
+    # 0-2. 고유어로 세는 단위는 고유어 수사 ('3개' → '세 개', '2명' → '두 명', '20잔' → '스무 잔'). 예전엔 '삼개'로 읽음
+    text = re.sub(rf"(?<![\d,])([1-9]\d?)\s*(?={NATIVE_COUNTERS})", lambda m: native_korean_number(int(m.group(1))) + " ", text)
+    # 0-3. 한자어 숫자 변환 - 쉼표 제거 전에 ('1,200' 보존) (자릿값 포함: 48 → 사십팔, 1200 → 천이백). 예전엔 한 자리씩 읽어 '48시간'이 '사팔 시간'이 됐음
     text = re.sub(r'\d{1,3}(?:,\d{3})+|\d+', lambda m: sino_korean_number(int(m.group(0).replace(",", ""))), text)
 
     # 1. 물결표, 특수문자, 따옴표, 괄호류 제거

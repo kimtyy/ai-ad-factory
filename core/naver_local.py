@@ -25,6 +25,14 @@ FOOD_WORDS = ("음식점", "카페", "디저트", "베이커리", "제과", "술
               "치킨", "피자", "커피", "브런치", "바(BAR)", "포차")
 
 
+# 키 등록 직후 자주 나는 오류 → 사장님이 바로 고칠 수 있는 안내
+HTTP_ERROR_HINTS = {
+    401: "네이버 API 키가 맞지 않아요. .env의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 값을 다시 확인해 주세요.",
+    403: "이 애플리케이션에 '검색' API 사용 권한이 없어요. developers.naver.com → 내 애플리케이션 → API 설정에서 '검색'을 추가해 주세요.",
+    429: "오늘 네이버 검색 한도(하루 25,000회)를 넘었어요. 내일 다시 쓰거나 아래에 직접 입력해 주세요.",
+}
+
+
 class NaverAPIError(RuntimeError):
     pass
 
@@ -69,7 +77,7 @@ def region_of(address: str) -> str:
 
 
 class NaverLocalSearch:
-    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, timeout: int = 10):
+    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, timeout: int = 5):
         self.client_id = (client_id or os.getenv("NAVER_CLIENT_ID", "")).strip()
         self.client_secret = (client_secret or os.getenv("NAVER_CLIENT_SECRET", "")).strip()
         self.timeout = timeout
@@ -85,10 +93,13 @@ class NaverLocalSearch:
         q = (query or "").strip()
         if not q:
             return []
-        resp = requests.get(LOCAL_SEARCH_URL, params={"query": q, "display": max(1, min(display, 5))}, timeout=self.timeout,
-                            headers={"X-Naver-Client-Id": self.client_id, "X-Naver-Client-Secret": self.client_secret})
+        try:
+            resp = requests.get(LOCAL_SEARCH_URL, params={"query": q, "display": max(1, min(display, 5))}, timeout=self.timeout,
+                                headers={"X-Naver-Client-Id": self.client_id, "X-Naver-Client-Secret": self.client_secret})
+        except requests.RequestException:
+            raise NaverAPIError("네이버 검색 서버에 연결하지 못했어요. 잠시 뒤 다시 눌러 주시거나 아래에 직접 입력해 주세요.")
         if resp.status_code != 200:
-            raise NaverAPIError(f"네이버 검색 API 오류 (HTTP {resp.status_code})")
+            raise NaverAPIError(HTTP_ERROR_HINTS.get(resp.status_code, f"네이버 검색 API 오류 (HTTP {resp.status_code})"))
         out = []
         for it in (resp.json().get("items") or []):
             category = _clean(it.get("category", ""))

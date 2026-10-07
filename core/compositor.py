@@ -27,6 +27,7 @@ logger = logging.getLogger("ad_factory.compositor")
 #   씬 1은 후킹 헤드라인 단독(0~hook_sec) → 서브 자막 순서로 시간차 노출, 위치는 화면 정중앙 한곳 (배경 박스 없음)
 #   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
 CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
+XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
 # 자막 블록 세로 중심 (높이 비율). 쇼츠 세이프 에어리어: 하단 약 35%는 채널명·제목·구독 버튼·사운드명,
 # 우측은 좋아요·댓글 버튼이 덮음 → 화면 정중앙(48~52%)에 둬야 모바일에서 가려지지 않음 (하단 68%는 UI에 가려졌음)
 CAPTION_CENTER_Y = 0.50
@@ -398,7 +399,9 @@ class AdCompositor:
 
                 # 2. 비디오 길이 안전 연장 (엔딩 나레이션 잘림 원천 차단: 마지막 씬 +1.0초, 일반 씬 +0.2초 여유 마진)
                 is_last_scene = (idx == len(asset_manifest))
-                tail_margin = 1.0 if is_last_scene else 0.2
+                # 다음 씬과 XFADE_SEC만큼 겹쳐 디졸브: 겹치는 만큼 꼬리를 늘려 나레이션 간격(0.2초)·전체 길이는 그대로,
+                # 겹침 구간에는 앞 씬의 무음 꼬리만 깔리므로 두 나레이션이 섞이지 않음
+                tail_margin = 1.0 if is_last_scene else 0.2 + XFADE_SEC
                 scene_target_duration = audio_duration + tail_margin
                 logger.info(f"씬 {scene_num} (마지막={is_last_scene}): 오디오 {audio_duration:.2f}초 + 테일 마진 {tail_margin:.2f}초 -> 비디오 목표 재생 시간: {scene_target_duration:.2f}초")
 
@@ -481,14 +484,23 @@ class AdCompositor:
                 last_clip = processed_clips[-1]
                 last_frame = last_clip.get_frame(max(0, last_clip.duration - 0.05))
                 card_arr = brand.render_end_card(last_frame, font_path=self.font_path)
-                card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec)).fadein(0.3).fadeout(0.4)
+                card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec) + XFADE_SEC).fadeout(0.4)
                 opened_clips.append(card_clip)
                 processed_clips.append(card_clip)
                 logger.info(f"브랜드 엔딩 카드 추가 ({brand.end_card.duration_sec:.1f}초): '{brand.business_name}' / 검색어 '{brand.end_card.search_keyword}'")
 
             # 전체 씬 결합
             logger.info(f"전체 {len(processed_clips)}개 클립 타임라인 결합 중...")
-            final_composite = concatenate_videoclips(processed_clips, method="compose")
+            # 씬 전환: 하드 컷 대신 XFADE_SEC 디졸브 (다음 씬이 앞 씬 위로 서서히 겹쳐 나타남, 검은 화면 없음)
+            if len(processed_clips) > 1 and XFADE_SEC > 0:
+                processed_clips = [processed_clips[0]] + [c.crossfadein(XFADE_SEC) for c in processed_clips[1:]]
+                opened_clips.extend(processed_clips[1:])
+                logger.info(f"씬 전환 디졸브 {XFADE_SEC:.2f}초 x {len(processed_clips) - 1}곳")
+            final_composite = concatenate_videoclips(processed_clips, method="compose",
+                                                     padding=-XFADE_SEC if len(processed_clips) > 1 else 0)
+            if len(processed_clips) > 1 and XFADE_SEC > 0:
+                # MoviePy는 마지막 클립 뒤에도 padding을 빼서 끝 XFADE_SEC가 잘림 → 마지막 클립 끝까지 복원 (엔딩 여유·페이드아웃 보존)
+                final_composite = final_composite.set_duration(final_composite.duration + XFADE_SEC)
             opened_clips.append(final_composite)
 
             # 비디오 전체 타임라인 길이가 '모든 씬 오디오 총합 + 엔딩 여유 마진 1.0초'보다 짧지 않도록 강제 보장

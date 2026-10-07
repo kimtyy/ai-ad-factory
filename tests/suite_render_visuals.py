@@ -183,6 +183,29 @@ from core.tts import clean_tts_text, end_rise_percent, question_variants
 check(clean_tts_text("여기 진짜 한국 맞아요?!") == "여기 진짜 한국 맞아요?" and clean_tts_text("솔직히 없거든요!") == "솔직히 없거든요"
       and clean_tts_text("이 가격에 이 뷰가 나온다고요??") == "이 가격에 이 뷰가 나온다고요?" and clean_tts_text("숙소 를 예약") == "숙소를 예약",
       "TTS 텍스트: 물음표 유지('?!'·'??' 정리), 느낌표·마침표 제거, '이 가격'처럼 다음 어절 첫 글자를 앞말에 붙이지 않음")
+# ---------------------------------------------------------------- 2-2-0. 상호명·지역명 발음 (사장님 모드)
+from core.tts import apply_readings, owner_readings
+check(clean_tts_text("단체석 30명 · 3시간 · 20잔 · 21개") == "단체석 서른 명 세 시간 스무 잔 스물한 개"
+      and clean_tts_text("삼겹살 2인분 3개월 1,200원") == "삼겹살 이인분 삼개월 천이백원",
+      "세는 단위는 고유어(서른 명·세 시간·스무 잔), 인분·개월·금액은 한자어")
+check(clean_tts_text("경기도가평군청평면까지 가요") == "경기도 가평군 청평면까지 가요"
+      and clean_tts_text("서울시강남구역삼동") == "서울시 강남구 역삼동"
+      and clean_tts_text("가평군청에서 봐요") == "가평군청에서 봐요" and clean_tts_text("광주시청 대전시민 경기도민") == "광주시청 대전시민 경기도민",
+      "붙어 쓴 주소는 행정구역 단위로 끊어 읽기 (군청·시청·시민 같은 일반 단어는 그대로)")
+check(clean_tts_text("카페ONE 성수점 | 오픈 🍖✨") == "카페 ONE 성수점 오픈" and clean_tts_text("St. John's 호텔") == "St Johns 호텔",
+      "이모지·장식 기호 제거, 한글·영문 경계 띄우기, 영문 아포스트로피는 붙여 읽기")
+r = owner_readings("St. John's 강릉점", "세인트존스 강릉점")
+check(r == {"St. John's 강릉점": "세인트존스 강릉점", "St. John's": "세인트존스"}
+      and apply_readings("St. John's 가 보셨어요? St. John's 강릉점이요", r) == "세인트존스 가 보셨어요? 세인트존스 강릉점이요"
+      and owner_readings("성수 불판", "") == {} and owner_readings("성수 불판", "성수 불판") == {},
+      "읽는 법: 상호 전체·지점명 뺀 이름 모두 한글 발음으로 (비우면 적용 안 함)")
+_g = AssetGenerator(mode="owner", cache_dir=os.path.join(work, "reading"), readings=r)
+_said = []
+_orig_speak = _g._speak_checked
+_g._speak_checked = lambda text, path, *a, **k: (_said.append(text), shutil.copyfile(fixed, path))[1]
+_g._synthesize("St. John's 강릉점 바로 찾아보세요.", os.path.join(work, "reading", "r.mp3"), {"scene_index": 3})
+check(_said == ["세인트존스 강릉점 바로 찾아보세요."], f"AI 성우에만 읽는 법 적용 (자막 원문은 그대로) {_said}")
+
 check(question_variants("여기 진짜 한국 맞아요?") == ["여기 진짜 한국 맞아요?", "여기 진짜 한국, 맞아요?", "여기 진짜, 한국 맞아요?"]
       and question_variants("솔직히 여기만 한 데가 없거든요.") == ["솔직히 여기만 한 데가 없거든요"],
       "의문문만 숨 쉼표 후보 3개 (평서문은 그대로 1개)")
@@ -266,6 +289,35 @@ def white_px(fr):
 early, late = ff[int(0.8 * 24)], ff[int((HOOK_SOLO_SEC + 0.8) * 24)]
 check(yellow_px(early) > 2000 and yellow_px(late) < 200 and white_px(late) > white_px(early) + 1000,
       f"합성 결과: 0.8초엔 노란 후킹만({yellow_px(early)}px), {HOOK_SOLO_SEC + 0.8}초엔 후킹 사라지고 흰 서브 자막")
+
+# ---------------------------------------------------------------- 씬 전환 디졸브 (하드 컷 대신 겹쳐 전환, 나레이션·전체 길이 보존)
+from moviepy.editor import VideoFileClip
+from core.compositor import XFADE_SEC
+_man = []
+for i, color in enumerate(((220, 30, 30), (30, 30, 220)), 1):
+    img = os.path.join(work, f"xf{i}.png")
+    Image.new("RGB", (540, 960), color).save(img)
+    vid = os.path.join(work, f"xf{i}.mp4")
+    aud = os.path.join(work, f"xf{i}.m4a")
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    import subprocess as _sp
+    _sp.run([ff, "-y", "-loglevel", "error", "-loop", "1", "-i", img, "-t", "2", "-r", "24", "-pix_fmt", "yuv420p", vid], check=True)
+    _sp.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1.5", "-c:a", "aac", aud], check=True)
+    _man.append({"scene_index": i, "video_path": vid, "audio_path": aud, "caption": ""})
+xf_out = AdCompositor(output_dir=os.path.join(work, "xf")).assemble_ad(_man, output_filename="xf.mp4", mode="owner")
+_c = VideoFileClip(xf_out)
+a1 = _audio_seconds(_man[0]["audio_path"])
+a2 = _audio_seconds(_man[1]["audio_path"])
+d1 = a1 + 0.2 + XFADE_SEC
+mid = _c.get_frame(d1 - XFADE_SEC / 2).astype(float).mean(axis=(0, 1))
+before = _c.get_frame(d1 - XFADE_SEC - 0.1).astype(float).mean(axis=(0, 1))
+after = _c.get_frame(d1 + 0.1).astype(float).mean(axis=(0, 1))
+_dur = _c.duration
+_c.close()
+check(before[0] > 180 and after[2] > 180 and 60 < mid[0] < 180 and 60 < mid[2] < 180,
+      f"씬 경계: 빨강 → (보라로 섞임) → 파랑 디졸브 {XFADE_SEC}초 (하드 컷 아님) mid={mid.round()}")
+check(abs(_dur - (a1 + 0.2 + a2 + 1.0)) < 0.15,
+      f"디졸브로 겹쳐도 나레이션 간격 0.2초·엔딩 여유 1초 보존 (전체 {_dur:.2f}초 ≈ {a1 + 0.2 + a2 + 1.0:.2f}초)")
 
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)

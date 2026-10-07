@@ -215,7 +215,8 @@ class AssetGenerator:
         audio_mode: str = "voice_and_sub",
         cache_dir: Optional[str] = None,
         mock: bool = False,
-        mode: str = "commerce"
+        mode: str = "commerce",
+        readings: Optional[Dict[str, str]] = None
     ):
         if not cache_dir:
             raise ValueError("cache_dir가 필요합니다. JobContext.assets_dir을 전달하세요.")
@@ -227,6 +228,7 @@ class AssetGenerator:
         self.cache_dir = cache_dir
         self.mock = mock
         self.mode = mode
+        self.readings = {k: v for k, v in (readings or {}).items() if k and v}   # 상호명·지명 읽는 법 (TTS에만, 자막은 원문)
 
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -374,7 +376,11 @@ class AssetGenerator:
             logger.info(f"[Mock Audio] 씬 {scene_num} 더미 오디오 생성 완료 ({duration_sec:.2f}초): {out_path}")
             return out_path
 
-        from core.tts import end_rise_percent, question_variants
+        from core.tts import apply_readings, end_rise_percent, question_variants
+        spoken = apply_readings(text, self.readings)
+        if spoken != text:
+            logger.info(f"씬 {scene_num} 읽는 법 적용: '{text}' → '{spoken}'")
+            text = spoken
         try:
             raw_path = os.path.splitext(out_path)[0] + ".raw.mp3"
             variants = question_variants(text)
