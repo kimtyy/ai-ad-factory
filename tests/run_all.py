@@ -31,6 +31,7 @@ SUITES = [
     ("suite_render_visuals.py", "중앙 자막·씬 1 후킹 시간차·TTS 무음 제거·잘림 재시도 + Ken Burns", False),
     ("suite_radar_core.py", "쇼츠 레이더 수집·점수·쿼터·저장·CLI", False),
     ("suite_radar_hints.py", "레이더 후킹 패턴 → 씬 1 힌트 주입", False),
+    ("suite_app_owner_hybrid.py", "사장님 하이브리드: 영상 소스 관리·네이버 지역 검색 API·사진 기반 매장 특징·기획 연동", False),
     ("suite_owner_planner.py", "사장님(트랙 B) 플래너", False),
     ("suite_app_auth.py", "외부 접속 PIN 잠금 (터널·다른 기기)", False),
     ("suite_app_radar_ui.py", "Streamlit 레이더 화면 + 기획 연동", False),

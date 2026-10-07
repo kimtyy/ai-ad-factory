@@ -23,6 +23,7 @@ python tests/suite_script_guard.py # 스위트 하나만 직접 실행
 | `suite_radar_core.py` | 쇼츠 레이더: 점수·필터, API 래퍼(파라미터·배치·쿼터 예산), 수집, SQLite, CLI dry-run |
 | `suite_radar_hints.py` | 레이더 후킹 패턴 → 씬 1 힌트 주입, 원문 복제 차단 |
 | `suite_app_auth.py` | 외부 접속(Cloudflare 터널·다른 기기) PIN 잠금, 틀린 PIN 거부, 5회 실패 10분 잠금, PIN 미설정 시 차단, localhost는 바로 열림 |
+| `suite_app_owner_hybrid.py` | 사장님 하이브리드: 영상 소스 추가·삭제·순서·영상(MP4), 네이버 지역 검색 공식 API(키 없으면 수동), 사진 기반 매장 특징(숫자·혜택 차단), 기획 연동 |
 | `suite_owner_planner.py` | 사장님 플래너: 상호명 보존, 네이버 검색 CTA, 가격·할인 주장 차단 |
 | `suite_app_radar_ui.py` | Streamlit 레이더 화면, 화면 전환 시 설정 유지, 기획 연동 |
 | `suite_app_travel_flow.py` | Streamlit 숙소 제휴 흐름 (실제 페이지 크롤링: `--live`에서만) |

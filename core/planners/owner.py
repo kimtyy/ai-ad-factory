@@ -10,6 +10,7 @@ core/planners/owner.py - 트랙 B: 사장님(펜션/음식점/매장) 직영 홍
 """
 import io
 import json
+import re
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -186,6 +187,63 @@ def plan_owner_storyboard(
             json.dump(scenes, f, ensure_ascii=False, indent=2)
     logger.info(f"사장님 콘티 완료: '{business_name}' {len(scenes)}개 씬 (미디어 {len(media)}개, Gemini={'Y' if llm else 'N'})")
     return scenes
+
+
+STORE_POINT_MAX_LEN = 22
+
+
+def suggest_store_points(business_name: str, business_type: str, media_paths: Optional[List[str]] = None,
+                         existing_usp: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
+                         mock: bool = False) -> List[str]:
+    """
+    사장님이 올린 사진·영상(대표 프레임)과 업종으로 매장 특징·후킹 포인트를 최대 4개 정리 (가게 자랑 칸 보완용).
+    근거는 사진에 보이는 것뿐. 가격·할인·순위·수치는 사장님이 이미 적은 자랑(existing_usp)에 있을 때만 남김
+    (AI가 지어낸 '30명 단체석', '1위 맛집'이 대본의 근거가 되면 허위 광고)
+    """
+    from core.script_guard import find_unsupported_spec
+    media = [p for p in (media_paths or []) if p][:4]
+    if mock or not api_key or not media:
+        return []
+    type_label = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])["label"]
+    try:
+        from google import genai
+        from google.genai import types
+        from core.guardrail import validate_model_call
+        contents: List[Any] = []
+        for i, path in enumerate(media):
+            img = _media_preview_image(path, thumb_dir)
+            if img is not None:
+                contents += [f"[사진 {i + 1}]", img]
+        if not contents:
+            return []
+        contents.append(f"""
+가게: {business_name or '(상호명 미입력)'} / 업종: {type_label}
+사장님이 이미 적은 자랑: {existing_usp or '(없음)'}
+
+위 사진들을 보고 손님이 '가 보고 싶다'고 느낄 매장 특징·후킹 포인트를 최대 4개 정리하세요.
+- 근거는 사진에 눈으로 보이는 것뿐 (공간 분위기, 대표 메뉴·상품 모습, 좌석·인테리어, 외관, 주변 풍경)
+- 가격·할인·이벤트·순위·수상·인원수·거리(분) 같은 숫자나 혜택은 쓰지 마세요 (사장님 자랑에 있으면 생략해도 됨)
+- 이미 적힌 자랑과 겹치지 않게, 각 포인트는 공백 포함 {STORE_POINT_MAX_LEN}자 이내 명사형 짧은 구절
+JSON만 출력: {{"points": ["...", "..."]}}
+""")
+        client = genai.Client(api_key=api_key)   # 변수로 잡아 둬야 호출 중에 클라이언트가 닫히지 않음
+        res = client.models.generate_content(
+            model=validate_model_call("gemini-3.6-flash", category="llm"), contents=contents,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.4))
+        raw = [str(x or "").strip() for x in (json.loads(res.text).get("points") or [])]
+    except Exception as e:
+        logger.warning(f"매장 특징 정리 실패: {e}")
+        return []
+    evidence = f"{business_name} {existing_usp}"
+    evidence_numbers = set(re.findall(r"\d+", evidence))
+    ok = [t for t in dict.fromkeys(raw)
+          if 2 <= len(t) <= STORE_POINT_MAX_LEN and not _unsupported_claim(t, evidence) and not find_unsupported_spec(t, evidence)
+          and set(re.findall(r"\d+", t)) <= evidence_numbers           # 사진만으로는 숫자(인원·거리·가격)를 알 수 없음
+          and t not in (existing_usp or "")]
+    dropped = [t for t in raw if t and t not in ok]
+    if dropped:
+        logger.info(f"[매장 특징 검증] 근거 없는 수치·혜택 또는 중복 제외: {dropped}")
+    return ok[:4]
 
 
 def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,

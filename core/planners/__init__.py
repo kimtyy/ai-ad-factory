@@ -9,6 +9,7 @@ from core.planners.owner import (
     DEFAULT_BUSINESS_TYPE,
     owner_cta,
     plan_owner_storyboard,
+    suggest_store_points,
 )
 from core.planners.commerce import (
     COMMERCE_CTA,

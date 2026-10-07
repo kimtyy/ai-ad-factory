@@ -46,8 +46,10 @@ from core.scraper import scrape_product_info
 from core.job import JobContext, cleanup_old_jobs
 from core.media import is_video_file, probe_media, extract_thumbnail
 from core.coupang import SEARCH_LIMIT_PER_HOUR, CoupangAPIError, CoupangPartners
+from core.media.library import MAX_MEDIA, add_media, move_media, remove_media
+from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, place_id_from_link, region_of
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
-                           analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard)
+                           analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
 from core.planners.travel import plan_travel_storyboard
 from core.radar.hints import load_hook_hints, vertical_for
@@ -230,6 +232,72 @@ def assign_uploads_to_scenes(scenes: list, paths: list, cycle: bool = False):
         assign_media_to_scene(scene, p, "uploaded")
 
 
+def _media_changed(new_paths: list):
+    """영상 소스 목록 변경 반영: 이미 기획된 콘티가 있으면 씬 사진을 새 순서로 다시 배정"""
+    st.session_state.uploaded_paths = new_paths
+    if st.session_state.storyboard:
+        assign_uploads_to_scenes(st.session_state.storyboard, new_paths, cycle=st.session_state.production_mode == "commerce")
+        st.session_state.media_stale = st.session_state.production_mode == "owner"
+
+
+def _media_thumb(path: str):
+    """목록용 미리보기: 사진은 그대로, 영상은 대표 프레임(+길이)"""
+    if not is_video_file(path):
+        return path, ""
+    thumb = os.path.splitext(path)[0] + "_thumb.jpg"
+    try:
+        if not os.path.exists(thumb):
+            extract_thumbnail(path, thumb, at=0.8)
+        return thumb, f"🎬 영상 {probe_media(path).duration:.1f}초"
+    except Exception:
+        return None, "🎬 영상"
+
+
+def render_media_manager():
+    """
+    영상 소스(사진·영상) 관리: 위에서부터 씬 순서. 자동으로 가져온 사진과 직접 올린 사진·영상을 한 목록에서
+    ⬆⬇ 순서 변경 · 🗑 삭제 · ➕ 추가 (업로드는 목록을 덮어쓰지 않고 뒤에 붙임)
+    """
+    paths = [p for p in st.session_state.uploaded_paths if os.path.exists(p)]
+    if paths != st.session_state.uploaded_paths:
+        st.session_state.uploaded_paths = paths
+    with st.container(border=True, key="media_manager"):
+        st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {MAX_MEDIA}개)")
+        if st.session_state.pop("media_stale", False):
+            st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
+        for i, p in enumerate(paths):
+            tag = hashlib.md5(p.encode()).hexdigest()[:8]
+            c_no, c_img, c_info, c_up, c_down, c_del = st.columns([0.35, 1.1, 2.6, 0.55, 0.55, 0.55], vertical_alignment="center")
+            c_no.markdown(f"**{i + 1}**")
+            thumb, label = _media_thumb(p)
+            if thumb:
+                c_img.image(thumb, width=88)
+            c_info.caption(label or os.path.basename(p)[:28])
+            if c_up.button("⬆", key=f"media_up_{tag}", disabled=i == 0, help="앞으로"):
+                _media_changed(move_media(paths, i, -1))
+                st.rerun()
+            if c_down.button("⬇", key=f"media_down_{tag}", disabled=i == len(paths) - 1, help="뒤로"):
+                _media_changed(move_media(paths, i, +1))
+                st.rerun()
+            if c_del.button("🗑", key=f"media_del_{tag}", help="목록에서 빼기 (파일은 작업 폴더에 남음)"):
+                _media_changed(remove_media(paths, i))
+                st.rerun()
+        nonce = st.session_state.get("media_uploader_nonce", 0)
+        new_files = st.file_uploader(
+            "➕ 내 폰 사진·영상 추가 (JPG/PNG/MP4/MOV)", accept_multiple_files=True, type=UPLOAD_TYPES,
+            key=f"media_uploader_{nonce}", disabled=len(paths) >= MAX_MEDIA,
+            help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
+        )
+        if new_files:
+            saved = [save_uploaded_file(f) for f in new_files]
+            added = add_media(paths, saved)
+            st.session_state.media_uploader_nonce = nonce + 1      # 업로더 비우기 (다음 실행에서 같은 파일을 다시 넣지 않게)
+            if added != paths:
+                _media_changed(added)
+                st.toast(f"📱 사진·영상 {len(added) - len(paths)}개 추가!", icon="✨")
+            st.rerun()
+
+
 def rematch_scenes(target_scenes: list, api_key: str):
     """지정 씬만 재선별. 거부 목록 + 다른 씬이 쓰는 사진은 제외하여 같은 사진 반복을 막음"""
     target_ids = {id(s) for s in target_scenes}
@@ -279,7 +347,8 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
                      ("page_switch", "make")):
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
-for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "product_name_input", "product_usp_input",
+for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "place_query",
+           "product_name_input", "product_usp_input",
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
@@ -561,6 +630,68 @@ if is_commerce_mode and CoupangPartners().enabled:
                     st.toast("상품명·사진·파트너스 링크를 불러왔어요. 특장점은 판매 페이지를 보고 사실만 적어 주세요.", icon="🛒")
                     st.rerun()
 
+def _fill_store_points(api_key_: str, mock_: bool):
+    """'사진으로 매장 특징 정리' 버튼 콜백 (위젯 값 변경은 콜백에서 해야 같은 실행에서 오류가 나지 않음)"""
+    existing = st.session_state.get("owner_usp", "").strip()
+    pts = suggest_store_points(st.session_state.get("owner_name", ""), st.session_state.get("owner_type", DEFAULT_BUSINESS_TYPE),
+                               st.session_state.uploaded_paths, existing, api_key=api_key_, thumb_dir=current_job().assets_dir,
+                               mock=mock_)
+    if pts:
+        st.session_state.owner_usp = " / ".join([x for x in [existing] + pts if x])
+        st.session_state.store_points_msg = f"🤖 사진을 보고 매장 특징 {len(pts)}개를 보탰어요. 사실과 다르면 고쳐 주세요."
+    else:
+        st.session_state.store_points_msg = ("사진이 없거나(먼저 사진·영상을 올려 주세요) 정리할 특징을 찾지 못했어요."
+                                             if not mock_ else "Mock 모드에서는 AI 특징 정리를 건너뜁니다.")
+
+
+# 사장님: 네이버 플레이스 링크·상호명 → 공식 지역 검색 API로 상호명·업종·주소 (사진·리뷰는 가져오지 않음)
+if is_owner_mode:
+    naver = NaverLocalSearch()
+    with st.container(border=True, key="place_box"):
+        st.markdown("**🔗 네이버 플레이스·지도 링크 또는 상호명으로 가게 정보 가져오기**")
+        q1, q2 = st.columns([4, 1])
+        with q1:
+            place_q = st.text_input("플레이스 링크 또는 상호명", key="place_query", label_visibility="collapsed",
+                                    placeholder="예: https://naver.me/xxxx 또는 성수 불판")
+        with q2:
+            place_btn = st.button("정보 가져오기", key="place_fetch", use_container_width=True)
+        if place_btn and place_q.strip():
+            q = place_q.strip()
+            link_mode = is_naver_link(q)
+            if link_mode:
+                st.session_state.place_link = q
+                st.session_state.place_id = place_id_from_link(q)
+            elif not st.session_state.get("owner_name", "").strip():
+                st.session_state.owner_name = q
+            if not naver.enabled:
+                st.info("네이버 검색 API 키(NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)를 .env에 넣으면 상호명·업종·주소가 자동으로 채워져요. "
+                        "지금은 아래에 직접 입력해 주세요." + ("" if link_mode else " (상호명은 입력하신 값으로 채워 두었어요)"))
+            else:
+                query = st.session_state.get("owner_name", "").strip() if link_mode else q
+                if not query:
+                    st.warning("링크만으로는 상호명을 알 수 없어요 (네이버 페이지는 열지 않습니다). 아래 상호명 칸을 채우고 다시 눌러 주세요.")
+                else:
+                    try:
+                        st.session_state.place_results = naver.search(query)
+                        if not st.session_state.place_results:
+                            st.info("검색 결과가 없어요. 상호명을 조금 바꿔 다시 찾아 주세요.")
+                    except NaverAPIError as ne:
+                        st.error(str(ne))
+        for i, it in enumerate(st.session_state.get("place_results", [])):
+            r1, r2 = st.columns([4, 1.3], vertical_alignment="center")
+            with r1:
+                st.markdown(f"**{html.escape(it['name'])}** · {html.escape(it['category'])}  \n"
+                            f"{html.escape(it['road_address'] or it['address'])}")
+            with r2:
+                if st.button("이 가게로 채우기", key=f"place_pick_{i}", use_container_width=True):
+                    st.session_state.owner_name = it["name"]
+                    st.session_state.owner_type = it["business_type"]
+                    st.session_state.owner_address = it["road_address"] or it["address"]
+                    st.session_state.place_results = []
+                    st.toast("상호명·업종·주소를 채웠어요. 사진·영상은 아래에서 직접 올려 주세요.", icon="🏢")
+                    st.rerun()
+        st.caption("📷 사진·리뷰는 네이버에서 가져오지 않아요 (이용 약관·방문자 사진 저작권). 아래에서 직접 찍은 사진·영상을 올려 주세요.")
+
 # 상품/가게 정보 입력 폼 (모드별)
 business_type, owner_search_kw = None, ""
 if is_owner_mode:
@@ -576,6 +707,14 @@ if is_owner_mode:
     with o4:
         usp_desc = st.text_input("✨ 우리 가게 자랑 (사실만 입력, 가격·할인은 여기 적은 것만 영상에 나옵니다)", key="owner_usp",
                                  placeholder="예: 성수역 2분 / 단체석 30명 / 숙성 삼겹살")
+    o5, o6 = st.columns([2, 1], vertical_alignment="bottom")
+    with o5:
+        owner_address = st.text_input("📍 주소·지역 (선택, 엔딩 카드에 표시)", key="owner_address", placeholder="예: 경기 가평군 청평면")
+    with o6:
+        st.button("🤖 사진으로 매장 특징 정리", key="store_points_btn", use_container_width=True, on_click=_fill_store_points,
+                  args=(api_key, mock_mode), help="올린 사진·영상을 보고 손님 눈길을 끌 특징을 자랑 칸에 보탭니다 (숫자·가격은 넣지 않음)")
+    if st.session_state.get("store_points_msg"):
+        st.caption(st.session_state.pop("store_points_msg"))
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
 else:
     # 예시 문구는 placeholder로만 보여 주고 값으로 넣지 않음 (예전 기본값 '파노라마 오션뷰…'가 그대로 대본 근거로 쓰였음)
@@ -599,7 +738,9 @@ if is_owner_mode and brand_opts and product_name.strip():
         logo_path=brand_opts["logo_path"],
         position=brand_opts["position"],
         show_label=brand_opts["watermark"],
-        end_card=EndCard(search_keyword=owner_search_kw, sub_text=brand_opts["sub"]) if brand_opts["end_card"] else None,
+        end_card=EndCard(search_keyword=owner_search_kw,
+                         sub_text=brand_opts["sub"] or region_of(st.session_state.get("owner_address", "")))
+        if brand_opts["end_card"] else None,
     )
 
 if uses_scene_media:
@@ -612,31 +753,11 @@ if uses_scene_media:
     elif is_owner_mode:
         st.caption("💡 가게 외관, 대표 메뉴·상품, 내부 분위기를 찍은 사진·영상을 순서대로 2~8개 올려 주세요. 올린 순서대로 씬이 만들어집니다.")
     elif is_commerce_mode:
-        n_imgs = len(st.session_state.uploaded_paths)
-        st.caption(f"💡 상품 사진 {n_imgs}장 준비됨. 판매 페이지 사진이나 직접 찍은 사진·영상을 올리면 올린 순서대로 씬에 들어갑니다 "
-                   "(사진이 씬보다 적으면 다른 카메라 모션으로 돌려 씁니다). AI로 상품 이미지를 만들지 않습니다.")
-        if st.session_state.uploaded_paths:
-            thumbs = [p for p in st.session_state.uploaded_paths if not is_video_file(p)][:6]
-            if thumbs:
-                st.image(thumbs, width=110)
+        st.caption("💡 판매 페이지에서 가져온 사진과 직접 찍은 사진·영상을 함께 쓸 수 있어요. 위에서부터 씬 순서이며, "
+                   "사진이 씬보다 적으면 앵글을 바꿔 돌려 씁니다. AI로 상품 이미지를 만들지 않습니다.")
     else:
         st.caption("💡 숙소 URL을 크롤링하거나, 아래에서 사진·영상을 직접 올릴 수 있습니다.")
-
-    uploaded_files = st.file_uploader(
-        "📱 내 폰 사진·영상 첨부 (JPG/PNG/MP4/MOV)",
-        accept_multiple_files=True,
-        type=UPLOAD_TYPES,
-        help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다."
-    )
-    if uploaded_files:
-        new_uploaded_paths = [save_uploaded_file(up_file) for up_file in uploaded_files[:10]]
-        if new_uploaded_paths != st.session_state.uploaded_paths:
-            st.session_state.uploaded_paths = new_uploaded_paths
-            # 이미 기획된 스토리보드가 있으면 즉시 씬 키로 배정 (없으면 기획 직후 배정)
-            if st.session_state.storyboard:
-                assign_uploads_to_scenes(st.session_state.storyboard, new_uploaded_paths)
-            st.toast(f"📱 사진·영상 {len(new_uploaded_paths)}개 첨부 완료!", icon="✨")
-            st.rerun()
+    render_media_manager()
 
 st.markdown("---")
 
