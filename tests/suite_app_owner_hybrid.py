@@ -35,7 +35,9 @@ check(nl.business_type_for("음식점>한식>육류,고기요리") == "food" and
 check(nl.place_id_from_link("https://map.naver.com/p/entry/place/1234567890?c=15") == "1234567890"
       and nl.place_id_from_link("https://m.place.naver.com/restaurant/37428191/home") == "37428191"
       and nl.is_naver_link("https://naver.me/AbCd") and not nl.is_naver_link("성수 불판"), "플레이스 링크 → 플레이스 번호 (페이지는 열지 않음)")
-check(nl.region_of("경기 가평군 청평면 호반로 123") == "경기 가평군", "주소 → 엔딩 카드용 지역")
+check(nl.region_of("경기 가평군 청평면 호반로 123") == "경기 가평군" and nl.region_of("강원특별자치도 강릉시 창해로 307") == "강원 강릉시"
+      and nl.region_of("서울특별시 마포구 연남로1길 41") == "서울 마포구" and nl.region_of("세종특별자치시 한누리대로 1") == "세종",
+      "주소 → 엔딩 카드용 지역 (공식 광역 명칭은 짧게)")
 import core.scraper as _sc
 _orig_resolve = _sc.resolve_link
 _sc.resolve_link = lambda u, **k: {"url": "https://map.naver.com/p/entry/place/987654321", "search_query": "", "is_search": False}
@@ -63,10 +65,12 @@ class R:
 nl.requests.get = lambda url, params=None, timeout=None, headers=None: (_req.append((url, params, headers)), R())[1]
 items = nl.NaverLocalSearch("ID", "SECRET").search("성수 불판")
 check(items[0]["name"] == "성수 불판 성수점" and items[0]["business_type"] == "food" and items[0]["road_address"].endswith("성수이로 1")
-      and _req[0][2]["X-Naver-Client-Id"] == "ID" and "openapi.naver.com" in _req[0][0], "지역 검색: 태그 제거·업종·도로명 주소, 공식 API 헤더")
+      and _req[0][2]["X-NCP-APIGW-API-KEY-ID"] == "ID" and _req[0][2]["X-NCP-APIGW-API-KEY"] == "SECRET"
+      and _req[0][0] == "https://naverapihub.apigw.ntruss.com/search/v1/local",
+      "지역 검색: 태그 제거·업종·도로명 주소, NAVER API HUB 엔드포인트·NCP 게이트웨이 헤더")
 
 _ok_get = nl.requests.get
-for code, word in ((401, "키가 맞지 않"), (403, "'검색'을 추가"), (429, "한도")):
+for code, word in ((401, "API HUB"), (403, "검색(지역)을 추가"), (429, "한도")):
     nl.requests.get = lambda *a, _c=code, **k: type("E", (), {"status_code": _c})()
     try:
         nl.NaverLocalSearch("ID", "SECRET").search("x")

@@ -679,7 +679,8 @@ if is_owner_mode:
             elif not st.session_state.get("owner_name", "").strip():
                 st.session_state.owner_name = q
             if not naver.enabled:
-                st.info("네이버 검색 API 키(NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)를 .env에 넣으면 상호명·업종·주소가 자동으로 채워져요. "
+                st.info("네이버 검색 API 키(NCP NAVER API HUB의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)를 .env에 넣으면 "
+                        "상호명·업종·주소가 자동으로 채워져요. "
                         "지금은 아래에 직접 입력해 주세요." + ("" if link_mode else " (상호명은 입력하신 값으로 채워 두었어요)"))
             else:
                 query = st.session_state.get("owner_name", "").strip() if link_mode else q
