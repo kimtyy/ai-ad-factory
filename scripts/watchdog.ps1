@@ -4,8 +4,9 @@ scripts/watchdog.ps1 - 대시보드(Streamlit 8501) + 모바일 터널(cloudflar
 - 10초마다 점검. 프로세스가 죽었으면(크래시·강제 종료) 다음 점검에서 바로 재시작 (최대 약 10초)
 - 프로세스는 살아 있는데 /_stcore/health가 6번 연속(약 60초) 응답 없으면 멈춘 것으로 보고 재시작
   (렌더 중에도 health는 응답하므로 렌더를 크래시로 오인하지 않음)
-- 터널: cloudflared 프로세스가 없으면 바로, 공개 주소 health가 3번 연속(30초 간격) 실패하면 재시작
-  (임시 터널은 Cloudflare가 몇 시간 뒤 삭제함: "Tunnel not found") → 새 주소를 outputs\tunnel_url.txt에 기록
+- 터널: .env에 NGROK_AUTHTOKEN + NGROK_DOMAIN이 있으면 ngrok 고정 주소(https://NGROK_DOMAIN, 바뀌지 않음),
+  없으면 Cloudflare 임시 터널(몇 시간 뒤 삭제되어 주소가 바뀜: "Tunnel not found")
+  터널 프로세스가 없으면 바로, 공개 주소 health가 3번 연속(30초 간격) 실패하면 재시작 → 주소를 outputs\tunnel_url.txt에 기록
 - 서버·터널은 독립 콘솔(cmd /c)로 띄움: 감시 창·도구 창이 닫혀도 같이 죽지 않게
 - 중복 실행 방지: 이미 감시 중이면 바로 종료 (Global 뮤텍스)
 - 로그: outputs\watchdog.log
@@ -30,6 +31,27 @@ $UrlFile = Join-Path $Out "tunnel_url.txt"
 $TunnelLog = Join-Path $env:TEMP "cloudflared_8501.log"
 $HealthUrl = "http://localhost:8501/_stcore/health"
 
+# .env에서 ngrok 설정만 읽어 이 프로세스(→ 자식 터널 프로세스) 환경변수로 (다른 키는 읽지 않음)
+$EnvFile = Join-Path $Root ".env"
+if (Test-Path $EnvFile) {
+    foreach ($line in Get-Content $EnvFile -Encoding UTF8) {
+        if ($line -match '^\s*(NGROK_AUTHTOKEN|NGROK_DOMAIN)\s*=\s*"?([^"#\s]+)"?') {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+        }
+    }
+}
+$UseNgrok = [bool]($env:NGROK_AUTHTOKEN -and $env:NGROK_DOMAIN)
+if ($UseNgrok) {
+    $env:NGROK_DOMAIN = ($env:NGROK_DOMAIN -replace '^https?://', '').TrimEnd('/')
+    $ng = Get-Command ngrok -ErrorAction SilentlyContinue
+    if (-not $ng) {
+        $ng = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Ngrok.Ngrok*\ngrok.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if ($ng) { $env:NGROK_EXE = if ($ng.Source) { $ng.Source } else { $ng.FullName } }
+}
+$TunnelProc = if ($UseNgrok) { "ngrok" } else { "cloudflared" }
+$OtherProc = if ($UseNgrok) { "cloudflared" } else { "ngrok" }
+
 function Write-Log([string]$msg) {
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
     Add-Content -Path $Log -Value $line -Encoding utf8
@@ -37,7 +59,8 @@ function Write-Log([string]$msg) {
 
 function Test-Health([string]$url, [int]$timeout = 10) {
     try {
-        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec $timeout
+        # ngrok 무료 도메인의 브라우저 안내 화면을 건너뛰는 헤더 (Cloudflare에는 영향 없음)
+        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec $timeout -Headers @{ "ngrok-skip-browser-warning" = "1" }
         return ($r.StatusCode -eq 200 -and $r.Content -match "ok")
     } catch { return $false }
 }
@@ -55,8 +78,18 @@ function Start-Dashboard {
 }
 
 function Start-Tunnel {
-    Get-Process -Name cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name $TunnelProc, $OtherProc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
+    if ($UseNgrok) {
+        $cmd = Join-Path $PSScriptRoot "run_ngrok.cmd"
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -WindowStyle Hidden
+        $url = "https://$($env:NGROK_DOMAIN)"
+        $ok = $false
+        for ($i = 0; $i -lt 30 -and -not $ok; $i++) { Start-Sleep -Seconds 1; $ok = Test-Health "$url/_stcore/health" 10 }
+        Set-Content -Path $UrlFile -Value $url -Encoding utf8
+        Write-Log ("tunnel: ngrok (re)started -> $url" + $(if ($ok) { "" } else { " (not reachable yet, see %TEMP%\ngrok_8501.log)" }))
+        return $url
+    }
     $cmd = Join-Path $PSScriptRoot "run_tunnel.cmd"
     Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -WindowStyle Hidden
     $url = $null
@@ -77,6 +110,12 @@ function Start-Tunnel {
 }
 
 function Get-TunnelUrl {
+    if ($UseNgrok) {
+        # 고정 주소: 파일이 예전 Cloudflare 주소면 ngrok 주소로 바꿔 둠 (실행 여부는 프로세스 점검이 판단)
+        $url = "https://$($env:NGROK_DOMAIN)"
+        if (-not (Test-Path $UrlFile) -or (Get-Content $UrlFile -Raw).Trim() -ne $url) { return $null }
+        return $url
+    }
     if (Test-Path $UrlFile) { return (Get-Content $UrlFile -Raw).Trim() }
     # 감시를 처음 켤 때 이미 떠 있는 터널이 있으면 로그의 주소를 이어받음 (멀쩡한 터널을 재시작해 주소가 바뀌지 않게)
     if ((Get-Process -Name cloudflared -ErrorAction SilentlyContinue) -and (Test-Path $TunnelLog)) {
@@ -98,7 +137,7 @@ if (-not $created) {
     exit 0
 }
 
-Write-Log "watchdog: start (interval ${IntervalSec}s, dashboard hang limit $FailLimit, tunnel check every $TunnelEvery ticks)"
+Write-Log "watchdog: start (interval ${IntervalSec}s, dashboard hang limit $FailLimit, tunnel=$TunnelProc, tunnel check every $TunnelEvery ticks)"
 $dashFails = 0
 $tunnelFails = 0
 $tick = 0
@@ -122,7 +161,7 @@ try {
         # 2) 터널 (대시보드가 살아 있을 때만 판단: 대시보드가 죽으면 터널 health도 실패하므로)
         if (Test-Health $HealthUrl) {
             $url = Get-TunnelUrl
-            $alive = [bool](Get-Process -Name cloudflared -ErrorAction SilentlyContinue)
+            $alive = [bool](Get-Process -Name $TunnelProc -ErrorAction SilentlyContinue)
             if (-not $alive -or -not $url) {
                 if (-not $alive) { Write-Log "tunnel: process gone" }
                 Start-Tunnel | Out-Null
