@@ -38,6 +38,12 @@ KB_PAN_ZOOM = 1.06          # 패닝 중 함께 밀고 들어가는 줌 (평면 
 KB_PAN_MARGIN_X = 1.32      # 좌우 패닝 이동 폭 (프레임 폭 대비 원본 여유)
 KB_PAN_MARGIN_Y = 1.25      # 상하 패닝 이동 폭
 
+# 씬 중간 클립(Ken Burns·상품 카드) 인코딩: 최종 조립에서 한 번 더 인코딩하므로 화질 손실이 거의 없는 CRF 16에
+# 가장 빠른 프리셋 (측정: 실사진 4초 클립 6.5초 → 3.5초. 파이썬 프레임 계산은 1.6초뿐이고 나머지가 파이프·인코딩).
+# ffmpeg zoompan은 원본 해상도에선 흔들림 2.3배, 흔들림을 잡으려 2배 키우면 15초로 더 느려 채택하지 않음.
+# 씬 클립 동시 생성도 측정해 봤으나 x264가 이미 멀티스레드라 7씬 22.4초 → 22.0초로 이득이 없어 순차 유지
+CLIP_ENCODE_PARAMS = ["-preset", "ultrafast", "-crf", "16"]
+
 # 씬 1 후킹 단독 노출 구간: 후킹 헤드라인만 화면에 띄우는 최소 시간 (그 뒤 서브 문장 자막·음성)
 HOOK_SOLO_SEC = 1.5
 HOOK_GAP_SEC = 0.15         # 후킹 음성이 1.5초보다 길면 끝나고 이만큼 쉬고 서브 문장 시작
@@ -527,7 +533,8 @@ class AssetGenerator:
             codec="libx264",
             pix_fmt_in="rgb24",
             macro_block_size=1,
-            ffmpeg_log_level="error"
+            ffmpeg_log_level="error",
+            output_params=CLIP_ENCODE_PARAMS,
         )
         writer.send(None)
 
@@ -622,7 +629,7 @@ class AssetGenerator:
         shadow = (np.array(shadow_img.filter(ImageFilter.GaussianBlur(26))).astype(np.float32) / 255.0)[..., None]
 
         writer = imageio_ffmpeg.write_frames(out_path, size=(W, H), fps=fps, codec="libx264", pix_fmt_in="rgb24",
-                                             macro_block_size=1, ffmpeg_log_level="error")
+                                             macro_block_size=1, ffmpeg_log_level="error", output_params=CLIP_ENCODE_PARAMS)
         writer.send(None)
         total = max(1, int(round(duration_sec * fps)))
         for i in range(total):
