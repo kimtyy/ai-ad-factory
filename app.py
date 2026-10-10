@@ -52,6 +52,7 @@ from core.tts import owner_readings
 from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, place_id_from_link, region_of
 from core.affiliate_ota import OTA_DISCLOSURE, OTA_LABEL, ota_disclosure_full
 from ui.copy_button import copy_button
+from ui.youtube_panel import render_youtube_panel
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
@@ -114,6 +115,8 @@ if "production_mode" not in st.session_state:
     st.session_state.production_mode = "owner"
 if "final_video_path" not in st.session_state:
     st.session_state.final_video_path = None
+if "thumb_path" not in st.session_state:
+    st.session_state.thumb_path = None        # 렌더와 함께 만든 썸네일 (final_thumb.png)
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 if "script_style" not in st.session_state:
@@ -157,6 +160,7 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.uploaded_paths = []
     st.session_state.rejected_urls = set()
     st.session_state.final_video_path = None
+    st.session_state.thumb_path = None
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
     st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
@@ -1238,6 +1242,18 @@ if render_btn:
             from core.compositor import AdCompositor
             compositor = AdCompositor(output_dir=current_job().final_dir)
 
+            # 썸네일: 씬 1 화면(자막 없는 원본 컷)에 후킹 타이틀 → final_thumb.png + 영상 첫 0.3초 화면
+            thumb_path = None
+            try:
+                from moviepy.editor import VideoFileClip
+                with VideoFileClip(manifest[0]["video_path"]) as _v1:
+                    first_frame = _v1.get_frame(0)
+                hook_text = (scenes[0].get("hook_title") or "").strip() if scenes else ""
+                thumb_path = compositor.render_thumbnail(first_frame, hook_text,
+                                                         os.path.join(current_job().final_dir, "final_thumb.png"))
+            except Exception as te:
+                logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {te}")
+
             final_mp4 = compositor.assemble_ad(
                 asset_manifest=manifest,
                 output_filename="final.mp4",
@@ -1247,7 +1263,9 @@ if render_btn:
                 brand=brand_cfg,
                 disclosure=(COUPANG_DISCLOSURE if is_commerce_mode
                             else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
+                intro_image=thumb_path,
             )
+            st.session_state.thumb_path = thumb_path
             current_job().save_plan(scenes)
 
             progress_bar.progress(100, text="✨ 렌더링 완료!")
@@ -1296,6 +1314,15 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             else:
                 st.warning("제휴 ID(.env의 AGODA_CID 또는 TRIP_AID·TRIP_SID)가 없어 수익 링크를 만들지 못했어요.")
     with col_meta:
+        _ota = st.session_state.get("affiliate_program")
+        _disc = (COUPANG_DISCLOSURE_FULL if is_commerce_mode
+                 else ota_disclosure_full(_ota) if is_travel_mode and _ota else "")
+        _sb = st.session_state.get("storyboard") or []
+        render_youtube_panel(st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
+                             hook=(_sb[0].get("hook_title") or "") if _sb else "",
+                             link=st.session_state.get("affiliate_link", "") if not is_owner_mode else "",
+                             disclosure=_disc, business_name=product_name,
+                             search_kw=owner_search_kw if is_owner_mode else "")
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:
             cols = st.columns(len(st.session_state.generated_images))

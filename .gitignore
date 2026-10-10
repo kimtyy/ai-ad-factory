@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 .streamlit/secrets.toml
+# 유튜브 OAuth 클라이언트·토큰 (scripts/youtube_auth.py)
+secrets/
 
 # Python
 __pycache__/

@@ -28,6 +28,12 @@ logger = logging.getLogger("ad_factory.compositor")
 #   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
 CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
+INTRO_SEC = 0.3             # 영상 첫 화면에 썸네일을 보여 주는 길이 (초): 피드 첫 프레임·자동 썸네일 후보가 썸네일이 되게
+THUMB_FONT_RATIO = 0.115    # 썸네일 후킹 글자 크기 (폭 대비)
+THUMB_TEXT_WIDTH = 0.84
+THUMB_TEXT_TOP = 0.13       # 후킹 첫 줄 위치 (높이 대비): 쇼츠 상단 UI(검색·카메라 아이콘) 아래
+THUMB_SHADE_RATIO = 0.48
+THUMB_SHADE_ALPHA = 170
 # 자막 블록 세로 중심 (높이 비율). 쇼츠 세이프 에어리어: 하단 약 35%는 채널명·제목·구독 버튼·사운드명,
 # 우측은 좋아요·댓글 버튼이 덮음 → 화면 정중앙(48~52%)에 둬야 모바일에서 가려지지 않음 (하단 68%는 UI에 가려졌음)
 CAPTION_CENTER_Y = 0.50
@@ -202,6 +208,62 @@ class AdCompositor:
             draw.text((x, ty), ln, font=f, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         return np.array(img)
 
+    def render_thumbnail(self, frame: np.ndarray, hook_title: str, out_path: str,
+                         width: int = 1080, height: int = 1920) -> str:
+        """
+        쇼츠 썸네일 (1080x1920 PNG): 씬 1 화면(자막 없는 원본 컷)을 꽉 채워 깔고, 상단에 후킹 타이틀을 크게.
+        - 상단 48%만 위→아래로 옅어지는 어두운 그라데이션 (사진은 살리고 글자만 또렷하게)
+        - 노란 후킹 색 + 두꺼운 검은 외곽선 + 그림자, 어절 단위 줄바꿈, 폭 84% 안에서 최대 3줄 (넘치면 글자 축소)
+        - 영상 첫 0.3초 화면으로도 쓰임 (assemble_ad의 intro_image)
+        """
+        bg = Image.fromarray(frame).convert("RGB")
+        scale = max(width / bg.width, height / bg.height)
+        bg = bg.resize((max(width, round(bg.width * scale)), max(height, round(bg.height * scale))), Image.LANCZOS)
+        left, top = (bg.width - width) // 2, (bg.height - height) // 2
+        img = bg.crop((left, top, left + width, top + height)).convert("RGBA")
+
+        shade_h = int(height * THUMB_SHADE_RATIO)
+        alpha = (np.linspace(1.0, 0.0, shade_h) ** 1.4 * THUMB_SHADE_ALPHA).astype(np.uint8)
+        shade = np.zeros((height, width, 4), dtype=np.uint8)
+        shade[:shade_h, :, 3] = alpha[:, None]
+        img.alpha_composite(Image.fromarray(shade))
+
+        text = (hook_title or "").strip()
+        if text:
+            draw = ImageDraw.Draw(img)
+            size = int(width * THUMB_FONT_RATIO)
+            lines = []
+            while size >= int(width * 0.06):
+                try:
+                    font = ImageFont.truetype(self.font_path, size)
+                except Exception:
+                    font = ImageFont.load_default()
+                lines = self._wrap_text(text, draw, font, max_width=int(width * THUMB_TEXT_WIDTH))
+                if len(lines) <= 3:
+                    break
+                size = int(size * 0.9)
+            line_h = int(font.size * 1.22)
+            stroke = max(4, int(width * 0.011))
+            y = int(height * THUMB_TEXT_TOP)
+            shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            sd = ImageDraw.Draw(shadow)
+            placed = []
+            for ln in lines:
+                bb = draw.textbbox((0, 0), ln, font=font, stroke_width=stroke)
+                tx = (width - (bb[2] - bb[0])) // 2 - bb[0]
+                placed.append((tx, y - bb[1], ln))
+                sd.text((tx + int(width * 0.006), y - bb[1] + int(width * 0.008)), ln, font=font, fill=(0, 0, 0, 160),
+                        stroke_width=stroke, stroke_fill=(0, 0, 0, 160))
+                y += line_h
+            img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(int(width * 0.006))))
+            draw = ImageDraw.Draw(img)
+            for tx, ty, ln in placed:
+                draw.text((tx, ty), ln, font=font, fill=HOOK_HEADLINE_COLOR + (255,), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        img.convert("RGB").save(out_path, "PNG", optimize=True)
+        logger.info(f"썸네일 저장: {out_path} ('{text}')")
+        return out_path
+
     def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
         """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -360,6 +422,7 @@ class AdCompositor:
         mode: str = "commerce",
         brand: Optional[BrandOverlay] = None,
         disclosure: Optional[str] = None,
+        intro_image: Optional[str] = None,
         **kwargs
     ) -> str:
         """
@@ -502,6 +565,16 @@ class AdCompositor:
                 # MoviePy는 마지막 클립 뒤에도 padding을 빼서 끝 XFADE_SEC가 잘림 → 마지막 클립 끝까지 복원 (엔딩 여유·페이드아웃 보존)
                 final_composite = final_composite.set_duration(final_composite.duration + XFADE_SEC)
             opened_clips.append(final_composite)
+
+            # 첫 INTRO_SEC초는 썸네일 화면 (타임라인·나레이션은 그대로, 화면만 덮음 → 첫 프레임 = 썸네일)
+            if intro_image and os.path.exists(intro_image):
+                fw, fh = final_composite.size
+                intro_arr = np.array(Image.open(intro_image).convert("RGB").resize((fw, fh), Image.LANCZOS))
+                intro_clip = ImageClip(intro_arr).set_start(0).set_duration(min(INTRO_SEC, final_composite.duration))
+                opened_clips.append(intro_clip)
+                final_composite = CompositeVideoClip([final_composite, intro_clip]).set_duration(final_composite.duration)
+                opened_clips.append(final_composite)
+                logger.info(f"첫 {INTRO_SEC}초 썸네일 화면 삽입: {intro_image}")
 
             # 비디오 전체 타임라인 길이가 '모든 씬 오디오 총합 + 엔딩 여유 마진 1.0초'보다 짧지 않도록 강제 보장
             # (인위적인 subclip 잘림을 영구 제거하여 마지막 씬 "댓글에 '여행' 남겨주세요"가 절대 잘리지 않음)

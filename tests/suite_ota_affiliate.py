@@ -114,6 +114,42 @@ try:
           "렌더 완료 화면: 어필리에이트 추천 링크 + 고지 문구+링크")
     check(any("copy" in (getattr(e, "proto", None) and str(e.proto) or "") for e in at.get("iframe")) or len(at.get("iframe")) >= 2,
           "원클릭 복사 버튼 2개 (링크만 / 고지 문구+링크)")
+
+    # 렌더와 함께 썸네일 + 유튜브 업로드 패널 (미연결 → 안내, 연결 → 원클릭 업로드)
+    import core.youtube_upload as yu
+    thumb = at.session_state.thumb_path
+    check(bool(thumb) and os.path.exists(thumb) and thumb.endswith("final_thumb.png") and os.path.dirname(thumb) == os.path.dirname(final),
+          "렌더 시 썸네일 final_thumb.png 동시 생성 (영상과 같은 폴더)")
+    _tok = yu.TOKEN_PATH
+    yu.TOKEN_PATH = os.path.join(os.path.dirname(final), "_no_token.json")
+    at.run()
+    check(any("youtube_auth.py" in (i.value or "") for i in at.info), "유튜브 미연결 → 채널 연결 방법 안내 (업로드 버튼 없음)")
+    open(yu.TOKEN_PATH, "w").write("{}")
+    sent = {}
+
+    class _R:
+        def __init__(self, r): self.r = r
+        def execute(self): return self.r
+        def next_chunk(self): return None, self.r
+
+    class _Svc:
+        def channels(self): return type("X", (), {"list": lambda s, **k: _R({"items": [{"id": "UC1", "snippet": {"title": "여행을 떠나자"}}]})})()
+        def videos(self): return type("X", (), {"insert": lambda s, **k: (sent.update(insert=k), _R({"id": "V9", "status": {"privacyStatus": "private"}}))[1]})()
+        def thumbnails(self): return type("X", (), {"set": lambda s, **k: (sent.update(thumb=k), _R({}))[1]})()
+        def commentThreads(self): return type("X", (), {"insert": lambda s, **k: (sent.update(comment=k), _R({"id": "C"}))[1]})()
+
+    yu._service_factory = _Svc
+    os.environ["YOUTUBE_EXPECTED_CHANNEL"] = "여행을 떠나자"
+    at.run()
+    [b for b in at.button if "유튜브 쇼츠 업로드" in b.label][0].click().run()
+    yu._service_factory, yu.TOKEN_PATH = None, _tok
+    os.environ.pop("YOUTUBE_EXPECTED_CHANNEL", None)
+    body = sent.get("insert", {}).get("body", {})
+    check(not at.exception and any("V9" in (s.value or "") for s in at.success)
+          and "cid=1234567" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
+          and body["status"]["privacyStatus"] == "private" and "thumb" in sent
+          and "cid=1234567" in sent["comment"]["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"],
+          "원클릭 업로드: 설명란(아고다 제휴 링크+공정위 고지)·썸네일·첫 댓글, 기본 비공개, 완료 링크·핀 고정 안내")
 finally:
     for wd in set(created):
         shutil.rmtree(wd, ignore_errors=True)
