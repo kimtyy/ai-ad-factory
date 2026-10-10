@@ -50,6 +50,8 @@ from core.coupang import SEARCH_LIMIT_PER_HOUR, CoupangAPIError, CoupangPartners
 from core.media.library import MAX_MEDIA, add_media, move_media, remove_media
 from core.tts import owner_readings
 from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, place_id_from_link, region_of
+from core.affiliate_ota import OTA_DISCLOSURE, OTA_LABEL, ota_disclosure_full
+from ui.copy_button import copy_button
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
@@ -121,7 +123,9 @@ if "rejected_urls" not in st.session_state:
 if "vision_cache" not in st.session_state:
     st.session_state.vision_cache = {}       # 비전 판정 캐시 (이미지 해시:역할 -> 판정)
 if "affiliate_link" not in st.session_state:
-    st.session_state.affiliate_link = ""     # 쿠팡 파트너스 링크 (영상 설명·고정 댓글용)
+    st.session_state.affiliate_link = ""     # 쿠팡 파트너스·아고다·트립닷컴 제휴 링크 (영상 설명·고정 댓글용)
+if "affiliate_program" not in st.session_state:
+    st.session_state.affiliate_program = ""  # 'agoda' / 'trip' (숙소 제휴 고지·링크 표시용)
 if "coupang_results" not in st.session_state:
     st.session_state.coupang_results = []
 if "uploaded_paths" not in st.session_state:
@@ -156,6 +160,7 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
     st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
+    st.session_state.affiliate_program = ""
     st.session_state.usp_auto = False
     st.session_state.product_boxes = {}
     for k in [k for k in st.session_state.keys() if str(k).startswith("applied_upload_")]:
@@ -501,7 +506,7 @@ if not is_owner_mode:
     col_url, col_btn = st.columns([4, 1])
     with col_url:
         url_placeholder = (
-            "숙소 상품 페이지 URL (야놀자, 여기어때, 에어비앤비, 네이버 예약 등)"
+            "숙소 페이지 URL (아고다·트립닷컴 링크는 제휴 수익 링크 자동 생성, 야놀자·여기어때 등)"
             if is_travel_mode
             else "쇼핑몰 상품 페이지 URL (https://smartstore.naver.com/..., 올리브영, 쿠팡 등)"
         )
@@ -541,16 +546,32 @@ if crawl_btn:
             )
             print(f"[app.py] scrape_product_info 반환 결과: success={scraped.get('success')}, gallery_images={scraped.get('gallery_images')}")
             st.session_state.affiliate_link = scraped.get("affiliate_link", "")
+            st.session_state.affiliate_program = scraped.get("affiliate_program", "")
 
             if scraped.get("success"):
                 set_product_info(scraped)
                 missing_ko = {"product_name": "이름", "usp": "특장점"}
-                if scraped.get("missing"):
-                    st.warning("⚠️ 페이지에서 " + ", ".join(missing_ko.get(m, m) for m in scraped["missing"])
+                missing_shown = [m for m in scraped.get("missing", []) if m in missing_ko]
+                if missing_shown:
+                    st.warning("⚠️ 페이지에서 " + ", ".join(missing_ko[m] for m in missing_shown)
                                + "을(를) 찾지 못했습니다. 아래 칸에 직접 입력해 주세요 (사실만 입력).")
                 st.success(f"✅ 크롤링 성공! '{scraped['product_name'] or '(이름 없음)'}' 정보를 불러왔습니다.")
                 
-                if is_travel_mode:
+                if is_travel_mode and scraped.get("ota"):
+                    # 아고다·트립닷컴: 페이지·사진을 가져오지 않음 → 직접 올린 사진으로 씬 구성 (사진 매니저)
+                    ota_ko = OTA_LABEL.get(scraped["ota"], "")
+                    st.session_state.image_pool = []
+                    st.session_state.gallery_images = []
+                    st.session_state.cutout_path = None
+                    if scraped.get("affiliate_link"):
+                        st.info(f"🔗 {ota_ko} 제휴 수익 링크를 만들었어요 (렌더링 후 복사 버튼): {scraped['affiliate_link']}")
+                    else:
+                        st.warning(f"🔗 {ota_ko} 제휴 ID가 .env에 없어 수익 링크를 못 만들었어요: "
+                                   + ", ".join(scraped.get("affiliate_missing_keys", [])) + " 를 넣고 다시 눌러 주세요.")
+                    st.info(f"📷 {ota_ko} 숙소 사진은 가져오지 않아요 (이용 약관상 자동 수집 금지·호텔 사진 저작권). "
+                            "직접 찍은 사진이나 호텔에서 사용 허락을 받은 사진 6~10장(수영장·객실·뷰 등)을 아래에서 올려 주세요. "
+                            "AI가 사진을 보고 씬에 맞게 배치합니다.")
+                elif is_travel_mode:
                     # [Step 1 원칙: 실물 파일(.jpg)을 미리 다운로드하지 않고 메타데이터 풀만 적재]
                     image_pool = scraped.get("image_pool", [])
                     st.session_state.image_pool = image_pool
@@ -593,7 +614,7 @@ if crawl_btn:
                                  if scraped.get("product_name_hint") else None)
                 st.error(f"❌ 크롤링 실패: {scraped.get('error')}.")
                 if scraped.get("affiliate_link"):
-                    st.info(f"🔗 쿠팡 파트너스 링크는 만들어 두었어요: {scraped['affiliate_link']} (영상 설명·고정 댓글용)")
+                    st.info(f"🔗 제휴 링크는 만들어 두었어요: {scraped['affiliate_link']} (영상 설명·고정 댓글용)")
 
 # 쿠팡 상품 검색 (파트너스 공식 API): 상품명·고해상도 대표 사진·파트너스 링크를 한 번에
 if is_commerce_mode and CoupangPartners().enabled:
@@ -1224,7 +1245,8 @@ if render_btn:
                 audio_mode=selected_audio_mode,
                 mode=pipeline_mode,
                 brand=brand_cfg,
-                disclosure=COUPANG_DISCLOSURE if is_commerce_mode else None,
+                disclosure=(COUPANG_DISCLOSURE if is_commerce_mode
+                            else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
             )
             current_job().save_plan(scenes)
 
@@ -1258,7 +1280,21 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         if is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
-            st.code(f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: {link}", language=None)
+            post_text = f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: {link}"
+            st.code(post_text, language=None)
+            copy_button(post_text, "📋 문구+링크 원클릭 복사", key="copy_commerce")
+        elif is_travel_mode and st.session_state.get("affiliate_program"):
+            ota = st.session_state.affiliate_program
+            st.markdown(f"**🔗 {OTA_LABEL.get(ota, '')} 어필리에이트 추천 링크** (영상 설명·고정 댓글용, 공정위 추천·보증 심사지침 고지 포함)")
+            link = st.session_state.get("affiliate_link")
+            if link:
+                st.code(link, language=None)
+                copy_button(link, "📋 링크만 복사", key="copy_aff_link")
+                post_text = f"{ota_disclosure_full(ota)}\n숙소 예약 링크: {link}"
+                st.code(post_text, language=None)
+                copy_button(post_text, "📋 고지 문구+링크 원클릭 복사", key="copy_aff_post")
+            else:
+                st.warning("제휴 ID(.env의 AGODA_CID 또는 TRIP_AID·TRIP_SID)가 없어 수익 링크를 만들지 못했어요.")
     with col_meta:
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:

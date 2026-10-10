@@ -355,6 +355,26 @@ def _scrape_coupang(url: str, output_dir: str, result: Dict[str, Any]) -> Dict[s
     return result
 
 
+def _scrape_ota(url: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    아고다·트립닷컴: 숙소 페이지를 열지 않고 링크 주소에서 숙소 ID·영문 이름만 + 제휴 링크 생성 (core/affiliate_ota.py)
+    사진은 수집하지 않음 (약관상 자동 수집 금지·호텔/OTA 저작물) → 화면에서 직접 올리도록 missing에 'photos'
+    """
+    from core.affiliate_ota import OTA_LABEL, ota_info
+    info = ota_info(url)
+    label = OTA_LABEL.get(info.get("ota"), "")
+    result.update({
+        "success": True, "url": info["url"], "ota": info["ota"], "affiliate_program": info["ota"],
+        "product_name": info.get("name", ""), "hotel_id": info.get("hotel_id", ""),
+        "affiliate_link": info.get("affiliate_link", ""), "affiliate_missing_keys": info.get("missing_keys", []),
+        "image_pool": [], "category_counts": {},
+    })
+    result["missing"] = (["product_name"] if not result["product_name"] else []) + ["usp", "photos"]
+    logger.info(f"{label} 링크: 페이지 미접속, 숙소 ID={result['hotel_id'] or '-'}, 이름='{result['product_name']}', "
+                f"제휴 링크={'생성' if result['affiliate_link'] else '키 없음 ' + str(result['affiliate_missing_keys'])}")
+    return result
+
+
 def scrape_product_info(
     url: str,
     output_image_dir: Optional[str] = None,
@@ -392,6 +412,10 @@ def scrape_product_info(
         # 쿠팡은 서버 자동 접속을 403으로 막음(약관상 우회 금지) → 페이지를 열지 않고 공식 파트너스 API로만 조회
         if mode == "commerce" and is_coupang_url(url):
             return _scrape_coupang(url, output_image_dir, result)
+        # 아고다·트립닷컴 (숙소 제휴): 페이지를 열지 않고 링크만 분석 + 제휴 수익 링크
+        from core.affiliate_ota import detect_ota, is_short_ota_link
+        if mode == "travel" and (detect_ota(url) or is_short_ota_link(url)):
+            return _scrape_ota(url, result)
         link = resolve_link(url)
         if link["is_search"]:
             result["product_name_hint"] = link["search_query"]

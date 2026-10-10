@@ -39,6 +39,7 @@ SUITES = [
     ("suite_stage3_render_e2e.py", "작업 공간 격리 + 사진/영상/브랜드 실제 렌더", True),
     ("suite_app_commerce_flow.py", "Streamlit 쇼핑 원클릭: [영상 만들기] → 자동 기획 → 렌더 (사진 1장 다각도)", True),
     ("suite_app_owner_flow.py", "Streamlit 모드 분기 + 사장님 기획→렌더", True),
+    ("suite_ota_affiliate.py", "아고다·트립닷컴: 링크 판별·제휴 수익 링크·페이지 미접속·링크→기획→렌더→복사", True),
 ]
 
 
