@@ -1197,30 +1197,32 @@ if render_btn:
             total_scenes = len(scenes)
             generated_imgs = []
 
-            # 2. 씬별 에셋 순차 생성
+            # 2. 씬별 에셋: 사진 배정(씬 순서) → 음성(여러 씬 동시, 네트워크 대기) → 영상 클립(음성 길이 = 모션 길이)
+            pending = []
             for idx, scene in enumerate(scenes):
                 s_num = int(scene.get("scene_index") or scene.get("scene_number") or (idx + 1))
                 scene["scene_index"] = s_num
                 scene["scene_number"] = s_num
-
-                step_pct = int((idx / total_scenes) * 70)
-                gen_step_text = (
-                    f"[{idx+1}/{total_scenes}] 씬 {s_num} 풍경 갤러리 매핑 및 음성 생성 중..."
-                    if is_travel_mode
-                    else f"[{idx+1}/{total_scenes}] 씬 {s_num} 이미지 및 음성 생성 중..."
-                )
-                progress_bar.progress(step_pct, text=gen_step_text)
-
                 # 여행 상품 모드: 핀포인트 다운로드된 씬 에셋 1:1 매핑 (rembg 누끼 연산 100% 바이패스)
                 g_cut = scene.get("image_path") if uses_scene_media else None
                 if g_cut and not os.path.exists(g_cut):
                     g_cut = None
-
                 img_path = asset_gen.generate_image(scene, force=force_render, gallery_image_path=g_cut)
                 generated_imgs.append(img_path)
+                pending.append((scene, s_num, img_path))
 
-                # 음성 생성
-                audio_path = asset_gen.generate_voice(scene, force=force_render)
+            progress_bar.progress(5, text=f"씬 {total_scenes}개 나레이션 동시 생성 중...")
+            audio_paths = asset_gen.generate_voices(
+                [sc for sc, _, _ in pending], force=force_render,
+                on_done=lambda d, n: progress_bar.progress(5 + int(d / n * 25), text=f"나레이션 {d}/{n} 완료..."))
+
+            for idx, ((scene, s_num, img_path), audio_path) in enumerate(zip(pending, audio_paths)):
+                gen_step_text = (
+                    f"[{idx+1}/{total_scenes}] 씬 {s_num} 풍경 영상 생성 중..."
+                    if is_travel_mode
+                    else f"[{idx+1}/{total_scenes}] 씬 {s_num} 영상 생성 중..."
+                )
+                progress_bar.progress(30 + int((idx / total_scenes) * 40), text=gen_step_text)
 
                 # 비디오 생성 (업로드 영상이면 UGC 정규화 클립, 아니면 로컬 2D Ken Burns 모션 - 외부 비디오 API 차단)
                 video_path = asset_gen.generate_video(scene, img_path, force=force_render)

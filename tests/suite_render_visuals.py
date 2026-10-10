@@ -319,6 +319,42 @@ check(before[0] > 180 and after[2] > 180 and 60 < mid[0] < 180 and 60 < mid[2] <
 check(abs(_dur - (a1 + 0.2 + a2 + 1.0)) < 0.15,
       f"디졸브로 겹쳐도 나레이션 간격 0.2초·엔딩 여유 1초 보존 (전체 {_dur:.2f}초 ≈ {a1 + 0.2 + a2 + 1.0:.2f}초)")
 
+# ---------------------------------------------------------------- 씬 음성 동시 생성 (Edge-TTS 네트워크 대기 겹치기)
+import threading
+import time as _time
+import core.asset_generator as _agm
+_pg = AssetGenerator(mode="travel", cache_dir=os.path.join(work, "par_tts"))
+_active, _peak, _lock, _order = [0], [0], threading.Lock(), []
+
+
+def _fake_synth(text, out_path, scene, force=False, rate=None):
+    with _lock:
+        _active[0] += 1
+        _peak[0] = max(_peak[0], _active[0])
+    _time.sleep(0.4)                                   # 네트워크 대기 흉내
+    shutil.copyfile(fixed, out_path)
+    with _lock:
+        _active[0] -= 1
+        _order.append(text)
+    return out_path
+
+
+_pg._synthesize = _fake_synth
+_scs = [{"scene_index": i + 1, "voiceover": f"씬 {i + 1} 문장이에요.", "duration_sec": 2.0} for i in range(7)]
+_scs[0]["hook_title"] = "여기 진짜 한국 맞아요?"
+_prog = []
+_t = _time.time()
+_paths = _pg.generate_voices(_scs, force=True, on_done=lambda d, n: _prog.append((d, n)))
+_el = _time.time() - _t
+check(_peak[0] == _agm.TTS_WORKERS and _el < 7 * 0.4 * 0.6,
+      f"씬 음성 동시 생성: 최대 {_peak[0]}개 동시 (설정 {_agm.TTS_WORKERS}), 7씬 {_el:.1f}초 (순차면 3초 이상)")
+check([os.path.basename(p) for p in _paths] == [f"scene_{i:02d}.mp3" for i in range(1, 8)] and all(os.path.exists(p) for p in _paths)
+      and _scs[0].get("hook_sec") and not any(s.get("hook_sec") for s in _scs[1:]) and _prog[-1] == (7, 7),
+      "결과는 씬 순서 그대로, 씬 1만 후킹 2단 음성(hook_sec), 진행률 7/7")
+_mg = AssetGenerator(mode="travel", cache_dir=os.path.join(work, "par_mock"), mock=True)
+_mp = _mg.generate_voices([dict(s) for s in _scs[:3]], force=True)
+check(len(_mp) == 3 and all(os.path.exists(p) for p in _mp), "mock·무음 모드는 순차 (네트워크 없음)")
+
 # ---------------------------------------------------------------- 최종 조립 엔진: ffmpeg filter_complex (기본) + MoviePy 대체
 from core.render import ffmpeg_assemble as fa
 st_, tot_ = fa.build_timeline([3.0, 2.5, 4.0], 0.35, card_sec=2.85)

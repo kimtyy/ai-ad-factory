@@ -54,6 +54,9 @@ TTS_KEEP_TAIL_SEC = 0.12
 # Edge-TTS가 가끔 앞부분만 담긴 잘린 파일(예: 26자 대사에 0.36초)을 정상 응답처럼 돌려줌 → 글자 수 대비 너무 짧으면 재시도
 TTS_MIN_SEC_PER_CHAR = 0.06
 TTS_RETRIES = 2
+# 씬 음성 동시 생성 수: Edge-TTS는 네트워크 대기라 스레드로 겹치면 빨라짐
+# (실측 7씬: 순차 12.9초 → 2개 5.0초 → 4개 3.5초 → 6개 3.4초, 음성 길이·후킹 경계 동일, 차단·잘림 없음)
+TTS_WORKERS = 4
 
 
 def tts_too_short(text: str, seconds: Optional[float]) -> bool:
@@ -348,6 +351,30 @@ class AssetGenerator:
             logger.info(f"[Cache Hit] 씬 {scene_num} 2단 음성 이미 존재 (후킹 {hook_sec:.2f}초): {out_path}")
         scene["hook_sec"] = round(hook_sec, 2)
         return out_path
+
+    def generate_voices(self, scenes: List[Dict[str, Any]], force: bool = False,
+                        on_done: Optional[Any] = None) -> List[str]:
+        """
+        여러 씬 음성을 TTS_WORKERS개씩 동시에 생성 → scenes와 같은 순서의 경로. 씬마다 파일·scene['hook_sec']가 따로라 안전.
+        on_done(완료 수, 전체 수): 진행률 표시용 (호출한 스레드에서 실행)
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if len(scenes) <= 1 or self.mock or self.audio_mode == "silent":
+            out = []
+            for i, sc in enumerate(scenes, 1):
+                out.append(self.generate_voice(sc, force=force))
+                if on_done:
+                    on_done(i, len(scenes))
+            return out
+        results: List[Optional[str]] = [None] * len(scenes)
+        with ThreadPoolExecutor(max_workers=min(TTS_WORKERS, len(scenes))) as ex:
+            futs = {ex.submit(self.generate_voice, sc, force): i for i, sc in enumerate(scenes)}
+            for done, fut in enumerate(as_completed(futs), 1):
+                results[futs[fut]] = fut.result()
+                if on_done:
+                    on_done(done, len(scenes))
+        logger.info(f"씬 음성 {len(scenes)}개 동시 생성 완료 (최대 {TTS_WORKERS}개씩)")
+        return [r for r in results if r is not None]
 
     def _speak_checked(self, text: str, path: str, rate: str, pitch: str, scene_num: int, keep_commas: bool = False) -> str:
         """Edge-TTS 합성 + 잘린 응답이면 재시도 (TTS_RETRIES회)"""
@@ -794,9 +821,10 @@ class AssetGenerator:
         results = []
         total = len(scenes)
 
+        prepared = []
         for i, scene in enumerate(scenes, 1):
             s_num = int(scene.get("scene_index") or scene.get("scene_number", i))
-            logger.info(f"===== [에셋 생성 {i}/{total}] 씬 {s_num} 처리 시작 =====")
+            logger.info(f"===== [에셋 생성 {i}/{total}] 씬 {s_num} 사진 준비 =====")
 
             # 1. 키프레임 이미지 (씬에 기록된 실물 사진 image_path 1:1 매핑)
             # 순번 기반 매핑은 다운로드 실패 시 이후 씬이 밀리므로, 씬 키(image_path)를 우선 사용합니다.
@@ -804,15 +832,14 @@ class AssetGenerator:
             g_path = scene.get("image_path")
             if not g_path and gallery_images and len(gallery_images) == total:
                 g_path = gallery_images[i - 1]
+            prepared.append((scene, s_num, self.generate_image(scene, force=force, gallery_image_path=g_path)))
 
-            img_path = self.generate_image(scene, force=force, gallery_image_path=g_path)
+        # 2. 보이스오버 음성 (Edge-TTS, 씬 여러 개 동시)
+        audio_paths = self.generate_voices([sc for sc, _, _ in prepared], force=force)
 
-            # 2. 보이스오버 음성 (Google TTS 1.08x)
-            audio_path = self.generate_voice(scene, force=force)
-
-            # 3. 비디오 클립 (로컬 2D Ken Burns 팬앤줌 합성)
+        # 3. 비디오 클립 (로컬 2D Ken Burns 팬앤줌 합성, 음성 길이 = 모션 길이)
+        for (scene, s_num, img_path), audio_path in zip(prepared, audio_paths):
             video_path = self.generate_video(scene, image_path=img_path, force=force)
-
             results.append({
                 "scene_number": s_num,
                 "scene_index": s_num,
