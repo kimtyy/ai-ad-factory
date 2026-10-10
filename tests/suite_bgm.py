@@ -81,7 +81,7 @@ EXPECT = 10 ** ((bgm.BGM_FULL_BELOW_VOICE_DB + 20 * np.log10(1 / bgm.DUCK_GAIN))
 
 full = amp(2.6, 150)          # 나레이션 사이 1.2초 틈(> 0.8초) 가운데: BGM 원래 레벨
 duck1, duck2 = amp(1.25, 150), amp(3.9, 150)
-start, end = amp(0.1, 150, 0.1), amp(5.93, 150, 0.1)
+start, end = amp(0.04, 150, 0.06), amp(5.93, 150, 0.1)
 check(0.15 < duck1 / full < 0.26 and 0.15 < duck2 / full < 0.26,
       f"나레이션 구간 BGM = 원래 레벨의 {duck1 / full:.0%}·{duck2 / full:.0%} (목표 20%, 약 -14dB)")
 check(start < full * 0.3 and end < full * 0.3, f"시작 페이드인({start / full:.0%})·끝 페이드아웃({end / full:.0%})")
@@ -109,6 +109,36 @@ def vhash(p):
 
 
 check(vhash(video) == vhash(out), "영상은 다시 인코딩하지 않음 (프레임 그대로, 오디오만 새로 섞음)")
+
+# ---------------------------------------------------------------- 2-1. 시작 지점 자동 탐색 (인트로 건너뛰고 드롭부터)
+drop_track = os.path.join(tdir, "drop_song.wav")
+# 0~6초: 작은 고음 패드(인트로, 저음 없음) / 6초~: 60Hz 킥 + 큰 저음 (드롭) / 20초 이후까지 유지
+sh("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=6", "-f", "lavfi",
+   "-i", "sine=frequency=60:sample_rate=44100:duration=24", "-filter_complex",
+   "[0:a]volume=0.05[i];[1:a]volume='0.9*(0.6+0.4*gt(mod(t,0.5),0.25))':eval=frame[d];[i][d]concat=n=2:v=0:a=1", drop_track)
+st = bgm.energy_start(drop_track, use_cache=False)
+check(5.7 <= st <= 6.3, f"인트로(0~6초) 건너뛰고 드롭 시작 6초 근처에서 시작 ({st:.2f}초)")
+flat_track = os.path.join(tdir, "flat_song.wav")
+sh("-f", "lavfi", "-i", "sine=frequency=80:sample_rate=44100:duration=30", "-af", "volume=0.5", flat_track)
+check(bgm.energy_start(flat_track, use_cache=False) == 0.0, "처음부터 비트가 살아 있는 곡은 0초부터")
+short_track = os.path.join(tdir, "short_intro.wav")
+sh("-f", "lavfi", "-i", "sine=frequency=440:duration=10", "-f", "lavfi", "-i", "sine=frequency=60:duration=12", "-filter_complex",
+   "[0:a]volume=0.05[i];[1:a]volume=0.9[d];[i][d]concat=n=2:v=0:a=1", short_track)
+check(bgm.energy_start(short_track, use_cache=False) == 0.0, "드롭 뒤 남은 길이가 20초 미만이면 처음부터 (반복 시 어색함 방지)")
+check(bgm.energy_start(drop_track) == st, "시작 지점은 음원 폴더 캐시에 저장 (다시 분석 안 함)")
+drop_out = os.path.join(work, "drop_mix.mp4")
+bgm.mix_bgm(silent_v, drop_out, drop_track, [], voice_db=VOICE_DB)
+zero_out = os.path.join(work, "zero_mix.mp4")
+bgm.mix_bgm(silent_v, zero_out, drop_track, [], voice_db=VOICE_DB, start_at=0)
+dm, zm = pcm(drop_out), pcm(zero_out)
+check(amp_of(dm, 1.0, 60) > amp_of(dm, 1.0, 440) * 5 and amp_of(zm, 1.0, 440) > amp_of(zm, 1.0, 60) * 5,
+      "믹싱은 드롭부터(1초 지점에 60Hz 킥), start_at=0이면 인트로(440Hz)부터")
+os.environ["BGM_SIGNATURE_TRACKS"] = "c_song.m4a, b_song.wav"
+check([os.path.basename(p) for p in bgm.ordered_tracks(tdir)][:3] == ["c_song.m4a", "b_song.wav", "a_song.mp3"]
+      and bgm.signature_tracks() == ["c_song.m4a", "b_song.wav"], "시그니처 트랙(.env BGM_SIGNATURE_TRACKS)은 목록 맨 앞")
+os.environ.pop("BGM_SIGNATURE_TRACKS")
+for f in (drop_track, flat_track, short_track):
+    os.remove(f)
 
 # ---------------------------------------------------------------- 3. 조립과 연결 (타임라인으로 덕킹 구간 계산) + 실패 처리
 man = []

@@ -474,7 +474,7 @@ with st.sidebar:
     st.session_state.selected_actor = selected_actor
 
     # 자체 음원 BGM (assets/bgm): 나레이션 구간 20% 덕킹 + 시작 페이드인·끝 페이드아웃
-    bgm_tracks = bgm_mod.list_tracks()
+    bgm_tracks = bgm_mod.ordered_tracks()
     bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks,
                        help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
     bgm_choice = None
@@ -483,8 +483,11 @@ with st.sidebar:
             bgm_options = [bgm_mod.RANDOM] + [os.path.basename(t) for t in bgm_tracks]
             if st.session_state.get("bgm_choice") not in bgm_options:
                 st.session_state.bgm_choice = bgm_mod.RANDOM
+            _sig = set(bgm_mod.signature_tracks())
             bgm_choice = st.selectbox("BGM 음원", bgm_options, key="bgm_choice",
-                                      format_func=lambda v: "🎲 랜덤 (렌더마다 무작위)" if v == bgm_mod.RANDOM else v)
+                                      format_func=lambda v: "🎲 랜덤 (렌더마다 무작위)" if v == bgm_mod.RANDOM
+                                      else f"⭐ {v}" if v in _sig else v,
+                                      help="곡 처음의 인트로는 건너뛰고 비트가 들어오는 지점(드롭)부터 자동으로 붙습니다.")
     else:
         st.caption("🎵 자체 BGM: `assets/bgm/` 폴더에 mp3·wav·m4a 음원을 넣으면 켤 수 있어요.")
 

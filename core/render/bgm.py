@@ -32,7 +32,14 @@ BGM_FULL_BELOW_VOICE_DB = 4.0   # 나레이션이 없을 때 BGM 평균 음량 =
 ATTACK_SEC = 0.25               # 나레이션 시작 전부터 낮추기 시작
 RELEASE_SEC = 0.40              # 나레이션 끝난 뒤 천천히 올림
 MERGE_GAP_SEC = 0.8             # 이보다 짧은 나레이션 사이 틈은 이어서 계속 낮춤
-FADE_IN_SEC = 1.0
+FADE_IN_SEC = 0.3               # 비트가 살아 있는 지점부터 붙이므로 짧게 (첫 3초 텐션)
+# 시작 지점 자동 탐색: 인트로 빌드업을 건너뛰고 드롭(저음 킥 + 전체 음량이 곡의 활성 레벨에 도달해 유지되는 첫 구간)부터
+ENERGY_WIN_SEC = 0.5            # 에너지 측정 창
+ENERGY_HOLD_SEC = 4.0           # 활성 레벨을 이만큼 유지해야 시작 후보
+ENERGY_BASS_BELOW = 4.0         # 저음(40~150Hz) 활성 기준 = 곡 저음 상위 20% 레벨 - 4dB
+ENERGY_FULL_BELOW = 3.0         # 전체 음량 활성 기준 = 곡 음량 상위 20% 레벨 - 3dB
+ENERGY_SNAP_SEC = 2.0           # 후보 앞뒤 이 범위에서 저음이 가장 크게 올라서는 순간(드롭 첫 박)으로 맞춤
+ENERGY_MIN_TAIL_SEC = 20.0      # 시작 후 남은 길이가 이보다 짧으면 처음부터
 FADE_OUT_SEC = 1.8              # 끝(엔딩 카드) 페이드아웃
 DEFAULT_VOICE_DB = -18.6        # 나레이션 평균 음량 실측값 (Edge-TTS SunHi, 무음 모드 등 측정 불가일 때)
 
@@ -47,6 +54,18 @@ def list_tracks(bgm_dir: Optional[str] = None) -> List[str]:
         return []
     return sorted(os.path.join(bgm_dir, f) for f in os.listdir(bgm_dir)
                   if f.lower().endswith(BGM_EXTS) and not f.startswith("."))
+
+
+def signature_tracks() -> List[str]:
+    """.env BGM_SIGNATURE_TRACKS(쉼표로 구분한 파일 이름) → 대시보드 목록 맨 앞에 ⭐로 표시"""
+    return [s.strip() for s in os.getenv("BGM_SIGNATURE_TRACKS", "").split(",") if s.strip()]
+
+
+def ordered_tracks(bgm_dir: Optional[str] = None) -> List[str]:
+    sig = signature_tracks()
+    tracks = list_tracks(bgm_dir)
+    first = [t for name in sig for t in tracks if os.path.basename(t) == name]
+    return first + [t for t in tracks if t not in first]
 
 
 def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Optional[random.Random] = None) -> Optional[str]:
@@ -97,6 +116,89 @@ def mean_volume_db(path: str) -> Optional[float]:
     return val
 
 
+def _cache_get(path: str, key: str) -> Optional[float]:
+    cache = os.path.join(os.path.dirname(path), ".bgmlevel.json")
+    try:
+        return json.load(open(cache, encoding="utf-8")).get(key)
+    except Exception:
+        return None
+
+
+def _cache_put(path: str, key: str, value: float) -> None:
+    cache = os.path.join(os.path.dirname(path), ".bgmlevel.json")
+    try:
+        data = json.load(open(cache, encoding="utf-8")) if os.path.exists(cache) else {}
+    except Exception:
+        data = {}
+    data[key] = value
+    try:
+        json.dump(data, open(cache, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def energy_start(path: str, use_cache: bool = True) -> float:
+    """
+    인트로를 건너뛴 시작 지점(초): 저음(40~150Hz)과 전체 음량이 둘 다 곡 자체의 활성 레벨(상위 20% - 4dB / - 3dB)에
+    도달해 ENERGY_HOLD_SEC 동안 유지되는 첫 창 → 그 앞 ENERGY_SNAP_SEC 안에서 저음이 가장 크게 뛰는 50ms 지점(드롭 첫 박).
+    활성 구간을 못 찾거나 뒤에 남는 길이가 짧으면 0. 결과는 음원 폴더 캐시에 저장
+    """
+    import numpy as np
+    key = f"start:v2:{os.path.basename(path)}:{os.path.getsize(path)}:{int(os.path.getmtime(path))}"
+    if use_cache:
+        cached = _cache_get(path, key)
+        if cached is not None:
+            return float(cached)
+    sr = 11025
+    raw = subprocess.run([ffmpeg_exe(), "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", str(sr), "-"],
+                         capture_output=True, timeout=180).stdout
+    sig = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+    duration = len(sig) / sr
+    win = int(sr * ENERGY_WIN_SEC)
+    n = len(sig) // win
+    start = 0.0
+    if n >= int(2 * ENERGY_HOLD_SEC / ENERGY_WIN_SEC):
+        frames = sig[:n * win].reshape(n, win)
+        full = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+        freqs = np.fft.rfftfreq(win, 1 / sr)
+        band = (freqs > 40) & (freqs < 150)
+        bass = 10 * np.log10((np.abs(np.fft.rfft(frames * np.hanning(win), axis=1)) ** 2)[:, band].sum(axis=1) + 1e-12)
+        bass_on = np.percentile(bass, 80) - ENERGY_BASS_BELOW
+        full_on = np.percentile(full, 80) - ENERGY_FULL_BELOW
+        hold = int(ENERGY_HOLD_SEC / ENERGY_WIN_SEC)
+        cand = None
+        for i in range(0, n - hold):
+            if np.median(bass[i:i + hold]) >= bass_on and np.median(full[i:i + hold]) >= full_on:
+                cand = i * ENERGY_WIN_SEC
+                break
+        if cand is not None and cand > 0:
+            # 드롭 첫 박: 50ms 간격 저음 에너지(0.1초 창)에서 '다음 1초 평균 - 이전 0.5초 평균'이 가장 큰 지점.
+            # 한 프레임 차이만 보면 빌드업 킥(드롭 직전)에 걸림 → 앞뒤 맥락으로 실제 드롭(직전 숨 고르기 뒤 저음 폭발)을 찾음
+            hop, w2 = int(sr * 0.05), int(sr * 0.1)
+            lo = max(0, int((cand - ENERGY_SNAP_SEC) * sr))
+            hi = min(len(sig) - w2, int((cand + ENERGY_SNAP_SEC + 1.0) * sr))
+            f2 = np.fft.rfftfreq(w2, 1 / sr)
+            b2 = (f2 > 40) & (f2 < 150)
+            pos = list(range(lo, hi, hop))
+            env = np.array([10 * np.log10((np.abs(np.fft.rfft(sig[q:q + w2] * np.hanning(w2))) ** 2)[b2].sum() + 1e-12)
+                            for q in pos])
+            after, before = int(1.0 / 0.05), int(0.5 / 0.05)
+            best, best_score = None, -1e9
+            for k in range(before, len(env) - after):
+                score = env[k:k + after].mean() - env[k - before:k].mean()
+                if score > best_score:
+                    best, best_score = k, score
+            start = pos[best] / sr if best is not None else cand
+        elif cand is not None:
+            start = 0.0
+    if duration - start < ENERGY_MIN_TAIL_SEC:
+        start = 0.0
+    start = round(float(start), 2)
+    _cache_put(path, key, start)
+    logger.info(f"BGM 시작 지점: '{os.path.basename(path)}' {start:.2f}초 (인트로 건너뜀, 곡 길이 {duration:.0f}초)")
+    return start
+
+
 def merge_intervals(intervals: Sequence[Tuple[float, float]], gap: float = MERGE_GAP_SEC) -> List[Tuple[float, float]]:
     out: List[List[float]] = []
     for s, e in sorted((float(a), float(b)) for a, b in intervals if b > a):
@@ -125,8 +227,11 @@ def narration_intervals(scene_audio: Sequence[Tuple[float, float]]) -> List[Tupl
 
 
 def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tuple[float, float]],
-            voice_db: Optional[float] = None, duck: float = DUCK_GAIN) -> str:
-    """완성 영상 + BGM → video_out (영상은 복사, 오디오만 재인코딩). 실패하면 RuntimeError"""
+            voice_db: Optional[float] = None, duck: float = DUCK_GAIN, start_at: Optional[float] = None) -> str:
+    """
+    완성 영상 + BGM → video_out (영상은 복사, 오디오만 재인코딩). 실패하면 RuntimeError
+    start_at: 음원 시작 지점(초). None이면 energy_start()로 인트로를 건너뛴 지점 자동 탐색, 0이면 처음부터
+    """
     if not bgm_path or not os.path.isfile(bgm_path):
         raise RuntimeError(f"BGM 음원 파일이 없어요: {os.path.basename(bgm_path or '')} (assets/bgm 폴더 확인)")
     probe = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", video_in], capture_output=True, text=True,
@@ -136,6 +241,7 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
         raise RuntimeError(f"영상 길이를 읽지 못함: {video_in}")
     total = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     has_voice = "Audio:" in probe
+    offset = energy_start(bgm_path) if start_at is None else max(0.0, float(start_at))
     bgm_db = mean_volume_db(bgm_path)
     if bgm_db is None:
         raise RuntimeError(f"BGM 음량을 읽지 못함: {bgm_path}")
@@ -152,7 +258,8 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
     else:
         graph = chain + ";[bgm]alimiter=limit=0.95[aout]"
     tmp = video_out + ".bgm.mp4"
-    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", video_in, "-stream_loop", "-1", "-i", bgm_path,
+    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", video_in,
+           "-stream_loop", "-1", "-ss", f"{offset:.3f}", "-i", bgm_path,
            "-filter_complex", graph, "-map", "0:v", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
            "-t", f"{total:.3f}", "-movflags", "+faststart", tmp]
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
@@ -161,6 +268,6 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
             os.remove(tmp)
         raise RuntimeError(f"BGM 믹싱 실패: {(res.stderr or '')[-300:]}")
     shutil.move(tmp, video_out)
-    logger.info(f"BGM 믹싱: '{os.path.basename(bgm_path)}' (평균 {bgm_db:.1f}dB → {gain_db:+.1f}dB 보정, 나레이션 {len(merged)}구간 "
+    logger.info(f"BGM 믹싱: '{os.path.basename(bgm_path)}' {offset:.2f}초부터 (평균 {bgm_db:.1f}dB → {gain_db:+.1f}dB 보정, 나레이션 {len(merged)}구간 "
                 f"{duck:.0%}로 덕킹, 페이드인 {FADE_IN_SEC}s·아웃 {fo:.1f}s) → {video_out}")
     return video_out
