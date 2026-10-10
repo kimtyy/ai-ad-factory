@@ -6,7 +6,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from moviepy.editor import (
     VideoFileClip,
@@ -29,11 +29,15 @@ logger = logging.getLogger("ad_factory.compositor")
 CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
 INTRO_SEC = 0.3             # 영상 첫 화면에 썸네일을 보여 주는 길이 (초): 피드 첫 프레임·자동 썸네일 후보가 썸네일이 되게
-THUMB_FONT_RATIO = 0.115    # 썸네일 후킹 글자 크기 (폭 대비)
-THUMB_TEXT_WIDTH = 0.84
-THUMB_TEXT_TOP = 0.13       # 후킹 첫 줄 위치 (높이 대비): 쇼츠 상단 UI(검색·카메라 아이콘) 아래
-THUMB_SHADE_RATIO = 0.48
-THUMB_SHADE_ALPHA = 170
+THUMB_FONT_RATIO = 0.26     # 썸네일 메인 카피 최대 글자 크기 (폭 대비, 기존 0.115의 약 2.3배 - 짧은 카피면 2줄 안에서 이 크기)
+THUMB_TEXT_WIDTH = 0.90
+THUMB_TEXT_TOP = 0.085      # 메인 카피 첫 줄 위치 (높이 대비): 쇼츠 상단 UI 아래
+THUMB_TILT_DEG = 4          # 메인 카피 기울기 (반시계 4도 = 오른쪽이 올라가는 -4도 연출)
+THUMB_GRADIENT = ((255, 238, 70), (255, 150, 10), (232, 38, 28))   # 노랑 → 주황 → 빨강
+THUMB_SUB_FONT_RATIO = 0.085
+THUMB_SUB_CENTER_Y = 0.60   # 서브 카피 박스 세로 위치 (중간~하단, 쇼츠 하단 UI 위)
+THUMB_VIGNETTE_TOP = 215
+THUMB_VIGNETTE_BOTTOM = 190
 # 자막 블록 세로 중심 (높이 비율). 쇼츠 세이프 에어리어: 하단 약 35%는 채널명·제목·구독 버튼·사운드명,
 # 우측은 좋아요·댓글 버튼이 덮음 → 화면 정중앙(48~52%)에 둬야 모바일에서 가려지지 않음 (하단 68%는 UI에 가려졌음)
 CAPTION_CENTER_Y = 0.50
@@ -208,61 +212,164 @@ class AdCompositor:
             draw.text((x, ty), ln, font=f, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         return np.array(img)
 
-    def render_thumbnail(self, frame: np.ndarray, hook_title: str, out_path: str,
+    def render_thumbnail(self, frame: np.ndarray, main_text: str, out_path: str, sub_text: str = "", accent: str = "",
                          width: int = 1080, height: int = 1920) -> str:
         """
-        쇼츠 썸네일 (1080x1920 PNG): 씬 1 화면(자막 없는 원본 컷)을 꽉 채워 깔고, 상단에 후킹 타이틀을 크게.
-        - 상단 48%만 위→아래로 옅어지는 어두운 그라데이션 (사진은 살리고 글자만 또렷하게)
-        - 노란 후킹 색 + 두꺼운 검은 외곽선 + 그림자, 어절 단위 줄바꿈, 폭 84% 안에서 최대 3줄 (넘치면 글자 축소)
-        - 영상 첫 0.3초 화면으로도 쓰임 (assemble_ad의 intro_image)
+        쇼츠 썸네일 (1080x1920 PNG) - 영상 첫 0.3초·대시보드 미리보기·다운로드 공용
+        - 배경: 씬 1 원본 컷(자막 없음) 꽉 채움 + 채도·대비 살짝 올림 + 상단·하단 비네트(어두운 그라데이션)
+        - 메인 카피: 폭의 최대 26%(기존 11.5%의 약 2.3배) 글자, 노랑→주황→빨강 세로 그라데이션, 두꺼운 검은 외곽선 +
+          아래로 밀린 입체(돌출) 레이어 + 블러 그림자, -4도 기울기(오른쪽 위로), 끝에 포인트(🔥💥😱🤯·ㄷㄷ·?!)
+        - 서브 카피: 흰 하이라이트 박스(자막 바) 안에 굵은 검정 글씨, 화면 중간~하단
         """
+        W, H = width, height
         bg = Image.fromarray(frame).convert("RGB")
-        scale = max(width / bg.width, height / bg.height)
-        bg = bg.resize((max(width, round(bg.width * scale)), max(height, round(bg.height * scale))), Image.LANCZOS)
-        left, top = (bg.width - width) // 2, (bg.height - height) // 2
-        img = bg.crop((left, top, left + width, top + height)).convert("RGBA")
+        scale = max(W / bg.width, H / bg.height)
+        bg = bg.resize((max(W, round(bg.width * scale)), max(H, round(bg.height * scale))), Image.LANCZOS)
+        left, top = (bg.width - W) // 2, (bg.height - H) // 2
+        bg = bg.crop((left, top, left + W, top + H))
+        bg = ImageEnhance.Contrast(ImageEnhance.Color(bg).enhance(1.18)).enhance(1.06)
+        img = bg.convert("RGBA")
 
-        shade_h = int(height * THUMB_SHADE_RATIO)
-        alpha = (np.linspace(1.0, 0.0, shade_h) ** 1.4 * THUMB_SHADE_ALPHA).astype(np.uint8)
-        shade = np.zeros((height, width, 4), dtype=np.uint8)
-        shade[:shade_h, :, 3] = alpha[:, None]
+        # 비네트: 위(0~46%)와 아래(56~100%)를 어둡게 → 글자 가독성
+        shade = np.zeros((H, W, 4), dtype=np.uint8)
+        top_h, bot_s = int(H * 0.46), int(H * 0.56)
+        shade[:top_h, :, 3] = (np.linspace(1.0, 0.0, top_h) ** 1.25 * THUMB_VIGNETTE_TOP)[:, None].astype(np.uint8)
+        shade[bot_s:, :, 3] = (np.linspace(0.0, 1.0, H - bot_s) ** 1.4 * THUMB_VIGNETTE_BOTTOM)[:, None].astype(np.uint8)
         img.alpha_composite(Image.fromarray(shade))
 
-        text = (hook_title or "").strip()
+        text = (main_text or "").strip()
+        accent = (accent or "").strip()
+        emoji = accent if accent and not re.match(r"^[ㄱ-ㅎ?!]+$", accent) else ""
+        if accent and not emoji and not text.endswith(accent):
+            text = f"{text}{accent}".strip()       # 'ㄷㄷ'·'?!'는 마지막 어절에 붙여 한 줄로 따로 떨어지지 않게
         if text:
-            draw = ImageDraw.Draw(img)
-            size = int(width * THUMB_FONT_RATIO)
-            lines = []
-            while size >= int(width * 0.06):
-                try:
-                    font = ImageFont.truetype(self.font_path, size)
-                except Exception:
-                    font = ImageFont.load_default()
-                lines = self._wrap_text(text, draw, font, max_width=int(width * THUMB_TEXT_WIDTH))
-                if len(lines) <= 3:
-                    break
-                size = int(size * 0.9)
-            line_h = int(font.size * 1.22)
-            stroke = max(4, int(width * 0.011))
-            y = int(height * THUMB_TEXT_TOP)
-            shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            sd = ImageDraw.Draw(shadow)
-            placed = []
-            for ln in lines:
-                bb = draw.textbbox((0, 0), ln, font=font, stroke_width=stroke)
-                tx = (width - (bb[2] - bb[0])) // 2 - bb[0]
-                placed.append((tx, y - bb[1], ln))
-                sd.text((tx + int(width * 0.006), y - bb[1] + int(width * 0.008)), ln, font=font, fill=(0, 0, 0, 160),
-                        stroke_width=stroke, stroke_fill=(0, 0, 0, 160))
-                y += line_h
-            img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(int(width * 0.006))))
-            draw = ImageDraw.Draw(img)
-            for tx, ty, ln in placed:
-                draw.text((tx, ty), ln, font=font, fill=HOOK_HEADLINE_COLOR + (255,), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+            img.alpha_composite(self._thumb_main_layer(text, emoji, W, H))
+        if sub_text and sub_text.strip():
+            img.alpha_composite(self._thumb_sub_layer(sub_text.strip(), W, H))
+
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         img.convert("RGB").save(out_path, "PNG", optimize=True)
-        logger.info(f"썸네일 저장: {out_path} ('{text}')")
+        logger.info(f"썸네일 저장: {out_path} (메인 '{text}' {emoji} / 서브 '{sub_text}')")
         return out_path
+
+    def _font(self, size: int) -> ImageFont.ImageFont:
+        try:
+            return ImageFont.truetype(self.font_path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _thumb_main_layer(self, text: str, emoji: str, W: int, H: int) -> Image.Image:
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        probe = ImageDraw.Draw(layer)
+        emoji_ratio = 0.95 if emoji else 0.0
+        size = int(W * THUMB_FONT_RATIO)
+        while True:
+            font = self._font(size)
+            stroke = max(6, int(size * 0.12))
+            lines = self._wrap_text(text, probe, font, max_width=int(W * THUMB_TEXT_WIDTH))
+            widths = [probe.textbbox((0, 0), ln, font=font, stroke_width=stroke)[2] for ln in lines]
+            if widths:
+                widths[-1] += int(size * emoji_ratio)
+            if (len(lines) <= 2 and max(widths or [0]) <= W * THUMB_TEXT_WIDTH) or size <= int(W * 0.11):
+                break
+            size = int(size * 0.93)
+        line_h = int(size * 1.12)
+        y0 = int(H * THUMB_TEXT_TOP)
+        placed = []
+        for i, ln in enumerate(lines):
+            bb = probe.textbbox((0, 0), ln, font=font, stroke_width=stroke)
+            lw = bb[2] - bb[0] + (int(size * emoji_ratio) if i == len(lines) - 1 else 0)
+            placed.append(((W - lw) // 2 - bb[0], y0 + i * line_h - bb[1], ln, bb))
+
+        # 1) 블러 그림자
+        shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow)
+        for x, y, ln, _ in placed:
+            sd.text((x + int(size * 0.05), y + int(size * 0.10)), ln, font=font, fill=(0, 0, 0, 190), stroke_width=stroke,
+                    stroke_fill=(0, 0, 0, 190))
+        layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(4, int(size * 0.07)))))
+        # 2) 입체(돌출): 외곽선 덩어리를 아래·오른쪽으로 겹겹이 (짙은 적갈색 → 검정)
+        d = ImageDraw.Draw(layer)
+        depth = max(4, int(size * 0.07))
+        for k in range(depth, 0, -1):
+            c = (int(70 * (1 - k / depth)), 0, 0, 255)
+            for x, y, ln, _ in placed:
+                d.text((x + k // 2, y + k), ln, font=font, fill=c, stroke_width=stroke, stroke_fill=c)
+        # 3) 두꺼운 검은 외곽선 (바깥 + 안쪽 두 겹)
+        for x, y, ln, _ in placed:
+            d.text((x, y), ln, font=font, fill=(0, 0, 0, 255), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        # 4) 노랑→주황→빨강 그라데이션 글자 (줄마다 위→아래)
+        mask = Image.new("L", (W, H), 0)
+        md = ImageDraw.Draw(mask)
+        grad = np.zeros((H, W, 3), dtype=np.uint8)
+        stops = np.array(THUMB_GRADIENT, dtype=float)
+        for x, y, ln, bb in placed:
+            md.text((x, y), ln, font=font, fill=255, stroke_width=max(1, int(size * 0.012)), stroke_fill=255)
+            ty0, ty1 = max(0, y + bb[1]), min(H, y + bb[3])
+            n = max(1, ty1 - ty0)
+            t = np.linspace(0, 1, n)[:, None]
+            seg = np.where(t < 0.5, stops[0] + (stops[1] - stops[0]) * (t / 0.5), stops[1] + (stops[2] - stops[1]) * ((t - 0.5) / 0.5))
+            grad[ty0:ty1, :, :] = seg[:, None, :].astype(np.uint8).repeat(W, axis=1)[:, :W, :]
+        fill = Image.fromarray(grad).convert("RGBA")
+        fill.putalpha(mask)
+        layer.alpha_composite(fill)
+        # 5) 포인트 이모지 (마지막 줄 끝)
+        if emoji:
+            em = self._emoji_image(emoji, int(size * 0.92))
+            if em is not None:
+                x, y, ln, bb = placed[-1]
+                ex = x + bb[2] + int(size * 0.04)
+                ey = y + bb[1] + ((bb[3] - bb[1]) - em.height) // 2
+                esh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                esh.paste((0, 0, 0, 170), (ex + 8, ey + 12), em.split()[3])
+                layer.alpha_composite(esh.filter(ImageFilter.GaussianBlur(8)))
+                layer.alpha_composite(em, (max(0, ex), max(0, ey)))
+        # 6) -4도 기울기 (오른쪽이 올라가게 = 반시계 방향), 글자 덩어리 가운데 기준
+        cy = (placed[0][1] + placed[-1][1] + placed[-1][3][3]) // 2
+        return layer.rotate(THUMB_TILT_DEG, resample=Image.BICUBIC, center=(W // 2, cy))
+
+    def _thumb_sub_layer(self, text: str, W: int, H: int) -> Image.Image:
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        size = int(W * THUMB_SUB_FONT_RATIO)
+        while True:
+            font = self._font(size)
+            bb = d.textbbox((0, 0), text, font=font)
+            if bb[2] - bb[0] <= W * 0.80 or size <= int(W * 0.05):
+                break
+            size = int(size * 0.94)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        pad_x, pad_y = int(size * 0.45), int(size * 0.30)
+        bw, bh = tw + pad_x * 2, th + pad_y * 2
+        bx, by = (W - bw) // 2, int(H * THUMB_SUB_CENTER_Y) - bh // 2
+        sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rounded_rectangle((bx + 8, by + 14, bx + bw + 8, by + bh + 14), radius=int(size * 0.22), fill=(0, 0, 0, 150))
+        layer.alpha_composite(sh.filter(ImageFilter.GaussianBlur(10)))
+        d = ImageDraw.Draw(layer)
+        d.rounded_rectangle((bx, by, bx + bw, by + bh), radius=int(size * 0.22), fill=(255, 255, 255, 245))
+        d.text((bx + pad_x - bb[0], by + pad_y - bb[1]), text, font=font, fill=(10, 10, 10, 255),
+               stroke_width=max(1, int(size * 0.02)), stroke_fill=(10, 10, 10, 255))
+        return layer
+
+    @staticmethod
+    def _emoji_image(emoji: str, target_h: int) -> Optional[Image.Image]:
+        """컬러 이모지 (Windows Segoe UI Emoji / 리눅스 Noto Color Emoji). 글꼴이 없으면 None"""
+        for path, base in ((r"C:\Windows\Fonts\seguiemj.ttf", 160), ("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", 109),
+                           ("/System/Library/Fonts/Apple Color Emoji.ttc", 160)):
+            if not os.path.exists(path):
+                continue
+            try:
+                f = ImageFont.truetype(path, base)
+                canvas = Image.new("RGBA", (base * 3 * len(emoji), base * 2), (0, 0, 0, 0))
+                ImageDraw.Draw(canvas).text((10, 10), emoji, font=f, embedded_color=True)
+                box = canvas.getbbox()
+                if not box:
+                    continue
+                em = canvas.crop(box)
+                return em.resize((max(1, round(em.width * target_h / em.height)), target_h), Image.LANCZOS)
+            except Exception:
+                continue
+        return None
 
     def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
         """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
@@ -552,6 +659,18 @@ class AdCompositor:
                 processed_clips.append(card_clip)
                 logger.info(f"브랜드 엔딩 카드 추가 ({brand.end_card.duration_sec:.1f}초): '{brand.business_name}' / 검색어 '{brand.end_card.search_keyword}'")
 
+            # 첫 INTRO_SEC초는 썸네일 화면 (타임라인·나레이션은 그대로, 화면만 덮음 → 첫 프레임 = 썸네일)
+            # 씬 1 클립에만 덮음: 전체 타임라인을 한 번 더 합성하면 모든 프레임 합성 비용이 두 배가 됨
+            if intro_image and os.path.exists(intro_image) and processed_clips:
+                first = processed_clips[0]
+                fw, fh = first.size
+                intro_arr = np.array(Image.open(intro_image).convert("RGB").resize((fw, fh), Image.LANCZOS))
+                intro_clip = ImageClip(intro_arr).set_start(0).set_duration(min(INTRO_SEC, first.duration))
+                first_with_intro = CompositeVideoClip([first, intro_clip]).set_duration(first.duration).set_audio(first.audio)
+                opened_clips += [intro_clip, first_with_intro]
+                processed_clips[0] = first_with_intro
+                logger.info(f"첫 {INTRO_SEC}초 썸네일 화면 삽입 (씬 1): {intro_image}")
+
             # 전체 씬 결합
             logger.info(f"전체 {len(processed_clips)}개 클립 타임라인 결합 중...")
             # 씬 전환: 하드 컷 대신 XFADE_SEC 디졸브 (다음 씬이 앞 씬 위로 서서히 겹쳐 나타남, 검은 화면 없음)
@@ -565,16 +684,6 @@ class AdCompositor:
                 # MoviePy는 마지막 클립 뒤에도 padding을 빼서 끝 XFADE_SEC가 잘림 → 마지막 클립 끝까지 복원 (엔딩 여유·페이드아웃 보존)
                 final_composite = final_composite.set_duration(final_composite.duration + XFADE_SEC)
             opened_clips.append(final_composite)
-
-            # 첫 INTRO_SEC초는 썸네일 화면 (타임라인·나레이션은 그대로, 화면만 덮음 → 첫 프레임 = 썸네일)
-            if intro_image and os.path.exists(intro_image):
-                fw, fh = final_composite.size
-                intro_arr = np.array(Image.open(intro_image).convert("RGB").resize((fw, fh), Image.LANCZOS))
-                intro_clip = ImageClip(intro_arr).set_start(0).set_duration(min(INTRO_SEC, final_composite.duration))
-                opened_clips.append(intro_clip)
-                final_composite = CompositeVideoClip([final_composite, intro_clip]).set_duration(final_composite.duration)
-                opened_clips.append(final_composite)
-                logger.info(f"첫 {INTRO_SEC}초 썸네일 화면 삽입: {intro_image}")
 
             # 비디오 전체 타임라인 길이가 '모든 씬 오디오 총합 + 엔딩 여유 마진 1.0초'보다 짧지 않도록 강제 보장
             # (인위적인 subclip 잘림을 영구 제거하여 마지막 씬 "댓글에 '여행' 남겨주세요"가 절대 잘리지 않음)

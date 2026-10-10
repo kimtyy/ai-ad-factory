@@ -29,17 +29,30 @@ def check(c, m):
 work = tmp("yt_")
 comp = AdCompositor(output_dir=work)
 
-# ---------------------------------------------------------------- 1. 썸네일
+# ---------------------------------------------------------------- 1. 썸네일 (프로급: 큰 그라데이션 메인 카피 + 서브 박스 + 비네트)
 frame = np.array(Image.open(fixture("photo_pool.jpg")).convert("RGB"))
-thumb = comp.render_thumbnail(frame, "여기 진짜 한국 맞아요?", os.path.join(work, "final_thumb.png"))
+thumb = comp.render_thumbnail(frame, "여길 안 간다고?", os.path.join(work, "final_thumb.png"), sub_text="오션뷰 인피니티 풀", accent="😱")
 ti = np.array(Image.open(thumb).convert("RGB")).astype(int)
 yellow = lambda a: int(((a[..., 0] > 200) & (a[..., 1] > 170) & (a[..., 2] < 90)).sum())
-check(ti.shape == (1920, 1080, 3) and yellow(ti[:int(1920 * 0.4)]) > 5000 and yellow(ti[int(1920 * 0.5):]) < 500,
-      f"썸네일 1080x1920 PNG: 상단에 노란 후킹 타이틀 ({yellow(ti[:768])}px), 아래는 사진")
-bare = comp.render_thumbnail(frame, "", os.path.join(work, "bare.png"))
-check(yellow(np.array(Image.open(bare).convert("RGB")).astype(int)) < 500, "후킹 문구가 없으면 사진만 (지어낸 문구 없음)")
-long_t = comp.render_thumbnail(frame, "솔직히 이 가격에 오션뷰 인피니티 풀까지 있는 숙소는 처음 봤어요 진짜로요", os.path.join(work, "long.png"))
-check(os.path.exists(long_t), "긴 후킹 문구도 3줄 안으로 글자 축소")
+orange_red = lambda a: int(((a[..., 0] > 200) & (a[..., 1] < 140) & (a[..., 2] < 80)).sum())
+white_box = lambda a: int(((a[..., 0] > 245) & (a[..., 1] > 245) & (a[..., 2] > 245)).sum())
+top, mid = ti[:int(1920 * 0.42)], ti[int(1920 * 0.52):int(1920 * 0.68)]
+check(ti.shape == (1920, 1080, 3) and yellow(top) > 20000 and orange_red(top) > 20000,
+      f"메인 카피: 노랑→주황→빨강 그라데이션 큰 글자 (노랑 {yellow(top)}px · 주황/빨강 {orange_red(top)}px)")
+check(white_box(mid) > 40000 and yellow(ti[int(1920 * 0.5):]) < 2000, f"서브 카피: 중간~하단 흰 하이라이트 박스 ({white_box(mid)}px)")
+plain_bg = comp.render_thumbnail(frame, "", os.path.join(work, "bare.png"))
+pb = np.array(Image.open(plain_bg).convert("RGB")).astype(int)
+src = np.array(Image.open(fixture("photo_pool.jpg")).convert("RGB").resize((1080, 1920))).astype(int)
+check(yellow(pb) < 500 and pb[:80].mean() < src[:80].mean() - 30 and pb[-80:].mean() < src[-80:].mean() - 25,
+      "문구가 없으면 사진만 + 상단·하단 비네트로 어둡게 (지어낸 문구 없음)")
+old_px = 0.115 * 1080
+bb = np.argwhere((ti[:768, :, 0] > 200) & (ti[:768, :, 2] < 90))
+glyph_h = (bb[:, 0].max() - bb[:, 0].min()) if len(bb) else 0
+check(glyph_h > old_px * 2.5, f"메인 카피 크기: 기존 글자 높이({old_px:.0f}px)의 2.5배 이상 영역 ({glyph_h}px)")
+long_t = comp.render_thumbnail(frame, "솔직히 이 가격에 오션뷰 인피니티 풀까지", os.path.join(work, "long.png"), accent="ㄷㄷ")
+check(os.path.exists(long_t), "긴 카피는 2줄 안으로 글자 축소, 'ㄷㄷ'은 마지막 어절에 붙임")
+em = comp._emoji_image("🔥", 100)
+check(em is None or (em.height == 100 and len(set(em.convert("RGB").getdata())) > 20), "포인트 이모지 컬러 렌더 (글꼴 없으면 생략)")
 
 # 2MB 넘는 PNG → 업로드용 JPEG 사본
 noisy = os.path.join(work, "noisy_thumb.png")
@@ -72,12 +85,57 @@ check(np.abs(f0 - ti).mean() < 12 and yellow(f0[:768]) > 3000, f"영상 첫 프�
 check(np.abs(f_late - p_late).mean() < 6 and abs(d_intro - d_plain) < 0.05 and a_ok,
       f"0.3초 뒤에는 원래 화면, 길이·나레이션 그대로 ({d_intro:.2f}s = {d_plain:.2f}s)")
 
-# ---------------------------------------------------------------- 3. 설명·댓글 기본값
-dt = default_texts("travel", "여기 진짜 한국 맞아요?", "https://www.agoda.com/x.html?cid=1234567", "이 영상은 아고다 제휴 … 수수료를 받을 수 있습니다.")
-check("cid=1234567" in dt["desc"] and "수수료" in dt["desc"] and "#Shorts" in dt["desc"] and "cid=1234567" in dt["comment"]
-      and dt["title"] == "여기 진짜 한국 맞아요?", "숙소: 설명란·첫 댓글에 아고다 제휴 링크 + 공정위 고지, #Shorts")
-do = default_texts("owner", "가평 솔바람 펜션 아직도 모르세요?", "", "", "가평 솔바람 펜션", "가평 솔바람")
-check("네이버에서 '가평 솔바람' 검색" in do["desc"] and "http" not in do["desc"], "사장님: 링크 없이 네이버 검색 안내")
+# ---------------------------------------------------------------- 3. 쇼츠 카피·설명란·첫 댓글
+from core.shorts_meta import (PINNED_NOTICE, build_shorts_description, find_hype_claim, hashtags_for, make_shorts_copy)
+import core.shorts_meta as sm
+USP = "오션뷰 인피니티 풀, 객실 통창 바다 전망"
+cp_t = make_shorts_copy("travel", hook="여기 진짜 한국 맞아요?", usp=USP, product_name="St John's Hotel", mock=True, seed=3)
+check(cp_t["title"].endswith(" #Shorts") and len(cp_t["title"]) <= 70 and "St John" not in cp_t["title"]
+      and any(w in cp_t["title"] for w in ("손해", "?", "ㄷㄷ", "🔥")) and not find_hype_claim(cp_t["title"], USP),
+      f"제목: 손실 회피·호기심형 + 끝에 #Shorts, 숙소명 숨김, 근거 없는 주장 없음 '{cp_t['title']}'")
+check(5 <= len(cp_t["hashtags"]) <= 7 and "#오션뷰숙소" in cp_t["hashtags"] and "#수영장숙소" in cp_t["hashtags"]
+      and all(h.startswith("#") and " " not in h for h in cp_t["hashtags"]), f"해시태그 5~7개, USP 키워드 우선 {cp_t['hashtags']}")
+check(find_hype_claim("예약 폭주하는 인생 숙소") == "예약 폭주" and find_hype_claim("최저가 풀빌라") == "최저가"
+      and find_hype_claim("국내 끝판왕 풀빌라 ㄷㄷ") is None and find_hype_claim("예약 폭주 숙소", "예약 폭주 중") is None,
+      "예약 폭주·최저가 같은 사실 주장은 USP에 있을 때만, '끝판왕 ㄷㄷ' 같은 감탄은 허용")
+check("#내돈내산" not in hashtags_for("commerce", "과열 방지") and all(t not in hashtags_for("commerce", "과열 방지") for t in ("#숙소추천",)),
+      "쇼핑 해시태그: 제휴 영상과 모순되는 #내돈내산 금지, 다른 모드 태그 섞이지 않음")
+
+
+class GemModels:
+    def generate_content(self, **kw):
+        return type("R", (), {"text": json.dumps(gem_reply, ensure_ascii=False)})()
+
+
+import json
+import google.genai as gg
+_orig_client = gg.Client
+gg.Client = lambda api_key=None: type("C", (), {"models": GemModels()})()
+gem_reply = {"title": "모르면 무조건 손해! 예약 폭주하는 인생 숙소", "thumb_main": "여길 안 간다고?", "thumb_sub": "St John's Hotel 오션뷰",
+             "accent": "💥", "hashtags": ["#감성숙소", "#품절임박숙소", "#풀빌라"]}
+cp_g = make_shorts_copy("travel", hook="h", usp=USP, product_name="St John's Hotel", api_key="fake", seed=3)
+gem_reply = {"title": "여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ", "thumb_main": "여길 안 간다고?", "thumb_sub": "오션뷰 인피니티 풀",
+             "accent": "🔥", "hashtags": ["#감성숙소", "#오션뷰"]}
+cp_ok = make_shorts_copy("travel", hook="h", usp=USP, product_name="St John's Hotel", api_key="fake", seed=3)
+gg.Client = _orig_client
+check(cp_g["title"] == cp_t["title"] and cp_g["thumb_main"] == "여길 안 간다고?" and "St John" not in cp_g["thumb_sub"]
+      and cp_g["accent"] == "💥" and "#품절임박숙소" not in cp_g["hashtags"] and len(cp_g["rejected"]) == 2,
+      f"Gemini 카피 검증: '예약 폭주' 제목·숙소명 노출 서브·'품절' 태그는 버리고 안전한 템플릿 유지 {cp_g['rejected']}")
+check(cp_ok["title"] == "여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ #Shorts" and cp_ok["source"] == "gemini" and "#감성숙소" in cp_ok["hashtags"],
+      "Gemini 카피가 규칙을 지키면 그대로 사용 (#Shorts 자동)")
+
+DISC_SHORT = "※ 제휴 링크 포함 · 예약 시 수수료를 받을 수 있어요"
+dt = default_texts("travel", cp_ok, "https://www.agoda.com/x.html?cid=1234567", "이 영상은 아고다 제휴 … 수수료를 받을 수 있습니다.", DISC_SHORT)
+lines = dt["desc"].split("\n")
+check(lines[0] == "【 여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ 】" and lines[1] == DISC_SHORT
+      and PINNED_NOTICE["travel"] in lines and lines[-1].count("#") >= 5 and "cid=" not in dt["desc"],
+      "설명란: 1줄 제목 → 제휴 고지 → 📌 첫 댓글 안내 → 해시태그 (링크는 설명란에 안 넣음)")
+check("cid=1234567" in dt["comment"] and "수수료" in dt["comment"] and dt["title"] == cp_ok["title"],
+      "첫 댓글: 아고다 제휴 링크 + 공정위 고지 전문, 제목 = 쇼츠 카피")
+do = default_texts("owner", make_shorts_copy("owner", usp="숙성 삼겹살", product_name="가평 솔바람", mock=True, seed=1), "", "", "",
+                   "가평 솔바람 펜션", "가평 솔바람")
+check(PINNED_NOTICE["owner"] in do["desc"] and "http" not in do["desc"] and "네이버에서 '가평 솔바람' 검색" in do["comment"],
+      "사장님: 링크 없이 첫 댓글에 네이버 검색 안내")
 
 # ---------------------------------------------------------------- 4. 업로드 (가짜 YouTube API)
 calls = []
@@ -160,7 +218,7 @@ except yu.YouTubeUploadError:
 
 prog = []
 yu._service_factory = factory()
-res = yu.upload_short(intro, "여기 진짜 한국 맞아요?", dt["desc"], mode="travel", thumb_path=noisy, comment=dt["comment"],
+res = yu.upload_short(intro, "여기 진짜 한국 맞아요?", dt["desc"] + "\n" + dt["comment"], mode="travel", thumb_path=noisy, comment=dt["comment"],
                       privacy="public", tags=["숙소추천"], progress=prog.append)
 ins = [c for c in calls if c[0] == "insert"][0][1]
 th = [c for c in calls if c[0] == "thumb"][0][1]

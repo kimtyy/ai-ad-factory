@@ -13,31 +13,35 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from core import youtube_upload as yu
+from core.shorts_meta import build_shorts_description, make_shorts_copy
 
-TAGS = {
+TAGS = {   # 업로드 메타데이터 tags (검색용, 화면에 안 보임)
     "travel": ["숙소추천", "호텔추천", "여행", "국내여행", "여행을떠나자"],
     "commerce": ["추천템", "살림템", "리뷰"],
-    "owner": ["가게추천", "맛집", "동네가게"],
+    "owner": ["가게추천", "가볼만한곳", "동네가게"],
 }
 
 
-def default_texts(mode: str, hook: str, link: str, disclosure: str, business_name: str = "", search_kw: str = "") -> Dict[str, str]:
-    hook = (hook or "").strip()
+def default_texts(mode: str, copy: Optional[Dict[str, Any]], link: str, disclosure_full: str, disclosure_short: str = "",
+                  business_name: str = "", search_kw: str = "", hook: str = "") -> Dict[str, str]:
+    """
+    copy(core.shorts_meta.make_shorts_copy 결과) → 제목·설명·첫 댓글 기본값
+    설명: 【제목】 / 제휴 고지(짧게) / 📌 첫 댓글 안내 / 해시태그 5~7개. 링크와 전체 고지는 첫 댓글에
+    """
+    copy = copy or make_shorts_copy(mode, hook=hook, product_name=business_name, mock=True)
+    title = copy["title"]
+    desc = build_shorts_description(mode, title, copy["hashtags"], disclosure_short)
     if mode == "owner":
-        title = hook or business_name
-        desc = yu.build_description(hook, disclosure="", tags=TAGS["owner"])
-        if search_kw:
-            desc = f"📍 네이버에서 '{search_kw}' 검색해 보세요\n\n" + desc
         comment = f"📍 네이버에서 '{search_kw}' 검색해 보세요!" if search_kw else ""
     else:
-        title = hook or business_name
-        desc = yu.build_description(hook, link=link, disclosure=disclosure, tags=TAGS.get(mode, []))
-        comment = (f"🔗 {'숙소 예약' if mode == 'travel' else '제품'} 링크: {link}\n{disclosure}".strip() if link else "")
+        comment = (f"🔗 {'숙소 상세 정보·예약' if mode == 'travel' else '제품 상세 정보·구매'} 링크: {link}\n{disclosure_full}".strip()
+                   if link else "")
     return {"title": title[:yu.TITLE_MAX], "desc": desc, "comment": comment}
 
 
 def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, hook: str, link: str,
-                         disclosure: str, business_name: str = "", search_kw: str = "") -> None:
+                         disclosure: str, business_name: str = "", search_kw: str = "",
+                         copy: Optional[Dict[str, Any]] = None, disclosure_short: str = "") -> None:
     st.markdown("#### 🖼️ 썸네일 (영상 첫 0.3초에도 들어감)")
     if thumb_path and os.path.exists(thumb_path):
         c1, c2 = st.columns([1, 1.4])
@@ -63,16 +67,16 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
 
     # 영상이 바뀌면 입력 칸도 새로 (위젯 키에 영상 경로·수정 시각을 섞음)
     tag = hashlib.md5(f"{video_path}:{os.path.getmtime(video_path)}".encode()).hexdigest()[:8]
-    d = default_texts(mode, hook, link, disclosure, business_name, search_kw)
+    d = default_texts(mode, copy, link, disclosure, disclosure_short, business_name, search_kw, hook)
     title = st.text_input("제목 (#Shorts 자동 추가)", value=d["title"], max_chars=yu.TITLE_MAX, key=f"yt_title_{tag}")
     desc = st.text_area("설명란", value=d["desc"], height=170, key=f"yt_desc_{tag}")
     comment = st.text_area("첫 댓글 (업로드 직후 자동 등록)", value=d["comment"], height=90, key=f"yt_comment_{tag}")
     privacy = st.radio("공개 범위", list(yu.PRIVACY_KO), index=2, format_func=yu.PRIVACY_KO.get, horizontal=True,
                        key=f"yt_privacy_{tag}", help="처음에는 비공개로 올려 확인한 뒤 스튜디오에서 공개로 바꾸는 것을 권장해요.")
-    if mode in ("travel", "commerce") and link and link not in desc:
-        st.warning("설명란에 제휴 링크가 빠져 있어요.")
+    if mode in ("travel", "commerce") and link and link not in comment:
+        st.warning("첫 댓글에 제휴 링크가 빠져 있어요 (설명란이 '첫 번째 댓글 확인' 안내로 바뀌었어요).")
     if mode in ("travel", "commerce") and link and not any(w in desc for w in ("수수료", "파트너스", "제휴")):
-        st.warning("설명란에 제휴 고지 문구(공정위 추천·보증 심사지침)가 빠져 있어요.")
+        st.warning("설명란 첫 부분에 제휴 고지 문구(공정위 추천·보증 심사지침)가 빠져 있어요.")
 
     if st.button("🚀 유튜브 쇼츠 업로드", type="primary", use_container_width=True, key=f"yt_upload_{tag}"):
         bar = st.progress(0.0, text="업로드 중...")

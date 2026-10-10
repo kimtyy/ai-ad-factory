@@ -148,10 +148,11 @@ try:
     os.environ.pop("YOUTUBE_CHANNEL_TRAVEL", None)
     body = sent.get("insert", {}).get("body", {})
     check(not at.exception and any("V9" in (s.value or "") for s in at.success) and sent.get("key") == "travel"
-          and "cid=1234567" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
+          and "첫 번째 댓글" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
+          and body["snippet"]["title"].endswith("#Shorts")
           and body["status"]["privacyStatus"] == "private" and "thumb" in sent
           and "cid=1234567" in sent["comment"]["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"],
-          "원클릭 업로드: 설명란(아고다 제휴 링크+공정위 고지)·썸네일·첫 댓글, 기본 비공개, 완료 링크·핀 고정 안내")
+          "원클릭 업로드: 설명란(제목·제휴 고지·첫 댓글 안내)·썸네일·첫 댓글(아고다 링크), 기본 비공개, 핀 고정 안내")
 finally:
     for wd in set(created):
         shutil.rmtree(wd, ignore_errors=True)

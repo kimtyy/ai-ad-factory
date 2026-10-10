@@ -53,6 +53,7 @@ from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, pla
 from core.affiliate_ota import OTA_DISCLOSURE, OTA_LABEL, ota_disclosure_full
 from ui.copy_button import copy_button
 from ui.youtube_panel import render_youtube_panel
+from core.shorts_meta import make_shorts_copy
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
@@ -117,6 +118,8 @@ if "final_video_path" not in st.session_state:
     st.session_state.final_video_path = None
 if "thumb_path" not in st.session_state:
     st.session_state.thumb_path = None        # 렌더와 함께 만든 썸네일 (final_thumb.png)
+if "shorts_copy" not in st.session_state:
+    st.session_state.shorts_copy = None       # 업로드 제목·썸네일 카피 (core/shorts_meta.py)
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 if "script_style" not in st.session_state:
@@ -161,6 +164,7 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.rejected_urls = set()
     st.session_state.final_video_path = None
     st.session_state.thumb_path = None
+    st.session_state.shorts_copy = None
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
     st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
@@ -1249,8 +1253,13 @@ if render_btn:
                 with VideoFileClip(manifest[0]["video_path"]) as _v1:
                     first_frame = _v1.get_frame(0)
                 hook_text = (scenes[0].get("hook_title") or "").strip() if scenes else ""
-                thumb_path = compositor.render_thumbnail(first_frame, hook_text,
-                                                         os.path.join(current_job().final_dir, "final_thumb.png"))
+                # 업로드 제목·썸네일 카피 (손실 회피·호기심형, 근거 없는 사실 주장은 USP에 있을 때만)
+                shorts_copy = make_shorts_copy(pipeline_mode, hook=hook_text, usp=usp_desc, product_name=product_name,
+                                               api_key=api_key, mock=mock_mode)
+                st.session_state.shorts_copy = shorts_copy
+                thumb_path = compositor.render_thumbnail(first_frame, shorts_copy["thumb_main"],
+                                                         os.path.join(current_job().final_dir, "final_thumb.png"),
+                                                         sub_text=shorts_copy["thumb_sub"], accent=shorts_copy["accent"])
             except Exception as te:
                 logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {te}")
 
@@ -1322,7 +1331,10 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                              hook=(_sb[0].get("hook_title") or "") if _sb else "",
                              link=st.session_state.get("affiliate_link", "") if not is_owner_mode else "",
                              disclosure=_disc, business_name=product_name,
-                             search_kw=owner_search_kw if is_owner_mode else "")
+                             search_kw=owner_search_kw if is_owner_mode else "",
+                             copy=st.session_state.get("shorts_copy"),
+                             disclosure_short=(COUPANG_DISCLOSURE if is_commerce_mode
+                                               else "※ " + OTA_DISCLOSURE if is_travel_mode and _ota else ""))
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:
             cols = st.columns(len(st.session_state.generated_images))
