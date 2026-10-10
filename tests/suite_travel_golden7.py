@@ -178,10 +178,13 @@ check(e2 == "lobby", f"엔딩: 야경/노을 뷰가 없으면 부대시설 유�
 e3 = ending_case("c", [("firepit", "facility", 8, ["firepit", "night"]), ("sunset", "view", 7, ["sunset", "water_view"])])
 check(e3 == "firepit", f"엔딩: 불멍(태그 2개 일치) 부대시설이 있으면 그대로 우선 → {e3}")
 
-# ---------------------------------------------------------------- 4. BGM 제외
+# ---------------------------------------------------------------- 4. BGM: 기본 꺼짐, 자체 음원(assets/bgm)만 (남의 곡·트렌딩 음원은 엔진에서 합성하지 않음)
 sig = inspect.signature(AdCompositor.assemble_ad)
 src = inspect.getsource(AdCompositor.assemble_ad)
-check("bgm_path" not in sig.parameters and "CompositeAudioClip" not in src and "audio_loop" not in src, "컴포지터 BGM 합성 코드/파라미터 제거")
+import core.render.bgm as _bgm
+check(sig.parameters["bgm_path"].default is None and "CompositeAudioClip" not in src and "audio_loop" not in src
+      and _bgm.BGM_DIR.replace("\\", "/").endswith("assets/bgm"),
+      "BGM은 기본 꺼짐, 켜면 자체 음원 폴더(assets/bgm) 음원만 후처리 믹싱 (MoviePy 오디오 합성 코드 없음)")
 app_src = open("app.py", encoding="utf-8").read()
 main_src = open("main.py", encoding="utf-8").read()
 check("voice_and_bgm" not in app_src and "voice_and_bgm" not in main_src, "앱/CLI 오디오 모드에서 BGM 옵션 제거")

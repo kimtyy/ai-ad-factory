@@ -530,26 +530,54 @@ class AdCompositor:
         brand: Optional[BrandOverlay] = None,
         disclosure: Optional[str] = None,
         intro_image: Optional[str] = None,
+        bgm_path: Optional[str] = None,
         **kwargs
     ) -> str:
         """
         최종 조립. 기본은 ffmpeg filter_complex 한 번(core/render/ffmpeg_assemble.py: 자막 PNG overlay + xfade + 하드웨어 인코딩),
         실패하면 MoviePy 경로로 자동 대체. RENDER_ENGINE=moviepy 로 MoviePy 강제 (디자인·타임라인 규칙은 같음)
+        bgm_path: 자체 음원(assets/bgm). 완성 영상에 나레이션 덕킹·페이드로 섞음 (core/render/bgm.py).
+        실패하면 BGM 없이 두고 self.last_bgm_error에 사유를 남김
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
+        self.last_bgm_error = None
+        out = None
         if os.getenv("RENDER_ENGINE", "ffmpeg").strip().lower() != "moviepy":
             from core.render import ffmpeg_assemble
             try:
-                return ffmpeg_assemble.assemble(self, asset_manifest, final_output_path, fps=fps, mode=mode, brand=brand,
-                                                disclosure=disclosure, intro_image=intro_image, xfade=XFADE_SEC,
-                                                intro_sec=INTRO_SEC, hook_solo_sec=HOOK_SOLO_SEC,
-                                                center_modes=CENTER_CAPTION_MODES)
+                out = ffmpeg_assemble.assemble(self, asset_manifest, final_output_path, fps=fps, mode=mode, brand=brand,
+                                               disclosure=disclosure, intro_image=intro_image, xfade=XFADE_SEC,
+                                               intro_sec=INTRO_SEC, hook_solo_sec=HOOK_SOLO_SEC,
+                                               center_modes=CENTER_CAPTION_MODES)
             except FileNotFoundError:
                 raise
             except Exception as e:
                 logger.warning(f"ffmpeg 조립 실패 → MoviePy로 대체: {e}")
-        return self._assemble_moviepy(asset_manifest, output_filename=output_filename, fps=fps, audio_mode=audio_mode,
-                                      mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image)
+        if out is None:
+            out = self._assemble_moviepy(asset_manifest, output_filename=output_filename, fps=fps, audio_mode=audio_mode,
+                                         mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image)
+        if bgm_path:
+            try:
+                self._mix_bgm(out, asset_manifest, bgm_path, narration=(audio_mode != "silent"))
+            except Exception as e:
+                self.last_bgm_error = str(e)
+                logger.warning(f"BGM 믹싱 실패 → BGM 없이 저장: {e}")
+        return out
+
+    def _mix_bgm(self, video_path: str, manifest: List[Dict[str, Any]], bgm_path: str, narration: bool = True) -> str:
+        """씬 음성 길이로 타임라인(조립과 같은 규칙)을 다시 계산해 나레이션 구간에만 BGM 덕킹"""
+        from core.render import bgm as bgm_mod
+        from core.render.ffmpeg_assemble import build_timeline, probe
+        a_durs = [probe(it["audio_path"])["duration"] or 0.0 for it in manifest]
+        durs = [a + (1.0 if i == len(a_durs) - 1 else 0.2 + XFADE_SEC) for i, a in enumerate(a_durs)]
+        starts, _ = build_timeline(durs, XFADE_SEC)
+        intervals = bgm_mod.narration_intervals(zip(starts, a_durs)) if narration else []
+        voice_db = None
+        if narration:
+            levels = [bgm_mod.mean_volume_db(it["audio_path"]) for it in manifest[:3]]
+            levels = [v for v in levels if v is not None and v > -60]
+            voice_db = sum(levels) / len(levels) if levels else None
+        return bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db)
 
     def _assemble_moviepy(
         self,
@@ -566,7 +594,7 @@ class AdCompositor:
         """
         Step 3: 각 씬별 비디오와 오디오를 오디오 길이에 맞춰 컷팅하고,
         자막 오버레이(실사 모드: 하단 자막, 씬 1 후킹→서브 시간차)를 합성한 뒤 최종 광고 비디오 결합.
-        오디오는 AI 나레이션(VO)만 사용합니다. BGM은 엔진에서 합성하지 않습니다
+        오디오는 AI 나레이션(VO). 자체 음원 BGM은 assemble_ad(bgm_path=)가 완성 후 섞음 (이 함수는 나레이션만)
         (플랫폼 인앱 트렌딩 음원·자사 유통 음원을 업로드 단계에서 태그하는 정책).
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
         disclosure(제휴 광고 표시 문구, 예: 쿠팡 파트너스)가 주어지면 전 씬 위쪽에 작게 표시.
@@ -722,7 +750,7 @@ class AdCompositor:
             logger.info(f"최종 비디오 타임라인 총 재생 시간: {total_duration:.2f}초 (인위적 subclip 절단 없이 전량 보존)")
             logger.info(f"최종 영상 총 재생 시간: {total_duration:.2f}초")
 
-            # BGM은 넣지 않음: 업로드 시 인스타/유튜브 인앱 트렌딩 음원·자사 유통 음원을 플랫폼에서 태그 (정책)
+            # BGM은 여기서 넣지 않음: 자체 음원은 assemble_ad가 완성 영상에 후처리로 믹싱 (core/render/bgm.py)
 
             logger.info(f"최종 렌더링 시작 -> {final_output_path} (FPS: {fps}, Codec: libx264, Audio: aac)")
 

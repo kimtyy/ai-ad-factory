@@ -32,3 +32,7 @@ fonts/
 
 # 테스트 픽스처 (tests/_support.py가 실행 시 생성)
 tests/_fixtures/
+
+# 자체 음원(BGM): 용량·권리 문제로 git에 올리지 않음 (폴더 안내 README만)
+assets/bgm/*
+!assets/bgm/README.md

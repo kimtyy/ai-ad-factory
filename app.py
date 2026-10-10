@@ -53,6 +53,7 @@ from core.naver_local import NaverAPIError, NaverLocalSearch, is_naver_link, pla
 from core.affiliate_ota import OTA_DISCLOSURE, OTA_LABEL, ota_disclosure_full
 from ui.copy_button import copy_button
 from ui.youtube_panel import render_youtube_panel
+from core.render import bgm as bgm_mod
 from core.shorts_meta import make_shorts_copy
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
@@ -362,7 +363,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
                      ("page_switch", "make")):
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
-for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query",
+for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
            "product_name_input", "product_usp_input",
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
@@ -471,6 +472,21 @@ with st.sidebar:
     )
     selected_actor = actor_keys[actor_labels.index(selected_actor_label)]
     st.session_state.selected_actor = selected_actor
+
+    # 자체 음원 BGM (assets/bgm): 나레이션 구간 20% 덕킹 + 시작 페이드인·끝 페이드아웃
+    bgm_tracks = bgm_mod.list_tracks()
+    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks,
+                       help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
+    bgm_choice = None
+    if bgm_tracks:
+        if bgm_on:
+            bgm_options = [bgm_mod.RANDOM] + [os.path.basename(t) for t in bgm_tracks]
+            if st.session_state.get("bgm_choice") not in bgm_options:
+                st.session_state.bgm_choice = bgm_mod.RANDOM
+            bgm_choice = st.selectbox("BGM 음원", bgm_options, key="bgm_choice",
+                                      format_func=lambda v: "🎲 랜덤 (렌더마다 무작위)" if v == bgm_mod.RANDOM else v)
+    else:
+        st.caption("🎵 자체 BGM: `assets/bgm/` 폴더에 mp3·wav·m4a 음원을 넣으면 켤 수 있어요.")
 
     brand_opts = None
     if is_owner_mode:
@@ -1275,7 +1291,10 @@ if render_btn:
                 disclosure=(COUPANG_DISCLOSURE if is_commerce_mode
                             else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
                 intro_image=thumb_path,
+                bgm_path=bgm_mod.pick_track(bgm_choice) if bgm_on else None,
             )
+            if bgm_on and compositor.last_bgm_error:
+                st.warning(f"BGM을 섞지 못해 BGM 없이 저장했어요: {compositor.last_bgm_error}")
             st.session_state.thumb_path = thumb_path
             current_job().save_plan(scenes)
 
@@ -1305,7 +1324,10 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                 type="primary",
                 key="download_cta"
             )
-        st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
+        if st.session_state.get("bgm_on") and bgm_mod.list_tracks():
+            st.info("🎵 자체 음원 BGM이 들어간 영상이에요. 플랫폼 음원을 따로 태그하면 소리가 겹치니 그대로 올려 주세요.")
+        else:
+            st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
         if is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
