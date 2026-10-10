@@ -120,11 +120,14 @@ try:
     thumb = at.session_state.thumb_path
     check(bool(thumb) and os.path.exists(thumb) and thumb.endswith("final_thumb.png") and os.path.dirname(thumb) == os.path.dirname(final),
           "렌더 시 썸네일 final_thumb.png 동시 생성 (영상과 같은 폴더)")
-    _tok = yu.TOKEN_PATH
-    yu.TOKEN_PATH = os.path.join(os.path.dirname(final), "_no_token.json")
+    _secrets = yu.SECRETS_DIR
+    yu.SECRETS_DIR = os.path.join(os.path.dirname(final), "_secrets")
+    os.environ["YOUTUBE_CHANNEL_TRAVEL"] = "여행을 떠나자"
     at.run()
-    check(any("youtube_auth.py" in (i.value or "") for i in at.info), "유튜브 미연결 → 채널 연결 방법 안내 (업로드 버튼 없음)")
-    open(yu.TOKEN_PATH, "w").write("{}")
+    check(any("youtube_auth.py --mode travel" in (i.value or "") for i in at.info)
+          and any("여행을 떠나자" in (m.value or "") for m in at.markdown), "숙소 모드: '여행을 떠나자' 채널 미연결 → --mode travel 연결 안내")
+    os.makedirs(yu.SECRETS_DIR, exist_ok=True)
+    open(yu.token_path("travel"), "w").write("{}")
     sent = {}
 
     class _R:
@@ -138,14 +141,13 @@ try:
         def thumbnails(self): return type("X", (), {"set": lambda s, **k: (sent.update(thumb=k), _R({}))[1]})()
         def commentThreads(self): return type("X", (), {"insert": lambda s, **k: (sent.update(comment=k), _R({"id": "C"}))[1]})()
 
-    yu._service_factory = _Svc
-    os.environ["YOUTUBE_EXPECTED_CHANNEL"] = "여행을 떠나자"
+    yu._service_factory = lambda key: (sent.update(key=key), _Svc())[1]
     at.run()
     [b for b in at.button if "유튜브 쇼츠 업로드" in b.label][0].click().run()
-    yu._service_factory, yu.TOKEN_PATH = None, _tok
-    os.environ.pop("YOUTUBE_EXPECTED_CHANNEL", None)
+    yu._service_factory, yu.SECRETS_DIR = None, _secrets
+    os.environ.pop("YOUTUBE_CHANNEL_TRAVEL", None)
     body = sent.get("insert", {}).get("body", {})
-    check(not at.exception and any("V9" in (s.value or "") for s in at.success)
+    check(not at.exception and any("V9" in (s.value or "") for s in at.success) and sent.get("key") == "travel"
           and "cid=1234567" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
           and body["status"]["privacyStatus"] == "private" and "thumb" in sent
           and "cid=1234567" in sent["comment"]["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"],

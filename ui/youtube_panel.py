@@ -49,10 +49,16 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
                                    use_container_width=True, key="dl_thumb")
             st.caption("1080x1920 고화질 PNG. 업로드 시 2MB가 넘으면 같은 크기 JPEG로 자동 변환해 등록합니다.")
 
-    st.markdown("#### 🚀 유튜브 쇼츠 업로드")
-    if not yu.is_authorized():
-        st.info("유튜브 채널이 아직 연결되지 않았어요. PC에서 한 번만 `python scripts/youtube_auth.py`를 실행해 "
-                "'여행을 떠나자' 채널을 연결하면, 이 자리에서 원클릭 업로드가 됩니다.")
+    key = yu.channel_key(mode)
+    target = yu.expected_channel(key)
+    st.markdown(f"#### 🚀 유튜브 쇼츠 업로드 → **{target or '(채널 이름 미설정)'}** 채널")
+    if not target:
+        st.info(f"{yu.CHANNEL_LABEL[key]} 채널 이름이 .env에 없어요. `YOUTUBE_CHANNEL_{key.upper()}=채널이름`을 적어야 "
+                "업로드할 수 있어요 (엉뚱한 채널에 올라가지 않게 업로드 직전 채널 이름을 확인합니다).")
+        return
+    if not yu.is_authorized(key):
+        st.info(f"'{target}' 채널이 아직 연결되지 않았어요. PC에서 한 번만 `{yu.auth_command(key)}`를 실행해 "
+                f"'{target}' 채널을 연결하면, 이 자리에서 원클릭 업로드가 됩니다.")
         return
 
     # 영상이 바뀌면 입력 칸도 새로 (위젯 키에 영상 경로·수정 시각을 섞음)
@@ -71,7 +77,7 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
     if st.button("🚀 유튜브 쇼츠 업로드", type="primary", use_container_width=True, key=f"yt_upload_{tag}"):
         bar = st.progress(0.0, text="업로드 중...")
         try:
-            res = yu.upload_short(video_path, title, desc, thumb_path=thumb_path, comment=comment, privacy=privacy,
+            res = yu.upload_short(video_path, title, desc, mode=key, thumb_path=thumb_path, comment=comment, privacy=privacy,
                                   tags=TAGS.get(mode, []),
                                   category_id=yu.CATEGORY_TRAVEL if mode == "travel" else yu.CATEGORY_PEOPLE,
                                   progress=lambda p: bar.progress(min(0.99, p), text=f"업로드 중... {p * 100:.0f}%"))
