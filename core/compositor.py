@@ -533,6 +533,37 @@ class AdCompositor:
         **kwargs
     ) -> str:
         """
+        최종 조립. 기본은 ffmpeg filter_complex 한 번(core/render/ffmpeg_assemble.py: 자막 PNG overlay + xfade + 하드웨어 인코딩),
+        실패하면 MoviePy 경로로 자동 대체. RENDER_ENGINE=moviepy 로 MoviePy 강제 (디자인·타임라인 규칙은 같음)
+        """
+        final_output_path = os.path.join(self.output_dir, output_filename)
+        if os.getenv("RENDER_ENGINE", "ffmpeg").strip().lower() != "moviepy":
+            from core.render import ffmpeg_assemble
+            try:
+                return ffmpeg_assemble.assemble(self, asset_manifest, final_output_path, fps=fps, mode=mode, brand=brand,
+                                                disclosure=disclosure, intro_image=intro_image, xfade=XFADE_SEC,
+                                                intro_sec=INTRO_SEC, hook_solo_sec=HOOK_SOLO_SEC,
+                                                center_modes=CENTER_CAPTION_MODES)
+            except FileNotFoundError:
+                raise
+            except Exception as e:
+                logger.warning(f"ffmpeg 조립 실패 → MoviePy로 대체: {e}")
+        return self._assemble_moviepy(asset_manifest, output_filename=output_filename, fps=fps, audio_mode=audio_mode,
+                                      mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image)
+
+    def _assemble_moviepy(
+        self,
+        asset_manifest: List[Dict[str, Any]],
+        output_filename: str = "final.mp4",
+        fps: int = 24,
+        audio_mode: str = "voice_and_sub",
+        mode: str = "commerce",
+        brand: Optional[BrandOverlay] = None,
+        disclosure: Optional[str] = None,
+        intro_image: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        """
         Step 3: 각 씬별 비디오와 오디오를 오디오 길이에 맞춰 컷팅하고,
         자막 오버레이(실사 모드: 하단 자막, 씬 1 후킹→서브 시간차)를 합성한 뒤 최종 광고 비디오 결합.
         오디오는 AI 나레이션(VO)만 사용합니다. BGM은 엔진에서 합성하지 않습니다

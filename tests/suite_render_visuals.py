@@ -319,5 +319,37 @@ check(before[0] > 180 and after[2] > 180 and 60 < mid[0] < 180 and 60 < mid[2] <
 check(abs(_dur - (a1 + 0.2 + a2 + 1.0)) < 0.15,
       f"디졸브로 겹쳐도 나레이션 간격 0.2초·엔딩 여유 1초 보존 (전체 {_dur:.2f}초 ≈ {a1 + 0.2 + a2 + 1.0:.2f}초)")
 
+# ---------------------------------------------------------------- 최종 조립 엔진: ffmpeg filter_complex (기본) + MoviePy 대체
+from core.render import ffmpeg_assemble as fa
+st_, tot_ = fa.build_timeline([3.0, 2.5, 4.0], 0.35, card_sec=2.85)
+check([round(s, 2) for s in st_] == [0.0, 2.65, 4.8, 8.45] and round(tot_, 2) == 11.3,
+      f"타임라인: 다음 클립은 앞 클립 끝 디졸브 길이만큼 겹쳐 시작, 전체 = 합 - 겹침 ({[round(s, 2) for s in st_]}, {tot_:.2f}s)")
+check(fa.pick_encoder() in fa.ENCODER_ARGS, f"인코더 선택: 하드웨어(QSV·NVENC·AMF) 시험 후 되는 것, 없으면 libx264 → {fa.pick_encoder()}")
+check(not os.path.exists(os.path.join(work, "xf", "_ffmpeg_tmp")), "ffmpeg 조립 후 임시 PNG·그래프 폴더 정리")
+
+_orig_asm = fa.assemble
+calls_ = []
+
+
+def _boom(*a, **k):
+    calls_.append(1)
+    raise fa.FFmpegAssembleError("시험용 실패")
+
+
+fa.assemble = _boom
+fb_out = AdCompositor(output_dir=os.path.join(work, "fb")).assemble_ad(_man, output_filename="fb.mp4", mode="owner")
+fa.assemble = _orig_asm
+_fb = VideoFileClip(fb_out)
+check(calls_ == [1] and abs(_fb.duration - _dur) < 0.15, f"ffmpeg 조립이 실패하면 MoviePy로 자동 대체 (같은 길이 {_fb.duration:.2f}s)")
+_fb.close()
+os.environ["RENDER_ENCODER"] = "libx264"
+sw_out = AdCompositor(output_dir=os.path.join(work, "sw")).assemble_ad(_man, output_filename="sw.mp4", mode="owner")
+os.environ.pop("RENDER_ENCODER", None)
+_sw = VideoFileClip(sw_out)
+_mid_sw = _sw.get_frame(d1 - XFADE_SEC / 2).astype(float).mean(axis=(0, 1))
+check(abs(_sw.duration - _dur) < 0.05 and 60 < _mid_sw[0] < 180 and 60 < _mid_sw[2] < 180,
+      "RENDER_ENCODER=libx264 (하드웨어 인코더 없는 PC): 같은 길이·디졸브")
+_sw.close()
+
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)
