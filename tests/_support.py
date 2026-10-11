@@ -102,6 +102,12 @@ def _build(name: str, path: str):
         raise KeyError(f"알 수 없는 픽스처: {name}")
 
 
+# 테스트는 가짜 Gemini로 대본을 검증하므로 실제 Claude·OpenAI 키는 비움 (.env의 load_dotenv는 이미 있는 값을 덮지 않음)
+if "--live" not in sys.argv:
+    os.environ["ANTHROPIC_API_KEY"] = ""
+    os.environ["OPENAI_API_KEY"] = ""
+
+
 def fixture(name: str) -> str:
     """픽스처 경로 (없으면 생성)"""
     os.makedirs(FIXTURES, exist_ok=True)

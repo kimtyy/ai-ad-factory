@@ -80,7 +80,8 @@ sent = {}
 
 class FakeModels:
     def generate_content(self, **kw):
-        sent.update(kw)
+        if '규칙을 어겼습니다' not in str(kw.get('contents', [''])[-1]):
+            sent.update(kw)
         return FakeResp()
 
 
@@ -115,11 +116,11 @@ check(shorten_line("솔직히 여기만 한 데가 없거든요, 진짜로요", 
       f"shorten_line 동작 유지, 실사 모드 대사는 {VO_HARD_MAX}자 넘을 때만 줄임")
 sys_inst = sent["config"].system_instruction
 user_prompt = sent["contents"][-1]
-check("유튜버가 시청자 1명에게 꿀팁 썰 푸는" in sys_inst and "팜플렛·브로슈어 낭독 금지" in sys_inst and "근데 진짜 대박인 건" in sys_inst
-      and "금지 2 (개조식 단문)" in sys_inst and "'즐겨보세요', '놓치면 손해입니다'" not in sys_inst
+check("3자 큐레이터" in sys_inst and "TPO" in sys_inst and "팜플렛 낭독" in sys_inst and "엄격 금지" in sys_inst
+      and "금지 (개조식 단문)" in sys_inst and "근데 진짜 대박인 건" not in sys_inst and "추임새 의무" not in sys_inst
       and "사진에 실제로 보이는 공간만 묘사하세요" not in sys_inst and "(~됨, ~임" not in sys_inst,
-      "프롬프트: 유튜버 썰 구어체 + 브로슈어 낭독·홍보 어미·개조식 금지 + 추임새 (사진 묘사 지시 제거)")
-check('"story"' in user_prompt and "문장 하나씩 순서대로 씬 1~" in user_prompt and "날씨 쌀쌀할 땐 통유리 실내 풀로" in user_prompt
+      "프롬프트: 3자 큐레이터·TPO 구어체 + 브로슈어 낭독·홍보 어미·개조식 금지 + 판에 박힌 패턴 엄격 금지 (예전 추임새 의무 삭제)")
+check('"story"' in user_prompt and "문장 하나씩 순서대로 씬 1~" in user_prompt and "쌀쌀한 날엔 통유리 실내 풀이 정답이에요" in user_prompt
       and "15~20자" not in user_prompt and "15~26자" in user_prompt,
       "프롬프트: 전체 독백(story) 먼저 → 씬별 분할, 씬당 15~26자, 이어지는 예시")
 check("hook_title을 먼저 읽고" in user_prompt, "프롬프트: 씬 1 = 후킹 먼저 읽고 서브 문장 이어 읽기 안내")
@@ -150,7 +151,7 @@ class StJohnsResp:
     text = json.dumps({"story": "…", "scenes": [
         {"voiceover": "우리나라에서 손꼽히는 역대급 오션뷰 풀이거든요.", "hook_title": "국내 손꼽히는 역대급풀"},
         {"voiceover": "솔직히 체크인하자마자 수영장 안 가면 손해거든요."},
-        {"voiceover": "근데 진짜 대박인 건 실내 풀도 뷰가 장난 아닙니다."},
+        {"voiceover": "비 오는 날엔 실내 풀도 뷰가 장난 아닙니다."},
         {"voiceover": "댕댕이 전용 용품도 풀세트로 챙겨줘서 정말 편하고,"},
         {"voiceover": "객실 슬라이딩 도어만 열어도 바다가 바로 보입니다."},
         {"voiceover": "세련된 라운지 다이닝까지 갖춰서 말할 것도 없어요."},
@@ -159,7 +160,8 @@ class StJohnsResp:
 
 class StJohnsModels:
     def generate_content(self, **kw):
-        sent.update(kw)
+        if '규칙을 어겼습니다' not in str(kw.get('contents', [''])[-1]):
+            sent.update(kw)
         return StJohnsResp()
 
 
@@ -175,14 +177,14 @@ sj = plan_storyboard(product_name="세인트존스 호텔", usp="반려견 동�
 for s_ in sj:
     print(f"     세인트존스 씬{s_['scene_index']}: {s_['voiceover']}")
 check(not is_hook_echo(sj[0]["hook_title"], sj[0]["voiceover"]), f"씬 1 앵무새 반복 → 교체: {sj[0]['voiceover']}")
-check(sj[2]["voiceover"] == "근데 진짜 대박인 건 실내 풀도 뷰가 장난 아니에요." and sj[4]["voiceover"] == "객실 슬라이딩 도어만 열어도 바다가 바로 보여요.",
+check(sj[2]["voiceover"] == "비 오는 날엔 실내 풀도 뷰가 장난 아니에요." and sj[4]["voiceover"] == "객실 슬라이딩 도어만 열어도 바다가 바로 보여요.",
       "합쇼체 대사는 내용 그대로 해요체로 변환 (교체 아님)")
 check("댕댕" not in sj[3]["voiceover"] and sj[3]["voiceover"].rstrip(".") in SAFE_LINES["bedroom"],
       f"USP에 반려견 정보가 있어도 침실 사진 씬의 '댕댕이 용품' → 객실 문구로 교체: {sj[3]['voiceover']}")
 check(sj[5]["voiceover"].startswith("라운지") and all(not has_hapsyo(s_["voiceover"]) for s_ in sj[:-1]),
       "브로슈어 수식어 제거 + 전 씬 합쇼체 없음")
 up = sent["contents"][-1]
-check("해요체" in up and "앵무새" in up and "댕댕이 전용 용품" in up and "금지 3 (합쇼체·뉴스체)" in sent["config"].system_instruction,
+check("해요체" in up and "앵무새" in up and "댕댕이 전용 용품" in up and "금지 (합쇼체·뉴스체)" in sent["config"].system_instruction,
       "프롬프트: 해요체 통일·후킹 반복 금지·화면 무관 주제 금지 규칙 주입")
 
 # 4-1. 시설어 화면 일치 (테라스·스파·자쿠지·루프탑·피트니스)
@@ -209,18 +211,19 @@ check(complete_sentence("돈 안 아까운데,") == "돈 안 아까운데요." a
 
 class FourthResp:
     text = json.dumps({"story": "…", "scenes": [
-        {"voiceover": "솔직히 여기 인피니티 풀 하나만 봐도 돈 안 아까운데,", "hook_title": "국내 손꼽히는 오션뷰 풀"},
-        {"voiceover": "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링되고요."},
+        {"voiceover": "여기 인피니티 풀 하나만 봐도 돈 안 아까운데,", "hook_title": "국내 손꼽히는 오션뷰 풀"},
+        {"voiceover": "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링 그 자체예요."},
         {"voiceover": "실내 풀도 통유리라 날씨 걱정 없이 놀면 되거든요."},
         {"voiceover": "객실은 폭신한 침구 덕분에 들어가자마자 푹 쉬기 좋고,"},
-        {"voiceover": "근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다 뷰예요."},
+        {"voiceover": "통창 너머로 펼쳐지는 바다 뷰는 진짜 대박 그 자체예요."},
         {"voiceover": "라운지까지 있어서 제대로 호캉스 가능해요."},
         {"voiceover": "x"}]}, ensure_ascii=False)
 
 
 class FourthModels:
     def generate_content(self, **kw):
-        sent.update(kw)
+        if '규칙을 어겼습니다' not in str(kw.get('contents', [''])[-1]):
+            sent.update(kw)
         return FourthResp()
 
 
@@ -229,10 +232,11 @@ sj4 = plan_storyboard(product_name="세인트존스 호텔", usp="", mode="trave
                       photo_inventory={"pool": 3, "bedroom": 2, "facility": 1, "view": 1}, slot_photo_notes=sj_notes, force=True)
 for s_ in sj4:
     print(f"     4차 재현 씬{s_['scene_index']}: {s_['voiceover']}")
-check(sj4[1]["voiceover"] == "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링되고요."
-      and sj4[4]["voiceover"] == "근데 진짜 대박인 건 통창 너머로 펼쳐지는 바다 뷰예요.",
+check(sj4[1]["voiceover"] == "탁 트인 바다 보면서 수영할 수 있어서 완전 힐링 그 자체예요."
+      and sj4[4]["voiceover"] == "통창 너머로 펼쳐지는 바다 뷰는 진짜 대박 그 자체예요.",
       "31자 대사도 자르지 않음 (4차 렌더의 '수영할 수!', '바다!' 재발 방지)")
-check(sj4[0]["voiceover"].endswith("아까운데요.") and sj4[3]["voiceover"].endswith("좋고요."), "연결 어미로 끝난 씬 → '~는데요.', '~고요.'로 종결")
+check(sj4[0]["voiceover"].endswith("아까운데요.") and sj4[3]["voiceover"].rstrip(".") in SAFE_LINES["bedroom"],
+      "연결 어미로 끝난 씬 → '~는데요.'로 종결, '~고' 끝은 '~고요'(금지 패턴)가 되므로 안전 문구로 교체")
 check(all(is_complete_sentence(s_["voiceover"]) for s_ in sj4[:-1]), "CTA 제외 전 씬이 완결 문장(해요체 종결 어미)으로 끝남")
 check("정확히 6개의 완결 문장" in sent["contents"][-1] and "문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지" in sent["contents"][-1],
       "프롬프트: 씬마다 완결 문장 하나, 문장 중간에서 끊기 금지")

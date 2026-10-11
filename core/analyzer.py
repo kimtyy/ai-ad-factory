@@ -116,19 +116,20 @@ SCRIPT_STYLE_PRESETS = {
     "info": {
         "name": "📢 정보/후킹형 (홍보·추천 스타일)",
         "instruction": (
-            "📢 [꿀팁 전수형 (여행 유튜버 스타일)]:\n"
-            "- 여행 유튜버가 시청자 한 명에게 '여기 이렇게 즐기면 된다'는 꿀팁을 알려주듯 호기심(Curiosity Gap)을 끌고 가는 썰로 작성하세요.\n"
-            "- 예시 흐름: '여기 오시면 솔직히 체크인하자마자 수영장부터 가게 되거든요.' → '근데 진짜 대박인 건 해 질 때예요.'"
+            "📢 [3자 큐레이터형 (TPO 추천)]:\n"
+            "- 큐레이터가 시청자에게 '이런 날·이런 사람에게 여기'를 짚어 주듯, 방문 상황(언제·누구와·어떤 기분)을 중심으로 호기심을 끌고 가세요.\n"
+            "- 예시 흐름: '바다 보면서 아무것도 안 하고 싶은 주말 있죠?' → '체크인 직후 수영장으로 직행하면 답이 나와요.' "
+            "→ '해 질 무렵 이 풀, 반칙이에요!'"
         )
     },
     "experience": {
         "name": "✈️ 1인칭 경험형 (생생한 투숙 후기 스타일)",
         "instruction": (
-            "✈️ [1인칭 경험/체류 후기형 (인스타/쇼츠 브이로그 감성)]:\n"
-            "- 여행자가 숙소에 직접 머무르며 겪은 일을 친구한테 썰 풀듯 1인칭으로 이야기하세요.\n"
-            "- 예시 흐름: '저 여기 진짜 아무 기대 없이 갔거든요.' → '근데 로비 들어가자마자 통창 뷰에 말이 안 나오더라고요.' "
-            "→ '방은 말할 것도 없고요, 체크아웃하기 싫어서 혼났어요.'\n"
-            "- 진정성 있는 1인칭 경험과 감탄을 살리되, 씬당 공백 포함 15~26자 구어체를 지키세요."
+            "✈️ [상황 몰입형 (방문 장면 묘사)]:\n"
+            "- 시청자가 그 숙소에 있는 순간을 상상하게 만드는 장면 묘사형. 지어낸 체험담('제가 가 봤는데')은 쓰지 말고 '~할 때' 장면으로 말하세요.\n"
+            "- 예시 흐름: '퇴근하고 바로 떠나는 금요일 밤이라면?' → '로비 문 열자마자 통창 뷰가 먼저 반겨 줘요.' "
+            "→ '체크아웃 시간이 야속해지는 방이에요.'\n"
+            "- 씬당 공백 포함 15~26자 구어체를 지키세요."
         )
     }
 }
@@ -342,8 +343,8 @@ MOCK_TRAVEL_LINES = {
 }
 # 황금 비율 슬롯별 Mock 대사 (같은 역할이 연속돼도 대사가 반복되지 않도록 슬롯 위치별로 구분)
 MOCK_GOLDEN7_LINES = {
-    "info": ["물빛부터 진짜 다르거든요.", "풀 뷰가 끝없이 이어지는데요.", "물멍하다 보면 시간이 순삭돼요.",
-             "객실도 감성이 가득해서 좋고요.", "창밖 뷰가 그림처럼 펼쳐져요.", "분위기 좋은 공간까지 있어요."],
+    "info": ["더운 날 물에 뛰어들고 싶을 때, 여기예요.", "풀 뷰 하나로 하루가 정리돼요.", "물멍하다 보면 시간이 순삭돼요.",
+             "늘어지고 싶은 주말엔 이 객실이죠.", "창밖 뷰가 그림처럼 펼쳐져요.", "같이 온 사람 모두 만족하는 공간이에요."],
     "experience": ["수영장 보자마자 입이 떡 벌어졌어요!", "풀 뷰 보면서 사진만 백 장 찍었어요!", "물멍하다 보니 시간이 순삭됐어요!",
                    "객실 들어가자마자 감성이 폭발하더라고요!", "창밖 뷰 보다가 늦잠까지 잤어요!", "마지막까지 꽉 찬 하루였어요!"],
 }
@@ -598,16 +599,18 @@ def plan_storyboard(
 
 [대본 선기획 작성 요구사항]
 1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "story": "...", "scenes": [...]}})으로 정확히 출력하세요.
-2. [대본 = 유튜버 썰 하나를 씬별로 자른 것]:
-   - 먼저 'story'에 씬 1~{last_i}에 해당하는 전체 독백을 쓰세요. 유튜버가 시청자 한 명에게 꿀팁을 전수하듯 말하는 100% 구어체입니다.
+2. [대본 = 3자 큐레이터의 25~30초 숏폼 하나를 씬별로 자른 것]:
+   - 먼저 'story'에 씬 1~{last_i}에 해당하는 전체 대사를 쓰세요. 큐레이터가 '이런 순간엔 여기'를 짚어 주는 구어체입니다.
    - story는 정확히 {last_i}개의 완결 문장으로 쓰고, 문장 하나씩 순서대로 씬 1~{last_i}의 voiceover에 넣으세요 (각 공백 포함 15~{VO_LIMIT}자).
-     voiceover를 이어 붙이면 story와 같아야 하고, 각 voiceover는 해요체 종결 어미(~거든요, ~있어요, ~돼요, ~더라고요)로 끝나야 합니다.
-     문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지 마세요. 씬 사이 연결은 다음 문장 첫머리 이음말('근데', '거기다', '그리고')로 하세요.
-   - 추임새('솔직히', '근데 진짜 대박인 건', '여기 오시면', '말할 것도 없고요')를 2번 이상 자연스럽게 섞으세요.
-   - 예 (구조만 참고): "(지역)에서 수영장 하나로 끝내고 싶다? 솔직히 여기만 한 데가 없거든요." → "야외에서 바다 멍 때리는 것도 진짜 좋은데요."
-     → "날씨 쌀쌀할 땐 통유리 실내 풀로 쏙 들어가면 끝납니다."
+     voiceover를 이어 붙이면 story와 같아야 하고, 각 voiceover는 해요체 완결 문장(~예요, ~어요, ~죠, ~네요, ~까요?)이어야 합니다.
+     문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지 마세요.
+   - 시설을 순서대로 나열하지 말고, 씬마다 방문 상황(TPO: 언제·누구와·어떤 기분일 때)을 하나씩 그리고 그 씬 화면 공간이 왜 답인지 말하세요.
+   - 리듬: 질문형('~할 때 어디 가요?'), 단언형('정답은 여기예요.'), 감탄형('이 뷰, 반칙이에요!')을 섞어 같은 어미가 두 씬 연속되지 않게.
+   - 예 (구조만 참고): "바다 보면서 아무것도 안 하고 싶은 주말 있죠?" → "체크인 직후 수영장으로 직행하면 답이 나와요."
+     → "쌀쌀한 날엔 통유리 실내 풀이 정답이에요."
+   - 엄격 금지: '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데'. 지어낸 체험담('제가 가 봤는데', '먹어 보니').
    - 금지: 사진 낭독체('~가 보여요', '~도 있어서', '고급스러운·세련된 ~'), '~해보세요/~마세요/~딱!' 홍보 어미, '~가능함/~보임/~됨/~임' 개조식,
-     '~입니다/~습니다/~아닙니다' 합쇼체. 어미는 처음부터 끝까지 해요체(~거든요, ~있어요, ~돼요, ~나와요)로 통일하세요.
+     '~입니다/~습니다/~아닙니다' 합쇼체.
 3. [씬별 시각 역할은 아래 배정을 그대로 사용 (변경 금지)]:
 {scene_role_lines}
    - 각 씬의 voiceover는 그 씬 화면에 나오는 공간에 대한 이야기여야 합니다 (화면과 엉뚱한 공간 얘기 금지, 사진 나열 낭독도 금지).
@@ -623,8 +626,8 @@ def plan_storyboard(
    - 씬 1은 나레이터가 hook_title을 먼저 읽고(이때 화면엔 헤드라인만), 이어서 voiceover를 읽습니다(이때 화면엔 voiceover 자막만).
      voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해')는 쓰지 마세요.
    - 씬 1 voiceover에서 헤드라인 단어를 앵무새처럼 반복하지 마세요. 헤드라인이 던진 말을 바로 구체적인 감탄·이유로 받으세요.
-     (예: 헤드라인 "국내 손꼽히는 역대급 풀" → voiceover "수영장이 바다랑 그냥 맞닿아 있어서 뷰가 미쳤거든요."
-      나쁜 예: "우리나라에서 손꼽히는 역대급 오션뷰 풀이거든요.")
+     (예: 헤드라인 "국내 손꼽히는 역대급 풀" → voiceover "수영장이 바다랑 그대로 맞닿은 장면, 상상해 봤어요?"
+      나쁜 예: "우리나라에서 손꼽히는 역대급 오션뷰 풀이에요.")
 {hook_hint_block}
 6. 마지막 씬 {num_scenes} (엔딩 CTA 강제):
    - 마지막 씬 voiceover는 반드시 정확히: "{TRAVEL_CTA_VOICEOVER}"
@@ -713,18 +716,14 @@ JSON 출력 스키마 예시:
         contents.append(uploaded_file)
     contents.append(prompt)
 
-    # LLM 모델 단일 고정 (gemini-3.6-flash) 및 호출 직전 가드레일 검증
-    gemini_model = validate_model_call("gemini-3.6-flash", category="llm")
-    logger.info(f"Gemini 호출 중... (모델: {gemini_model})")
-    response = client.models.generate_content(
-        model=gemini_model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type="application/json",
-            temperature=0.7,
-        )
-    )
+    # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py). 레퍼런스 영상(Gemini 업로드 파일)이 있으면 Gemini만
+    from core.llm import generate_json, repair_scene_lines
+    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
+    data, script_engine = generate_json(contents, system_instruction, temperature=0.7, gemini_api_key=api_key, purpose="숙소 대본")
+    data, fixes = repair_scene_lines(data, find_banned_style, system_instruction, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    for f in fixes:
+        logger.info(f"[대본 규칙 보정] {f}")
+    response = type("LLMText", (), {"text": json.dumps(data, ensure_ascii=False)})()
 
     try:
         raw_text = response.text.strip()
@@ -753,6 +752,7 @@ JSON 출력 스키마 예시:
         for idx, sc in enumerate(scenes):
             sc["scene_index"] = idx + 1
             sc["scene_number"] = idx + 1
+            sc["script_engine"] = script_engine
 
             # [음성 대본(voiceover)과 자막(subtitle/caption) 100% 일치 강제]
             # 시청자 몰입을 위해 음성과 화면 자막은 토씨 하나 틀리지 않고 100% 동일한 텍스트로 동기화
@@ -883,6 +883,10 @@ JSON 출력 스키마 예시:
                         replaced += 1
                     elif done != vo:
                         logger.info(f"[종결 어미 보정] 씬 {idx + 1}: '{vo}' → '{done}'")
+                    if find_banned_style(done):
+                        logger.info(f"[판에 박힌 패턴 차단] 씬 {idx + 1}: {find_banned_style(done)} (대사: {done}) → 사진 중립 문구로 교체")
+                        done = safe_line_for(sc.get("target_visual_role", ""), note, replaced) + "."
+                        replaced += 1
                     vo = done
                 cap = vo   # 자막 = 나레이션 (앱에서도 동일하게 동기화)
 

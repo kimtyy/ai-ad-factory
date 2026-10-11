@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from core.radar.hints import HookHints, copies_reference
 from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, VO_LIMIT, complete_sentence, diversify_exclamations,
+                               find_banned_style,
                                find_promo_tone, find_unsupported_claim, find_unsupported_spec, is_hook_echo,
                                shorten_line, strip_brochure_words, to_haeyo)
 
@@ -33,11 +34,11 @@ ROLE_LABELS_KO = {"hero": "제품 첫인상", "feature": "핵심 기능", "detai
 
 # 상품 종류를 몰라도 성립하는 템플릿 대사 (사실 주장 없음, 해요체 완결 문장) - Gemini 실패·차단 시 대체용
 TEMPLATE_LINES = {
-    "hero": ("솔직히 이거 써 보고 생각이 좀 바뀌었거든요.", "처음엔 반신반의했는데 써 보니까 다르더라고요."),
-    "feature": ("제일 마음에 든 건 쓰기가 진짜 편하다는 거예요.", "기능이 복잡하지 않아서 누구나 바로 쓸 수 있어요."),
-    "detail": ("가까이서 보면 마감도 꼼꼼하게 돼 있더라고요.", "작은 부분까지 신경 쓴 게 눈에 보여요."),
-    "usage": ("매일 쓰다 보니까 손이 제일 자주 가요.", "자리도 많이 안 차지해서 어디 두기도 좋아요."),
-    "package": ("구성도 깔끔하게 들어 있어서 좋았어요.", "받자마자 바로 쓸 수 있게 다 들어 있어요."),
+    "hero": ("매일 손이 가는 물건, 바꿀 때 됐다면 이거예요.", "이게 왜 계속 장바구니에 남는지 아세요?"),
+    "feature": ("복잡한 설정 없이 바로 쓰는 게 이 제품의 장점이에요.", "바쁜 아침에 손이 덜 가는 구조예요."),
+    "detail": ("가까이서 보면 마감부터 달라요.", "작은 부분까지 신경 쓴 게 눈에 보여요."),
+    "usage": ("하루에도 몇 번씩 손이 가는 자리에 두면 딱이에요.", "자리도 많이 안 차지해서 어디 두기도 좋아요."),
+    "package": ("받자마자 바로 쓸 수 있게 다 들어 있어요.", "구성이 깔끔해서 선물용으로도 괜찮아요."),
 }
 
 
@@ -240,6 +241,9 @@ def plan_commerce_storyboard(
         if done is None:
             logger.info(f"[미완성 문장 차단] 씬 {i + 1}: '{text}' → 템플릿 대사")
             done = fallback()
+        if find_banned_style(done):
+            logger.info(f"[판에 박힌 패턴 차단] 씬 {i + 1}: {find_banned_style(done)} (대사: {done}) → 템플릿 대사")
+            done = fallback()
         scenes.append(_scene(i, role, done, hook))
 
     for sc, sm in zip(scenes, scene_media):
@@ -247,6 +251,8 @@ def plan_commerce_storyboard(
         if sm.get("shows"):
             sc["visual_description"] = sm["shows"]
 
+    if scenes:
+        scenes[0]["script_engine"] = getattr(llm, "engine", "") if llm else "template"
     body = scenes[:-1]
     varied, changes = diversify_exclamations([s["voiceover"] for s in body], reserved=scenes[0]["hook_title"])
     for s, vo in zip(body, varied):
@@ -359,11 +365,15 @@ def _scene_preview(sm: Dict[str, Any], thumb_dir: Optional[str]):
     return shot_crop(img, sm.get("shot") or "full", sm.get("box")) if sm.get("shot") not in (None, "full") else img
 
 
+COMMERCE_SYSTEM = ("당신은 쇼핑 제휴 숏폼(릴스/쇼츠)의 3자 큐레이터 카피라이터입니다. 사진과 판매 페이지에 있는 사실만으로, "
+                   "쓰는 사람의 실제 상황(TPO)에 맞춰 이 상품이 왜 답인지 전달합니다. 지어낸 사용 후기·과장·효능은 쓰지 않습니다. "
+                   "응답은 JSON만 출력합니다.")
+
+
 def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints=None):
-    from google import genai
-    from google.genai import types
-    from core.guardrail import validate_model_call
+    from core.llm import generate_json, repair_scene_lines
     from core.render.commerce_layout import SHOT_LABELS
+    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
 
     contents: List[Any] = []
     for i, sm in enumerate(scene_media[:len(roles)]):
@@ -373,7 +383,7 @@ def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir,
             contents += [f"[씬 {i + 1} 상품 사진" + (f" - {note}" if note else "") + "]", img]
     n = len(roles)
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
-    persona_rules = COPY_TONE_RULES.replace("유튜버가 시청자 1명에게 꿀팁 썰 푸는", "직접 써 본 사람이 친구 1명에게 추천 썰 푸는")
+    persona_rules = COPY_TONE_RULES
     contents.append(f"""
 [상품 정보]
 - 상품명(판매 페이지 표기): {product_name}
@@ -398,21 +408,15 @@ def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir,
 
 JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "hook_title": "...", "voiceover": "..."}}]}}
 """)
-    client = genai.Client(api_key=api_key)
-    res = client.models.generate_content(
-        model=validate_model_call("gemini-3.6-flash", category="llm"),
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction="당신은 쇼핑 제휴 숏폼(릴스/쇼츠)의 리뷰 카피라이터입니다. 사진과 판매 페이지에 있는 사실만으로, "
-                               "직접 써 본 사람의 말투로 상품의 매력을 전달합니다. 과장·지어낸 효능은 절대 쓰지 않습니다.",
-            response_mime_type="application/json",
-            temperature=0.6,
-        ),
-    )
-    data = json.loads(res.text)
+    # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py), 판에 박힌 패턴 줄은 한 번 다시 쓰게 함
+    data, engine = generate_json(contents, COMMERCE_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="쇼핑 대본")
+    data, fixes = repair_scene_lines(data, find_banned_style, COMMERCE_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    for f in fixes:
+        logger.info(f"[대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data
     if not isinstance(scenes, list) or not scenes:
-        raise ValueError(f"예상치 못한 응답: {res.text[:200]}")
+        raise ValueError(f"예상치 못한 응답: {str(data)[:200]}")
     out = _ScenesWithStory(scenes)
     out.story = str(data.get("story") or "").strip() if isinstance(data, dict) else ""
+    out.engine = engine
     return out

@@ -48,10 +48,10 @@ check(find_unsupported_spec("48시간 내내 따뜻해요", HEATER_USP) == "48�
       and find_unsupported_spec("특허받은 기술이에요", HEATER_USP) == "특허", "효능·수치·인증: 판매 페이지(USP)에 있는 것만 허용")
 sent = {}
 reply = {"story": "…", "scenes": [
-    {"hook_title": "겨울 난방비 고민 끝", "voiceover": "솔직히 이 히터 하나로 방이 금방 따뜻해지거든요."},
+    {"hook_title": "겨울 난방비 고민 끝", "voiceover": "외풍 심한 겨울 아침, 이 히터 하나면 방이 금방 따뜻해져요."},
     {"voiceover": "48시간 틀어 놔도 전기세가 거의 안 나옵니다."},                 # USP에 없는 수치 + 합쇼체
-    {"voiceover": "과열 방지 기능이 있어서 밤새 켜 둬도 안심이 되고,"},           # 연결 어미 → 종결
-    {"voiceover": "2단 온도 조절이 돼서 상황 따라 쓰기 편하거든요."},             # USP 근거 있는 수치 → 유지
+    {"voiceover": "과열 방지 기능이 있어서 밤새 켜 둬도 안심이 되는데,"},         # 연결 어미 → 종결
+    {"voiceover": "2단 온도 조절이 돼서 상황 따라 쓰기 편해요."},                 # USP 근거 있는 수치 → 유지
     {"voiceover": "이번 겨울엔 꼭 사 보세요!"},                                   # 홍보 어투
     {"voiceover": "x"}]}
 
@@ -69,11 +69,11 @@ g = plan_commerce_storyboard(HEATER, HEATER_USP, [fixture("photo_pool.jpg")] * 6
 cm._plan_with_gemini = _orig
 for s in g:
     print(f"     쇼핑 씬{s['scene_index']} [{s['role']}]: {s['voiceover']}")
-check(g[0]["voiceover"] == "솔직히 이 히터 하나로 방이 금방 따뜻해지거든요." and g[0]["hook_title"] == "겨울 난방비 고민 끝",
+check(g[0]["voiceover"] == "외풍 심한 겨울 아침, 이 히터 하나면 방이 금방 따뜻해져요." and g[0]["hook_title"] == "겨울 난방비 고민 끝",
       "정상 대사·후킹 유지")
 check("48시간" not in g[1]["voiceover"] and g[1]["voiceover"] in cm.TEMPLATE_LINES["feature"], "USP에 없는 '48시간' → 템플릿 대사로 교체")
 check(len({s["voiceover"] for s in g}) == len(g), "대체된 씬끼리도 같은 문장 반복 없음")
-check(g[2]["voiceover"].endswith("안심이 되고요.") and g[3]["voiceover"] == "2단 온도 조절이 돼서 상황 따라 쓰기 편하거든요.",
+check(g[2]["voiceover"].endswith("안심이 되는데요.") and g[3]["voiceover"] == "2단 온도 조절이 돼서 상황 따라 쓰기 편해요.",
       "연결 어미 종결 보정, USP 근거 있는 '2단'은 유지")
 check(not find_promo_tone(g[4]["voiceover"]) and g[-1]["voiceover"] == COMMERCE_CTA and g[-1]["caption"] == COMMERCE_CTA.rstrip("!"),
       "홍보 어투 교체, CTA 고정")
@@ -86,7 +86,8 @@ captured = {}
 
 class FakeModels:
     def generate_content(self, **kw):
-        captured.update(kw)
+        if '규칙을 어겼습니다' not in str(kw.get('contents', [''])[-1]):
+            captured.update(kw)
         return type("R", (), {"text": json.dumps(reply, ensure_ascii=False)})()
 
 
@@ -100,8 +101,8 @@ prompt = [c for c in captured["contents"] if isinstance(c, str)][-1]
 images = [c for c in captured["contents"] if isinstance(c, Image.Image)]
 check(len(images) >= 4 and len(images) == sum(1 for c in captured["contents"] if isinstance(c, str) and c.startswith("[씬 ")) and any(isinstance(c, str) and c.startswith("[씬 1 상품 사진") for c in captured["contents"]), "Gemini에 실물 상품 사진을 씬마다 1장씩(앵글 컷 포함) 첨부")
 check("상품 종류에 맞는 말" in prompt and "화장품이 아닌데 '보습·피부'" in prompt and "USP에 그대로 적힌 것만" in prompt
-      and COMMERCE_CTA in prompt and "직접 써 본 사람이 친구 1명에게 추천 썰" in prompt and HEATER_USP in prompt,
-      "프롬프트: 상품 종류 맞춤(화장품 고정 예시 없음), 효능·수치는 USP 근거만, 리뷰 썰 톤, 고정 CTA")
+      and COMMERCE_CTA in prompt and "3자 큐레이터" in prompt and "엄격 금지" in prompt and HEATER_USP in prompt,
+      "프롬프트: 상품 종류 맞춤(화장품 고정 예시 없음), 효능·수치는 USP 근거만, 3자 큐레이터·TPO 톤, 고정 CTA")
 
 # ---------------------------------------------------------------- 3. AI 이미지 생성 제거
 from core.asset_generator import REAL_MEDIA_MODES, AssetGenerator
@@ -254,7 +255,8 @@ check([m["path"] for m in match_scene_media(commerce_roles(4), ["a", "b"], [])] 
 
 class KindModels:
     def generate_content(self, **kw):
-        captured.setdefault("calls", []).append(kw)
+        if '규칙을 어겼습니다' not in str(kw.get('contents', [''])[-1]):
+            captured.setdefault("calls", []).append(kw)
         txt = [c for c in kw["contents"] if isinstance(c, str)][-1]
         if "어떤 컷으로 쓰기 좋은지" in txt:
             body = {"images": [{"index": 1, "kind": "usage", "shows": "거실에 놓인 히터", "product_box": [0, 100, 1000, 500]},

@@ -16,6 +16,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, diversify_exclamations, find_promo_tone,
+                                find_banned_style,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo)
 from core.radar.hints import HookHints, copies_reference
 
@@ -35,12 +36,13 @@ ROLE_LABELS_KO = {
 }
 
 MOCK_LINES = {
-    "stay": {"exterior": "도착하자마자 다들 사진부터 찍으시더라고요.", "room": "객실 들어오면 다들 일단 눕고 봐요!",
-             "facility": "부대시설에서 놀다 보면 하루가 금방 가요.", "view": "창밖 풍경만 봐도 힐링돼요!", "detail": "작은 것 하나까지 신경 썼어요!"},
-    "food": {"exterior": "골목 안에 숨어 있어서 아는 분들만 오시더라고요.", "signature": "이게 바로 저희 대표 메뉴예요!",
-             "cooking": "주문 즉시 바로 만들어 드려요!", "interior": "편하게 머물다 가는 공간이에요!", "detail": "재료부터 정성껏 준비해요!"},
-    "shop": {"exterior": "찾아오시기 쉬운 데 있어요!", "product": "제일 많이 찾으시는 대표 상품이에요!",
-             "interior": "천천히 둘러보기 좋은 공간이에요!", "detail": "디테일까지 꼼꼼하게 골랐어요!", "service": "친절하게 안내해 드릴게요!"},
+    "stay": {"exterior": "도착하는 순간 사진부터 찍게 되는 곳이에요.", "room": "긴 하루 끝, 일단 눕고 싶어지는 방이에요!",
+             "facility": "부대시설에서 놀다 보면 하루가 금방 가요.", "view": "창밖 풍경만 봐도 힐링돼요!", "detail": "작은 것 하나까지 신경 쓴 게 보여요!"},
+    "food": {"exterior": "골목 안에 숨은 집, 아는 사람만 찾는 곳이에요.", "signature": "고민될 땐 이 대표 메뉴가 정답이에요!",
+             "cooking": "갓 만든 한 접시가 당기는 날엔 여기예요!", "interior": "편하게 오래 머물기 좋은 공간이에요!",
+             "detail": "접시 하나에도 공들인 게 보여요!"},
+    "shop": {"exterior": "찾아가기 쉬운 곳에 있어요!", "product": "다들 제일 먼저 찾는 대표 상품이에요!",
+             "interior": "천천히 둘러보기 좋은 공간이에요!", "detail": "디테일 보는 재미가 있는 곳이에요!", "service": "처음 와도 헤매지 않는 곳이에요!"},
 }
 
 # 사장님이 입력하지 않은 수치/혜택/순위 주장 차단 규칙은 core.script_guard.PRICE_CLAIM_PATTERNS에서 관리
@@ -125,7 +127,7 @@ def plan_owner_storyboard(
                                     tone_instruction, api_key, thumb_dir, hook_hints)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
-            logger.warning(f"사장님 플래너 Gemini 호출 실패, 업종 템플릿으로 대체: {e}")
+            logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
 
     scenes = []
     for i, role in enumerate(roles):
@@ -148,6 +150,10 @@ def plan_owner_storyboard(
             done = complete_sentence(text)
             if done is None:
                 logger.info(f"[미완성 문장 차단] 씬 {i + 1}: '{text}' → 템플릿 대사로 교체")
+                done = complete_sentence(lines.get(role, lines["exterior"])) or lines.get(role, lines["exterior"])
+            banned = find_banned_style(done)
+            if banned:
+                logger.info(f"[판에 박힌 패턴 차단] 씬 {i + 1}: {banned} (대사: {done}) → 템플릿 대사로 교체")
                 done = complete_sentence(lines.get(role, lines["exterior"])) or lines.get(role, lines["exterior"])
             text = done
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
@@ -175,6 +181,8 @@ def plan_owner_storyboard(
 
     # 감탄사 다양성: 같은 감탄 표현은 영상 전체(헤드라인 포함) 1회 (CTA 제외)
     if len(scenes) > 1:
+        if scenes:
+            scenes[0]["script_engine"] = getattr(llm, "engine", "") if llm else "template"
         varied, changes = diversify_exclamations([sc["voiceover"] for sc in scenes[:-1]], reserved=scenes[0].get("hook_title", ""))
         for sc, vo in zip(scenes[:-1], varied):
             sc["voiceover"] = sc["subtitle"] = sc["caption"] = vo
@@ -246,11 +254,15 @@ JSON만 출력: {{"points": ["...", "..."]}}
     return ok[:4]
 
 
+OWNER_SYSTEM = ("당신은 동네 가게·숙소를 소개하는 숏폼(릴스/쇼츠) 3자 큐레이터 카피라이터입니다. "
+                "과장 없이 사진에 보이는 사실만으로, 방문자의 실제 상황(TPO)에 맞춰 이 가게가 왜 답인지 전달합니다. "
+                "응답은 JSON만 출력합니다.")
+
+
 def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
                       hook_hints=None):
-    from google import genai
-    from google.genai import types
-    from core.guardrail import validate_model_call
+    from core.llm import generate_json, repair_scene_lines
+    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
 
     type_label = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])["label"]
     contents: List[Any] = []
@@ -278,34 +290,29 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
 4. 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내). 나레이터가 헤드라인을 먼저 읽고
    씬 1 voiceover를 이어 읽으므로, voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰세요.
    헤드라인 단어를 voiceover에서 그대로 반복하지 말고 바로 구체적인 이유·감탄으로 받으세요.
-{COPY_TONE_RULES.replace("유튜버가 시청자 1명에게 꿀팁 썰 푸는", "사장님이 손님 1명에게 가게 자랑 썰 푸는")}
-   (사장님 말투 예: '솔직히 저희 집은 창문 열면 계곡 소리부터 들어오거든요.' → '근데 진짜 대박인 건 저녁에 마당 불멍인데,')
+{COPY_TONE_RULES}
+   (예: '퇴근길에 시원한 한 잔이 당기는 날 있죠?' → '창가 자리에 앉으면 계곡 소리가 먼저 들려요.' → '단체 모임 장소 고민 끝, 여기예요.')
 {hook_hints.prompt_block if hook_hints else ""}
 5. 마지막 씬 {n}의 voiceover는 정확히: "{cta_line}"
 6. role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")
 
 JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
 """)
-    client = genai.Client(api_key=api_key)
-    res = client.models.generate_content(
-        model=validate_model_call("gemini-3.6-flash", category="llm"),
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction="당신은 동네 가게 사장님이 직접 올리는 숏폼(릴스/쇼츠) 홍보 영상 카피라이터입니다. "
-                               "과장 없이 사진에 보이는 사실만으로 가게의 매력을 전달합니다.",
-            response_mime_type="application/json",
-            temperature=0.6,
-        ),
-    )
-    data = json.loads(res.text)
+    # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py), 판에 박힌 패턴 줄은 한 번 다시 쓰게 함
+    data, engine = generate_json(contents, OWNER_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="사장님 대본")
+    data, fixes = repair_scene_lines(data, find_banned_style, OWNER_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    for f in fixes:
+        logger.info(f"[대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data
     if not isinstance(scenes, list) or not scenes:
-        raise ValueError(f"예상치 못한 응답: {res.text[:200]}")
+        raise ValueError(f"예상치 못한 응답: {str(data)[:200]}")
     out = _ScenesWithStory(scenes)
     out.story = str(data.get("story") or "").strip() if isinstance(data, dict) else ""
+    out.engine = engine
     return out
 
 
 class _ScenesWithStory(list):
-    """씬 목록 + Gemini가 먼저 쓴 전체 독백(story)"""
+    """씬 목록 + LLM이 먼저 쓴 전체 독백(story) + 실제로 쓴 대본 엔진(engine)"""
     story = ""
+    engine = ""
