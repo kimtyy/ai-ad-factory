@@ -20,7 +20,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 from core.calendar_sync import (CalendarError, authorize_interactive, build_service, calendar_name, find_calendar,  # noqa: E402
-                                list_events, parse_title)
+                                list_events, parse_title, save_calendar)
 
 
 def preview(cal_id: str) -> None:
@@ -40,7 +40,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         if args.check:
-            cal = find_calendar(build_service())
+            cal = save_calendar(find_calendar(build_service()))
         else:
             print(f"브라우저에서 구글 계정으로 로그인하고 두 권한을 허용해 주세요 (찾을 캘린더: '{calendar_name()}')")
             cal = authorize_interactive()

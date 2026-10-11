@@ -118,7 +118,12 @@ def authorize_interactive() -> Dict[str, Any]:
     os.makedirs(SECRETS_DIR, exist_ok=True)
     with open(token_path(), "w", encoding="utf-8") as f:      # 먼저 저장: 캘린더 확인이 실패해도 --check로 브라우저 없이 재시도
         f.write(creds.to_json())
-    cal = find_calendar(build_service(creds))
+    return save_calendar(find_calendar(build_service(creds)))
+
+
+def save_calendar(cal: Dict[str, str]) -> Dict[str, str]:
+    """찾은 전용 캘린더 정보 저장 (스케줄러가 매번 목록을 뒤지지 않게)"""
+    os.makedirs(SECRETS_DIR, exist_ok=True)
     with open(calendar_info_path(), "w", encoding="utf-8") as f:
         json.dump(cal, f, ensure_ascii=False, indent=2)
     return cal
