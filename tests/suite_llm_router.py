@@ -214,4 +214,24 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 check(sb2[0]["script_engine"] == "claude", f"Gemini 키 없이 Claude 키만 → Claude 대본 (엔진 기록 {sb2[0]['script_engine']})")
 os.environ["OPENAI_API_KEY"] = ""
 check(not rt.script_llm_ready(None), "키가 하나도 없으면 템플릿 (엔진 호출 안 함)")
+
+# 어미 리듬: 질문형·감탄형 최소 1개씩, 평서 '~요.' 연속 금지 → 고칠 줄과 방향을 짚어 한 번에 보정
+from core.script_guard import ending_kind, length_rule, line_char_range, rhythm_issues, script_violation_finder
+flat = ["이 날은 구운 반건오징어가 제격이에요.", "매콤한 무침과 면까지 나눠 먹기 좋아요.", "팥빙수로 달콤하게 마무리하는 날이죠.",
+        "단체 모임 자리 걱정은 덜어도 돼요.", "바 좌석과 부스가 나란히 있어 혼술도 편해요.", "바삭한 먹태가 안주로 제격이네요."]
+iss = rhythm_issues(flat)
+check([ending_kind(t) for t in ("어때요?", "딱이죠!", "제격이네요.", "편해요.")] == ["question", "exclaim", "exclaim", "plain"],
+      "어미 판별: 질문형 / 감탄·확신형(!·죠·네요) / 평서")
+check("질문형" in iss.get(1, "") and 4 in iss and len(iss) == 2, f"질문형 없음 + 평서 연속 → 고칠 줄 지정 {iss}")
+good = ["퇴근길 맥주 생각날 때, 구운 오징어가 제격이죠!", "비 오는 날 매콤한 무침에 소면, 어때요?", "넓은 매장이라 단체 모임도 편해요.",
+        "혼자 쉬는 밤엔 바삭한 먹태가 딱이죠!"]
+check(rhythm_issues(good) == {}, "질문·감탄이 섞이고 평서 연속이 없으면 보정 없음")
+find = script_violation_finder(flat)
+check(find(flat[1]).startswith("질문형") and find(flat[0]) is None and find("근데 맛있어요.") == "'근데'",
+      "보정 탐지기 = 판에 박힌 패턴 + 어미 리듬")
+lo, hi, lo_t, hi_t = line_char_range(6)
+check((lo, hi) == (26, 29) and 150 <= lo_t < hi_t <= 180 and "26~29자" in length_rule(6),
+      f"분량: 6줄이면 줄당 {lo}~{hi}자, 합계 {lo_t}~{hi_t}자 (나레이션 24~26초 실측 환산)")
+check("~어때요?" in COPY_TONE_RULES and "~딱이죠!" in COPY_TONE_RULES and "평서 어미는 두 문장 연속 금지" in COPY_TONE_RULES
+      and "27~29초" in COPY_TONE_RULES, "공통 프롬프트에 어미 리듬·분량 규칙")
 finish(fails)

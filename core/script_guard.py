@@ -13,7 +13,7 @@ core/script_guard.py - 대본 후처리 가드 (트랙 A/B 공통)
 6. find_off_scene_topic: 숙소 정보에만 있고 그 씬 화면에 없는 주제(반려견 용품, 조식 …)가 대사에 난입했는지
 """
 import re
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------- 1. 길이 맞춤
 CONNECTIVE_ENDINGS = ("해서", "하고", "하며", "면서", "인데", "지만", "니까", "는데", "고", "며", "서")
@@ -175,8 +175,13 @@ COPY_TONE_RULES = """[대본 톤 - 3자 큐레이터가 시청자에게 '이런 
 - TPO 중심: 메뉴·시설을 순서대로 나열하지 말고, 방문자의 실제 상황(언제·누구와·어떤 기분일 때)을 장면마다 하나씩 그리세요.
   예: '퇴근길에 시원한 한 잔이 당기는 날', '비 오는 주말 둘이서 늘어지고 싶을 때', '친구들 단체로 모일 자리 찾을 때'.
   그 상황에서 이 사진 속 공간·메뉴가 왜 답인지 한 문장으로 연결하세요. 'A도 있고 B도 있어요' 같은 나열은 금지.
-- 리듬: 25~30초(대사 전체 약 110~140자) 안에 질문형('~할 때 어디 가요?'), 단언형('정답은 여기예요.'),
+- 리듬: 최종 영상 27~29초(나레이션 24~26초) 안에 질문형('~할 때 어디 가요?'), 단언형('정답은 여기예요.'),
   감탄형('이 조합, 반칙이에요!')을 섞어 씬마다 문장 모양을 바꾸세요. 같은 어미가 두 씬 연속 나오면 안 됩니다.
+- 어미 리듬 (필수): CTA를 뺀 대사 중 최소 1문장은 질문형('~어때요?', '~있나요?', '~있죠?'),
+  최소 1문장은 감탄·확신형('~딱이죠!', '~제격이네요!', '~최고죠!')으로 쓰세요.
+  '~에요/~예요/~해요.' 같은 평서 어미만 이어지는 단조로운 대본 금지: 평서 어미는 두 문장 연속 금지, 전체의 절반 이하.
+- 분량: 사진 설명을 늘리지 말고 감각 표현(바삭한, 시원하게 넘어가는)이나 방문 상황(퇴근 후, 비 오는 주말, 넷이 모인 날)을
+  구체적으로 더해 문장을 채우세요.
 - 각 씬 대사는 해요체로 끝나는 완결 문장 하나 (~예요, ~이에요, ~어요/아요, ~죠, ~네요, ~까요? 등). 문장 중간에서 끊지 마세요.
 - 엄격 금지 (판에 박힌 패턴): '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데' (문장 어디에서도)
 - 금지 (홍보 어투): '~해보세요', '~즐겨보세요', '~마세요', '~놓치지 마세요', '~딱!', '~딱 좋아요'
@@ -197,7 +202,8 @@ BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
 
 STYLE_REPAIR_RULES = ("[다시 쓰기 규칙] 3자 큐레이터가 방문 상황(TPO)을 짚어 주는 해요체 완결 문장 한 줄. "
                       "엄격 금지: '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데'. "
-                      "질문형·단언형·감탄형 중 원래 문장 흐름에 맞는 형태로, 길이는 원래와 비슷하게 (공백 포함 30자 안팎).")
+                      "위반 설명에 어미 방향이 있으면 그 형태로, 없으면 질문형·단언형·감탄형 중 원래 흐름에 맞는 형태로. "
+                      "길이는 원래와 비슷하거나 조금 길게 (공백 포함 26~30자).")
 
 
 def _broken_da_yo(text: str) -> bool:
@@ -219,6 +225,73 @@ def find_banned_style(text: str) -> Optional[str]:
     if _broken_da_yo(t):
         return "'~ㄴ다요' 비문 (평서형에 '요')"
     return None
+
+
+# 나레이션 분량 → 영상 길이 (Edge-TTS SunHi 실측: 설맥 7씬 대사 127자 = 15.7초, 후킹 헤드라인 ~1.7초 + CTA ~3.0초)
+NARRATION_TARGET_SEC = (24.0, 26.0)   # 엔딩 카드 제외 순수 나레이션 → 최종 영상 약 27~29초
+TTS_SEC_PER_CHAR = 0.123              # 공백 포함 1자당 초
+HOOK_CTA_SEC = 4.7
+
+
+def line_char_range(n_lines: int) -> Tuple[int, int, int, int]:
+    """CTA를 뺀 대사 n줄이 나레이션 24~26초가 되는 줄당 글자 수 (최소, 최대) + 합계 (최소, 최대), 공백 포함"""
+    n = max(1, n_lines)
+    lo_total, hi_total = ((t - HOOK_CTA_SEC) / TTS_SEC_PER_CHAR for t in NARRATION_TARGET_SEC)
+    return int(lo_total / n), int(hi_total / n) + 1, int(lo_total), int(hi_total) + 1
+
+
+def length_rule(n_lines: int) -> str:
+    lo, hi, lo_total, hi_total = line_char_range(n_lines)
+    return (f"각 voiceover는 공백 포함 {lo}~{hi}자 (씬 1~{n_lines} 합계 {lo_total}~{hi_total}자 → 나레이션 24~26초). "
+            f"{lo}자보다 짧으면 영상이 25초 아래로 떨어집니다")
+
+
+def ending_kind(text: str) -> str:
+    """문장 끝 모양: question(?) / exclaim(! 또는 ~죠·~네요·~군요 확신·감탄) / plain(~에요·~해요. 평서)"""
+    t = (text or "").strip()
+    if t.endswith("?"):
+        return "question"
+    if t.endswith("!") or re.search(r"(죠|네요|군요)\s*[.~]*$", t):
+        return "exclaim"
+    return "plain"
+
+
+RHYTHM_FIX = {
+    "question": "질문형으로 바꾸기 ('~어때요?', '~있나요?', '~있죠?')",
+    "exclaim": "감탄·확신형으로 바꾸기 ('~딱이죠!', '~제격이네요!', '~최고죠!')",
+    "streak": "앞 문장도 평서 '~요.'라 단조로움 → 질문형이나 감탄·확신형으로 바꾸기",
+}
+
+
+def rhythm_issues(lines: List[str]) -> Dict[int, str]:
+    """
+    CTA를 뺀 대사 목록의 어미 리듬 검사 → {줄 번호: 고칠 방향}. 질문형·감탄형이 하나도 없거나
+    평서 어미가 두 줄 연속이면, 바꿀 평서 줄을 골라 지시 (없으면 빈 dict)
+    """
+    kinds = [ending_kind(t) for t in lines]
+    issues: Dict[int, str] = {}
+
+    def pick(prefer_from: int = 1) -> Optional[int]:
+        order = list(range(prefer_from, len(kinds))) + list(range(0, prefer_from))
+        return next((i for i in order if kinds[i] == "plain" and i not in issues), None)
+
+    for need in ("question", "exclaim"):
+        if need not in kinds:
+            i = pick(1 if need == "question" else len(kinds) // 2)
+            if i is not None:
+                issues[i] = RHYTHM_FIX[need]
+                kinds[i] = need
+    for i in range(1, len(kinds)):
+        if kinds[i] == "plain" and kinds[i - 1] == "plain" and i not in issues:
+            issues[i] = RHYTHM_FIX["streak"]
+            kinds[i] = "exclaim"
+    return issues
+
+
+def script_violation_finder(lines: List[str]):
+    """대본 보정용 위반 탐지기: 판에 박힌 패턴 + 어미 리듬 (줄 텍스트 → 위반 설명)"""
+    rhythm = {lines[i]: msg for i, msg in rhythm_issues(lines).items()}
+    return lambda text: find_banned_style(text) or rhythm.get(text)
 
 
 def find_unsupported_spec(text: str, usp: str = "") -> Optional[str]:

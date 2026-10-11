@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from core.llm import script_llm_ready
 from core.radar.hints import HookHints, copies_reference
-from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, VO_LIMIT, complete_sentence, diversify_exclamations,
+from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, complete_sentence, diversify_exclamations,
                                find_banned_style,
                                find_promo_tone, find_unsupported_claim, find_unsupported_spec, is_hook_echo,
                                shorten_line, strip_brochure_words, to_haeyo)
@@ -374,7 +374,7 @@ COMMERCE_SYSTEM = ("당신은 쇼핑 제휴 숏폼(릴스/쇼츠)의 3자 큐레
 def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints=None):
     from core.llm import generate_json, repair_scene_lines
     from core.render.commerce_layout import SHOT_LABELS
-    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
+    from core.script_guard import STYLE_REPAIR_RULES, length_rule, script_violation_finder
 
     contents: List[Any] = []
     for i, sm in enumerate(scene_media[:len(roles)]):
@@ -396,10 +396,10 @@ def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir,
 2. 총 {n}개 씬. [씬 i 상품 사진]은 i번째 씬에 실제로 나갈 화면입니다(앵글로 잘린 컷 포함). i번째 씬 대사는 반드시 그 화면에 보이는
    부분(전체 모습·기능·디테일·사용 장면)에 대한 이야기여야 합니다. 화면 1:1 매칭: 1번은 전체 소개, 중간은 기능·디테일, 마지막은 실사용·마무리.
    사진이 없는 씬은 기본 구성({role_hint})을 따르세요.
-3. 먼저 직접 써 본 사람이 친구 한 명에게 추천 썰을 푸는 독백(story)을 정확히 {n - 1}개의 완결 문장으로 쓰고,
-   문장 하나씩 씬 1~{n - 1}의 voiceover로 넣으세요. 각 voiceover는 공백 포함 15~{VO_LIMIT}자, 해요체 종결 어미로 끝나는 완결 문장.
+3. 먼저 3자 큐레이터가 '이런 순간엔 이 제품'을 짚어 주는 이야기(story)를 정확히 {n - 1}개의 완결 문장으로 쓰고,
+   문장 하나씩 씬 1~{n - 1}의 voiceover로 넣으세요. {length_rule(n - 1)}. 해요체 종결 어미로 끝나는 완결 문장.
 4. 효능·수치·인증·순위·가격·할인(예: 48시간, 2배, 특허, 1위, 30% 할인)은 위 USP에 그대로 적힌 것만 쓰세요. 없으면 쓰지 마세요.
-   써 보니 편했다·따뜻했다 같은 사용감과 사진에 보이는 사실로 이야기하세요.
+   지어낸 사용 후기 대신 쓰는 상황(언제·어디서·누구에게)과 사진에 보이는 사실로 이야기하세요.
 5. 상품명 전체를 읽지 말고 '이 히터', '이 제품'처럼 짧게 부르세요. 특수문자/이모지 금지(쉼표·느낌표·물음표만).
 6. 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인입니다. 나레이터가 헤드라인을 먼저 읽고 씬 1 voiceover를 이어 읽으므로,
    voiceover는 헤드라인 단어를 반복하지 말고 바로 구체적인 이유로 받으세요.
@@ -411,7 +411,9 @@ JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "hook_title": "
 """)
     # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py), 판에 박힌 패턴 줄은 한 번 다시 쓰게 함
     data, engine = generate_json(contents, COMMERCE_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="쇼핑 대본")
-    data, fixes = repair_scene_lines(data, find_banned_style, COMMERCE_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    # 판에 박힌 패턴 + 어미 리듬(질문형·감탄형 최소 1개씩, 평서 연속 금지) 위반 줄을 한 번에 다시 쓰게 함
+    vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)]         if isinstance(data, dict) else []
+    data, fixes = repair_scene_lines(data, script_violation_finder(vo_lines), COMMERCE_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data

@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, diversify_exclamations, find_promo_tone,
+from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, complete_sentence, diversify_exclamations, find_promo_tone,
                                 find_banned_style,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo)
 from core.llm import script_llm_ready
@@ -263,7 +263,7 @@ OWNER_SYSTEM = ("당신은 동네 가게·숙소를 소개하는 숏폼(릴스/�
 def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
                       hook_hints=None):
     from core.llm import generate_json, repair_scene_lines
-    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
+    from core.script_guard import STYLE_REPAIR_RULES, length_rule, script_violation_finder
 
     type_label = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])["label"]
     contents: List[Any] = []
@@ -284,8 +284,8 @@ def _plan_with_gemini(business_name, usp, business_type, roles, media, cta_line,
 1. 총 {n}개 씬. 위에 붙은 [씬 i 미디어]가 있으면 i번째 씬 대사는 그 사진/영상 속 공간·메뉴에 대한 이야기여야 합니다
    (사진에 없는 걸 지어내지 말되, 보이는 걸 나열해 읽지도 말고 '그래서 뭐가 좋은지'를 말하세요).
    미디어가 없는 씬은 업종 기본 구성({role_hint})을 따르세요.
-2. 먼저 사장님이 손님 한 명에게 가게 자랑 썰을 푸는 독백(story)을 정확히 {n - 1}개의 완결 문장으로 쓰고, 문장 하나씩 씬 1~{n - 1}의
-   voiceover로 나누세요. 각 voiceover는 공백 포함 15~{VO_LIMIT}자, 해요체 종결 어미로 끝나는 완결 문장
+2. 먼저 3자 큐레이터가 시청자에게 '이런 날엔 여기'를 짚어 주는 이야기(story)를 정확히 {n - 1}개의 완결 문장으로 쓰고, 문장 하나씩
+   씬 1~{n - 1}의 voiceover로 나누세요. {length_rule(n - 1)}. 해요체 종결 어미로 끝나는 완결 문장
    (문장 중간에서 끊기 금지). 특수문자/이모지 금지(쉼표·느낌표·물음표만 허용).
 3. 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
 4. 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내). 나레이터가 헤드라인을 먼저 읽고
@@ -301,7 +301,9 @@ JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "role": "...", 
 """)
     # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py), 판에 박힌 패턴 줄은 한 번 다시 쓰게 함
     data, engine = generate_json(contents, OWNER_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="사장님 대본")
-    data, fixes = repair_scene_lines(data, find_banned_style, OWNER_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    # 판에 박힌 패턴 + 어미 리듬(질문형·감탄형 최소 1개씩, 평서 연속 금지) 위반 줄을 한 번에 다시 쓰게 함
+    vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)]         if isinstance(data, dict) else []
+    data, fixes = repair_scene_lines(data, script_violation_finder(vo_lines), OWNER_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data
