@@ -201,4 +201,17 @@ check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원�
       f"보정된 줄은 반영, 보정해도 위반이면 템플릿으로 → 최종 대사에 금지 패턴 0개 {vo}")
 check(vo[-1] == "네이버에서 설맥 검색해 보세요!" and all(s.get("voiceover") for s in sb),
       "출력 형식은 그대로 (씬별 voiceover → TTS·BGM 덕킹·렌더로 그대로 전달)")
+
+# Gemini 키 없이 Claude 키만 있어도 대본 엔진이 돌아야 함 (예전엔 Gemini 키가 없으면 바로 템플릿)
+os.environ["ANTHROPIC_API_KEY"], os.environ["GEMINI_API_KEY"] = "test-claude", ""
+check(rt.script_llm_ready(None), "Claude 키만 있어도 대본 엔진 사용 가능")
+step["n"] = 0
+rt._overrides = {"claude": claude_seq}
+sb2 = plan_owner_storyboard("설맥 가평현리점", "맥주얼음 맥주, 넓은 매장", "food", search_keyword="설맥",
+                            media_paths=[fixture("photo_pool.jpg"), fixture("photo_room.jpg")], api_key=None)
+rt._overrides = {}
+os.environ["ANTHROPIC_API_KEY"] = ""
+check(sb2[0]["script_engine"] == "claude", f"Gemini 키 없이 Claude 키만 → Claude 대본 (엔진 기록 {sb2[0]['script_engine']})")
+os.environ["OPENAI_API_KEY"] = ""
+check(not rt.script_llm_ready(None), "키가 하나도 없으면 템플릿 (엔진 호출 안 함)")
 finish(fails)

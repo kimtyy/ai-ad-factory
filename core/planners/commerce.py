@@ -12,6 +12,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from core.llm import script_llm_ready
 from core.radar.hints import HookHints, copies_reference
 from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, VO_LIMIT, complete_sentence, diversify_exclamations,
                                find_banned_style,
@@ -203,7 +204,7 @@ def plan_commerce_storyboard(
                                                for i, m in enumerate(scene_media)))
 
     llm, llm_story = None, ""
-    if api_key and not mock:
+    if not mock and script_llm_ready(api_key):   # Gemini 키 없이 Claude·GPT 키만 있어도 대본 엔진 사용
         try:
             llm = _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints)
             llm_story = getattr(llm, "story", "")
@@ -267,7 +268,7 @@ def plan_commerce_storyboard(
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
-    logger.info(f"쇼핑 콘티 완료: '{product_name}' {len(scenes)}개 씬 (미디어 {len(media)}개, Gemini={'Y' if llm else 'N'})")
+    logger.info(f"쇼핑 콘티 완료: '{product_name}' {len(scenes)}개 씬 (미디어 {len(media)}개, LLM={getattr(llm, 'engine', '') or 'N'})")
     return scenes
 
 

@@ -137,6 +137,12 @@ def available_providers(gemini_api_key: Optional[str] = None, contents: Optional
     return [p for p in order if keys[p]]
 
 
+def script_llm_ready(gemini_api_key: Optional[str] = None) -> bool:
+    """대본 엔진을 쓸 수 있는지: 넘겨받은 Gemini 키 또는 Claude·OpenAI 키 중 하나라도 있으면 True"""
+    return bool((gemini_api_key or "").strip() or os.getenv("ANTHROPIC_API_KEY", "").strip()
+                or os.getenv("OPENAI_API_KEY", "").strip())
+
+
 # 테스트에서 엔진 호출을 바꿔 끼우는 지점: {"claude": fn, ...} (fn(contents, system, temperature, max_tokens) -> str)
 _overrides: Dict[str, Callable[..., str]] = {}
 
