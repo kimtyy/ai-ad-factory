@@ -69,6 +69,7 @@ from ui.radar_page import render_radar_page, RADAR_PERSIST_KEYS, init_radar_stat
 from core.planners.owner import ROLE_LABELS_KO as OWNER_ROLE_LABELS
 from core.media.normalize import DEFAULT_TRIM_START
 from core.render.brand import BrandOverlay, EndCard
+from core import pipeline
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -198,11 +199,8 @@ def _scene_num(scene: dict, default: int) -> int:
 
 
 def invalidate_scene_derivatives(s_num: int):
-    """씬 사진/영상이 바뀌면 그 씬의 파생 키프레임/클립 캐시만 삭제"""
-    for suffix in (".png", ".mp4", ".mp4.json", "_thumb.jpg"):
-        p = current_job().asset_path(f"scene_{s_num:02d}{suffix}")
-        if os.path.exists(p):
-            os.remove(p)
+    """씬 사진/영상이 바뀌면 그 씬의 파생 키프레임/클립 캐시만 삭제 (core/pipeline.py)"""
+    pipeline.invalidate_scene_derivatives(current_job(), s_num)
 
 
 def save_uploaded_file(up_file) -> str:
@@ -216,43 +214,18 @@ def save_uploaded_file(up_file) -> str:
     return path
 
 
-def scene_has_media(scene: dict) -> bool:
-    media = scene.get("media") or {}
-    if media.get("type") == "video" and media.get("path") and os.path.exists(media["path"]):
-        return True
-    return bool(scene.get("image_path") and os.path.exists(scene["image_path"]))
+scene_has_media = pipeline.scene_has_media
 
 
 def assign_media_to_scene(scene: dict, path: str, source: str, matched_url: str = None):
-    """씬 dict에 사진 또는 스마트폰 영상을 키로 기록 (순번 매핑 금지)"""
-    if is_video_file(path):
-        probe_media(path)  # 읽을 수 없는 영상이면 여기서 예외 → 배정하지 않음
-        scene["media"] = {"type": "video", "path": path, "trim_start": DEFAULT_TRIM_START, "fit": "auto"}
-        scene.pop("image_path", None)
-    else:
-        scene["image_path"] = path
-        scene.pop("media", None)
-    scene["asset_status"] = source
-    scene["vision_verdict"] = None
-    if matched_url:
-        scene["matched_image_url"] = matched_url
-    else:
-        scene.pop("matched_image_url", None)
-    invalidate_scene_derivatives(_scene_num(scene, 1))
+    """씬 dict에 사진 또는 스마트폰 영상을 키로 기록 (core/pipeline.py)"""
+    pipeline.assign_media_to_scene(current_job(), scene, path, source, matched_url)
 
 
 def assign_uploads_to_scenes(scenes: list, paths: list, cycle: bool = False):
-    """i번째 미디어 → i번째 씬. cycle=True(쇼핑)면 사진이 씬보다 적을 때 처음부터 돌려 씀 (Ken Burns 모션은 씬마다 다름)"""
-    if cycle and paths:
-        paths = [paths[i % len(paths)] for i in range(len(scenes))]
-        # 같은 사진을 다시 쓰는 씬은 앵글을 바꿔 잘라냄 (전체 → 중앙 줌인 → 상단·하단 디테일)
-        boxes = st.session_state.get("product_boxes", {})
-        for scene, shot, p in zip(scenes, assign_shots(paths), paths):
-            scene["shot"] = shot
-            if boxes.get(p):
-                scene["product_box"] = boxes[p]      # Gemini가 찾은 상품 본체 위치 (광고 글씨를 피해서 자름)
-    for scene, p in zip(scenes, paths):
-        assign_media_to_scene(scene, p, "uploaded")
+    """i번째 미디어 → i번째 씬. cycle=True(쇼핑)면 사진이 씬보다 적을 때 앵글을 바꿔 돌려 씀 (core/pipeline.py)"""
+    pipeline.assign_uploads_to_scenes(current_job(), scenes, paths, cycle=cycle,
+                                      product_boxes=st.session_state.get("product_boxes", {}))
 
 
 def _media_changed(new_paths: list):
@@ -680,35 +653,16 @@ is_bundle = is_commerce_mode and st.session_state.commerce_layout == "bundle"
 
 
 def book_comment_text(copy) -> str:
-    """시골책방 첫 댓글: 참여 질문 → 책방 네이버 검색·지도 → 「책」 알라딘 구매 링크 → 알라딘 제휴 고지 → 해시태그"""
-    from core.shorts_meta import build_first_comment
-    copy = copy or {}
-    store = (st.session_state.get("book_store") or "").strip()
-    title = (st.session_state.get("book_title") or "").strip()
-    link = (st.session_state.get("book_link") or "").strip()
-    return build_first_comment("book", copy.get("comment_question", ""), copy.get("hashtags"),
-                               search_keyword=(st.session_state.get("book_search_kw") or "").strip() or store,
-                               items=[{"short": f"「{title}」", "link": link}] if link else None)
-
-
-def book_disclosure_short() -> str:
-    """화면 위쪽 작은 제휴 표시 (알라딘 링크가 있을 때만)"""
-    from core.shorts_meta import shop_link_kind
-    link = (st.session_state.get("book_link") or "").strip()
-    if not link:
-        return ""
-    return "알라딘 제휴 링크 포함 · 도서 구매 시 수수료를 받을 수 있어요" if shop_link_kind(link) == "aladin" \
-        else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요"
+    """시골책방 첫 댓글 (core/pipeline.book_comment)"""
+    return pipeline.book_comment(pipeline.JobSpec(
+        mode="book", name=(st.session_state.get("book_store") or "").strip(),
+        book_title=st.session_state.get("book_title") or "", book_link=st.session_state.get("book_link") or "",
+        book_search_kw=st.session_state.get("book_search_kw") or ""), copy)
 
 
 def bundle_disclosure_short(items: list) -> str:
-    """화면·설명란용 짧은 제휴 표시: 쿠팡 링크가 있으면 쿠팡 파트너스 문구, 아니면 일반 제휴 문구"""
-    from core.shorts_meta import shop_link_kind
-    kinds = {shop_link_kind(it["link"]) for it in items if it.get("link")}
-    if kinds == {"coupang"} or not kinds:
-        return COUPANG_DISCLOSURE
-    return ("쿠팡 파트너스·제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요" if "coupang" in kinds
-            else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요")
+    """화면·설명란용 짧은 제휴 표시 (core/pipeline.disclosure_short)"""
+    return pipeline.disclosure_short(pipeline.JobSpec(mode="commerce", layout="bundle", bundle_items=items)) or ""
 
 
 def bundle_items_now() -> list:
@@ -1025,6 +979,25 @@ with col_plan_desc:
     else:
         st.caption(f"모드: **{production_mode}** | 스타일: **{script_style_options[selected_script_style]}** | **{selected_tone_label}** | 성우: **{selected_actor_label}**")
 
+def current_spec(bgm_path=None) -> pipeline.JobSpec:
+    """지금 화면 입력값 → 공용 제작 엔진 입력 (캘린더 스케줄러는 같은 JobSpec을 일정 설명란에서 채움)"""
+    ss = st.session_state
+    return pipeline.JobSpec(
+        mode=pipeline_mode, name=product_name, usp=usp_desc, media_paths=list(ss.uploaded_paths),
+        num_scenes=DURATION_PRESETS[selected_duration]["default_scenes"] + 1,
+        business_type=business_type, search_keyword=owner_search_kw, reading=ss.get("owner_reading", ""),
+        address=ss.get("owner_address", ""), brand=brand_cfg,
+        layout=ss.get("commerce_layout", "single"), link=ss.get("affiliate_link", ""),
+        product_boxes=ss.get("product_boxes", {}), bundle_theme=ss.get("bundle_theme", ""),
+        bundle_bottom=ss.get("bundle_bottom", ""), bundle_items=bundle_items_now() if is_bundle else [],
+        book_title=ss.get("book_title", ""), book_author=ss.get("book_author", ""), book_quote=ss.get("book_quote", ""),
+        book_link=ss.get("book_link", ""), book_search_kw=ss.get("book_search_kw", ""),
+        book_photo_count=ss.get("book_photo_count", 1), book_template=ss.get("book_template", "basic"),
+        affiliate_program=ss.get("affiliate_program", ""),
+        voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
+        api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)
+
+
 # 원클릭(쇼핑): 콘티 없이 '영상 만들기'를 누르면 기획부터 자동으로 하고 이어서 렌더
 auto_flow = bool(st.session_state.pop("auto_plan_then_render", False))
 if generate_plan_btn or auto_flow:
@@ -1036,70 +1009,14 @@ if generate_plan_btn or auto_flow:
     }[pipeline_mode]
     with st.spinner(plan_spinner_msg):
         try:
-            if is_owner_mode and not product_name.strip():
-                raise ValueError("상호명을 입력해 주세요.")
-            if not is_owner_mode and not is_bundle and not is_book_mode and not product_name.strip():
-                raise ValueError("숙소명(또는 상품명)을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
+            if is_travel_mode and not product_name.strip():
+                raise ValueError("숙소명을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
             # 여행 모드: 크롤링 사진 인벤토리를 넘겨 실제 없는 시설을 대본에 쓰지 못하게 함
             photo_inventory = None
             travel_photo_first = is_travel_mode and bool(st.session_state.get("image_pool")) and not st.session_state.uploaded_paths
-            if is_owner_mode:
-                # 트랙 B: 업로드 미디어를 보고 씬 구성, 상호명 보존, 네이버 검색 CTA
-                scenes = plan_owner_storyboard(
-                    business_name=product_name,
-                    usp=usp_desc,
-                    business_type=business_type,
-                    search_keyword=owner_search_kw,
-                    media_paths=st.session_state.uploaded_paths,
-                    num_scenes=DURATION_PRESETS[selected_duration]["default_scenes"] + 1,
-                    api_key=api_key,
-                    mock=mock_mode,
-                    thumb_dir=current_job().assets_dir,
-                    output_plan_path=current_job().plan_path,
-                    hook_hints=hook_hints,
-                )
-            elif is_book_mode:
-                # 시골책방: 한 권 깊게 (훅 → 이런 날 이 책 → 책 속 한 문장 → 책방 분위기 → CTA), 문장은 입력 원문만
-                scenes = plan_book_storyboard(
-                    store_name=st.session_state.get("book_store", ""),
-                    book_title=st.session_state.get("book_title", ""),
-                    author=st.session_state.get("book_author", ""),
-                    book_info=st.session_state.get("book_info", ""),
-                    quote=st.session_state.get("book_quote", ""),
-                    media_paths=st.session_state.uploaded_paths,
-                    book_photo_count=st.session_state.get("book_photo_count", 1),
-                    template=st.session_state.get("book_template", "basic"),
-                    api_key=api_key,
-                    mock=mock_mode,
-                    thumb_dir=current_job().assets_dir,
-                    output_plan_path=current_job().plan_path,
-                )
-            elif is_bundle:
-                # 쇼핑 3단 묶음 큐레이션: 훅 3초 → 상품 1·2·3 각 7초 → 구매 좌표 CTA 3초 (상품별 사진·USP만 근거)
-                scenes = plan_bundle_storyboard(
-                    theme=st.session_state.get("bundle_theme", ""),
-                    items=bundle_items_now(),
-                    media_paths=st.session_state.uploaded_paths,
-                    api_key=api_key,
-                    mock=mock_mode,
-                    thumb_dir=current_job().assets_dir,
-                    output_plan_path=current_job().plan_path,
-                )
-            elif is_commerce_mode:
-                # 트랙 A 쇼핑 제휴: 실물 상품 사진을 보고 '써 본 사람' 리뷰 썰 대본, 효능·수치는 판매 페이지 근거만
-                if not st.session_state.uploaded_paths and not mock_mode:
-                    raise ValueError("상품 사진이 없습니다. 판매 페이지 링크를 크롤링하거나 상품 사진을 직접 올려 주세요.")
-                scenes = plan_commerce_storyboard(
-                    product_name=product_name,
-                    usp=usp_desc,
-                    media_paths=st.session_state.uploaded_paths,
-                    num_scenes=DURATION_PRESETS[selected_duration]["default_scenes"] + 1,
-                    api_key=api_key,
-                    mock=mock_mode,
-                    thumb_dir=current_job().assets_dir,
-                    output_plan_path=current_job().plan_path,
-                    product_boxes=st.session_state.get("product_boxes", {}),
-                )
+            if pipeline_mode in pipeline.PIPELINE_MODES:
+                # 사장님·쇼핑(단일/묶음)·시골책방: 공용 제작 엔진이 기획 + 씬 사진 배정 (캘린더 스케줄러와 같은 코드)
+                scenes = pipeline.plan(current_spec(), current_job())
             elif travel_photo_first:
                 # 트랙 A 숙소 제휴: 사진 풀 비전 분류 → 7씬 비율 슬롯에 사진 배정 → 실제 사진 설명 기반 대본
                 with st.spinner("👁️ 사진을 비전으로 분류해 씬 비율(수영장3·객실2·부대시설2)에 배정하고 대본을 쓰는 중..."):
@@ -1142,13 +1059,10 @@ if generate_plan_btn or auto_flow:
             st.session_state.storyboard_mode = pipeline_mode
             st.session_state.storyboard_layout = st.session_state.commerce_layout if is_commerce_mode else ""
 
-            # [씬별 에셋 배정] 업로드 미디어 우선 배정 → (숙소 제휴) 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
-            if (is_commerce_mode or is_book_mode) and scenes and all(s.get("source_path") for s in scenes):
-                # 쇼핑: Gemini 비전이 고른 컷(전체 소개 → 기능·디테일 → 실사용/마무리)대로 1:1 배정 (앵글·상품 위치 포함)
-                for s in scenes:
-                    assign_media_to_scene(s, s["source_path"], "matched")
-            elif uses_scene_media:
-                assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths, cycle=is_commerce_mode)
+            # [씬별 에셋 배정] 엔진 모드는 plan()에서 배정 완료. 숙소 제휴: 업로드 우선 → 나머지 씬만 핀포인트 매칭
+            if uses_scene_media:
+                if pipeline_mode not in pipeline.PIPELINE_MODES:
+                    assign_uploads_to_scenes(scenes, st.session_state.uploaded_paths, cycle=False)
                 pending = [s for s in scenes if not scene_has_media(s)]
                 if is_travel_mode and pending and st.session_state.get("image_pool"):
                     with st.spinner("🎯 씬별 최적 사진을 매칭하고 비전 검증 중 (자판기·복도·외벽 등 자동 탈락)..."):
@@ -1410,133 +1324,18 @@ if render_btn:
         progress_bar = st.progress(0, text="파이프라인 초기화 중...")
 
         try:
-            # 1. 에셋 생성기 초기화 (UI 선택 성우 값 정상 전달 보장)
-            chosen_actor = st.session_state.get("selected_actor", selected_actor)
-            print(f"[app.py] AI 성우 전달 확인: label='{selected_actor_label}', key='{chosen_actor}'")
-            asset_gen = AssetGenerator(
-                gemini_api_key=api_key,
-                voice_actor=chosen_actor,
-                audio_mode=selected_audio_mode,
-                mock=mock_mode,
-                mode=pipeline_mode,
-                cache_dir=current_job().assets_dir,
-                readings=owner_readings(product_name, st.session_state.get("owner_reading", "")) if is_owner_mode else None
-            )
-
-            manifest = []
-            total_scenes = len(scenes)
-            generated_imgs = []
-
-            # 2. 씬별 에셋: 사진 배정(씬 순서) → 음성(여러 씬 동시, 네트워크 대기) → 영상 클립(음성 길이 = 모션 길이)
-            pending = []
-            for idx, scene in enumerate(scenes):
-                s_num = int(scene.get("scene_index") or scene.get("scene_number") or (idx + 1))
-                scene["scene_index"] = s_num
-                scene["scene_number"] = s_num
-                # 여행 상품 모드: 핀포인트 다운로드된 씬 에셋 1:1 매핑 (rembg 누끼 연산 100% 바이패스)
-                g_cut = scene.get("image_path") if uses_scene_media else None
-                if g_cut and not os.path.exists(g_cut):
-                    g_cut = None
-                img_path = asset_gen.generate_image(scene, force=force_render, gallery_image_path=g_cut)
-                generated_imgs.append(img_path)
-                pending.append((scene, s_num, img_path))
-
-            progress_bar.progress(5, text=f"씬 {total_scenes}개 나레이션 동시 생성 중...")
-            audio_paths = asset_gen.generate_voices(
-                [sc for sc, _, _ in pending], force=force_render,
-                on_done=lambda d, n: progress_bar.progress(5 + int(d / n * 25), text=f"나레이션 {d}/{n} 완료..."))
-
-            for idx, ((scene, s_num, img_path), audio_path) in enumerate(zip(pending, audio_paths)):
-                gen_step_text = (
-                    f"[{idx+1}/{total_scenes}] 씬 {s_num} 풍경 영상 생성 중..."
-                    if is_travel_mode
-                    else f"[{idx+1}/{total_scenes}] 씬 {s_num} 영상 생성 중..."
-                )
-                progress_bar.progress(30 + int((idx / total_scenes) * 40), text=gen_step_text)
-
-                # 비디오 생성 (업로드 영상이면 UGC 정규화 클립, 아니면 로컬 2D Ken Burns 모션 - 외부 비디오 API 차단)
-                video_path = asset_gen.generate_video(scene, img_path, force=force_render)
-
-                item = dict(scene)
-                item["scene_index"] = s_num
-                item["scene_number"] = s_num
-                item["image_path"] = img_path
-                item["audio_path"] = audio_path
-                item["video_path"] = video_path
-                # 음성과 자막 100% 일치 보장
-                vo_sync = (scene.get("voiceover") or scene.get("subtitle") or scene.get("caption") or "").strip()
-                item["voiceover"] = vo_sync
-                item["subtitle"] = vo_sync
-                item["caption"] = vo_sync
-                manifest.append(item)
-
-            st.session_state.generated_images = generated_imgs
-
-            # 3. 타임라인 조립 & 자막 합성 (Compositor)
-            progress_bar.progress(75, text="타임라인 조립, 상단 후킹 바 및 볼드 자막 오버레이 렌더링 중...")
-            importlib.reload(core.compositor)
-            from core.compositor import AdCompositor
-            compositor = AdCompositor(output_dir=current_job().final_dir)
-
-            # 썸네일: 씬 1 화면(자막 없는 원본 컷)에 후킹 타이틀 → final_thumb.png + 영상 첫 0.3초 화면
-            thumb_path = None
-            try:
-                from moviepy.editor import VideoFileClip
-                with VideoFileClip(manifest[0]["video_path"]) as _v1:
-                    first_frame = _v1.get_frame(0)
-                hook_text = (scenes[0].get("hook_title") or "").strip() if scenes else ""
-                # 업로드 제목·썸네일 카피 (손실 회피·호기심형, 근거 없는 사실 주장은 USP에 있을 때만)
-                # 떡상 레이더 다이제스트(주기 수집 → DB 캐시)를 업로드 카피 생성의 필수 맥락으로 자동 주입
-                radar_trend = digest_for(pipeline_mode, business_type)
-                _usp_items = [s.strip() for s in re.split(r"[,/·\n]", usp_desc or "") if s.strip()]
-                _bundle_title = (scenes[0].get("bundle_title") or "") if is_bundle and scenes else ""
-                _book_fable = is_book_mode and scenes and (scenes[0].get("book") or {}).get("template") == "fable"
-                shorts_copy = make_shorts_copy(
-                    pipeline_mode, hook=hook_text, usp=usp_desc, product_name=_bundle_title or product_name, api_key=api_key, mock=mock_mode,
-                    trend=radar_trend,
-                    signature=(("마음을 다독이는 책" if _book_fable else st.session_state.get("book_title", "").strip())
-                               if is_book_mode else _usp_items[0] if _usp_items else ""),
-                    hidden_terms=([st.session_state.get("book_title", ""), st.session_state.get("book_author", "")]
-                                  if _book_fable else None),
-                    region=region_of(st.session_state.get("owner_address", "")) if is_owner_mode else "")
-                st.session_state.shorts_copy = shorts_copy
-                thumb_path = compositor.render_thumbnail(first_frame, shorts_copy["thumb_main"],
-                                                         os.path.join(current_job().final_dir, "final_thumb.png"),
-                                                         sub_text=shorts_copy["thumb_sub"], accent=shorts_copy["accent"])
-            except Exception as te:
-                logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {te}")
-
-            final_mp4 = compositor.assemble_ad(
-                asset_manifest=manifest,
-                output_filename="final.mp4",
-                fps=24,
-                audio_mode=selected_audio_mode,
-                mode=pipeline_mode,
-                brand=brand_cfg,
-                label=(scenes[0].get("book") or {}).get("label") if is_book_mode and scenes else None,
-                disclosure=(book_disclosure_short() if is_book_mode
-                            else bundle_disclosure_short(bundle_items_now()) if is_bundle
-                            else COUPANG_DISCLOSURE if is_commerce_mode
-                            else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
-                bars=((scenes[0].get("bundle_title") or "", st.session_state.get("bundle_bottom") or DEFAULT_BOTTOM_BAR)
-                      if is_bundle and scenes else None),
-                intro_image=thumb_path,
-                bgm_path=bgm_mod.pick_track(bgm_choice) if bgm_on else None,
-            )
-            if bgm_on and compositor.last_bgm_error:
-                st.warning(f"BGM을 섞지 못해 BGM 없이 저장했어요: {compositor.last_bgm_error}")
-            st.session_state.bgm_status = {"on": bgm_on, "info": compositor.last_bgm_info, "error": compositor.last_bgm_error}
-            logger.info(f"BGM 상태: {'켜짐' if bgm_on else '꺼짐'} → {compositor.last_bgm_info or compositor.last_bgm_error or '적용 안 함'}")
-            st.session_state.thumb_path = thumb_path
-            current_job().save_plan(scenes)
+            # 공용 제작 엔진: 음성(동시) → 클립 → 썸네일·업로드 카피 → 조립(자막·제휴 표시·고정 바·라벨·BGM)
+            res = pipeline.render(current_spec(bgm_path=bgm_mod.pick_track(bgm_choice) if bgm_on else None), current_job(),
+                                  scenes, progress=lambda pct, text: progress_bar.progress(pct, text=text), force=force_render)
+            st.session_state.generated_images = res.generated_images
+            st.session_state.shorts_copy = res.shorts_copy
+            if bgm_on and res.bgm.get("error"):
+                st.warning(f"BGM을 섞지 못해 BGM 없이 저장했어요: {res.bgm['error']}")
+            st.session_state.bgm_status = res.bgm
+            st.session_state.thumb_path = res.thumb_path
             if is_book_mode:
-                # 업로드 연결 전: 첫 댓글 텍스트를 대기열(outputs/youtube/comment_drafts.json)에 바로 저장
-                from core.youtube_upload import queue_comment_draft
-                st.session_state.book_comment = book_comment_text(st.session_state.get("shorts_copy"))
-                queue_comment_draft("book", final_mp4, st.session_state.book_comment, job_id=current_job().job_id)
-
-            progress_bar.progress(100, text="✨ 렌더링 완료!")
-            st.session_state.final_video_path = final_mp4
+                st.session_state.book_comment = res.comment     # 렌더 직후 대기열에도 저장됨 (업로드 연결 전)
+            st.session_state.final_video_path = res.final_path
             st.success("🎉 최종 숏폼 영상이 성공적으로 제작되었습니다!")
 
         except Exception as re:

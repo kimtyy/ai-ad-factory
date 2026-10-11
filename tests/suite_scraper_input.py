@@ -80,5 +80,8 @@ for rel in ("app.py", "main.py", os.path.join("core", "scraper.py")):
     leaks += [f"{rel}: {f}" for f in FABRICATED if f in text]
 check(not leaks, f"앱·CLI·크롤러에 가짜 상품명/특장점 기본값 없음 {leaks or ''}")
 app_src = open(os.path.join(ROOT, "app.py"), encoding="utf-8").read()
-check('raise ValueError("숙소명(또는 상품명)을 입력해 주세요.' in app_src, "이름이 비어 있으면 기획 단계에서 입력 요청 (빈 이름으로 대본 생성 안 함)")
+pipe_src = open(os.path.join(ROOT, "core", "pipeline.py"), encoding="utf-8").read()
+check('raise ValueError("숙소명을 입력해 주세요.' in app_src and 'raise ValueError("상품명을 입력해 주세요.' in pipe_src
+      and 'raise ValueError("상호명을 입력해 주세요.")' in pipe_src,
+      "이름이 비어 있으면 기획 단계에서 입력 요청 (빈 이름으로 대본 생성 안 함: 숙소는 화면, 사장님·쇼핑은 공용 엔진)")
 finish(fails)
