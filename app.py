@@ -59,6 +59,8 @@ from core.radar.trends import digest_for
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
+from core.planners.commerce_bundle import (BUNDLE_SIZE, DEFAULT_BOTTOM_BAR, bundle_title_ok, plan_bundle_storyboard,
+                                           short_name as bundle_short_name)
 from core.planners.travel import plan_travel_storyboard
 from core.radar.hints import load_hook_hints, vertical_for
 from core.radar.hooks import HOOK_TYPE_KO
@@ -368,7 +370,8 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "product_name_input", "product_usp_input",
+           "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
+           *[f"bundle_{f}_{k}" for f in ("name", "usp", "link") for k in range(3)],
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
@@ -655,6 +658,39 @@ if crawl_btn:
                 if scraped.get("affiliate_link"):
                     st.info(f"🔗 제휴 링크는 만들어 두었어요: {scraped['affiliate_link']} (영상 설명·고정 댓글용)")
 
+# 쇼핑 영상 구성: 단일 상품 / 3단 묶음 큐레이션 (상품 3개를 30초 안에)
+BUNDLE_LAYOUTS = {"single": "🛍️ 단일 상품", "bundle": f"🧺 {BUNDLE_SIZE}단 묶음 큐레이션 (상품 {BUNDLE_SIZE}개 · 30초)"}
+st.session_state.setdefault("commerce_layout", "single")
+st.session_state.setdefault("bundle_bottom", DEFAULT_BOTTOM_BAR)
+for _k in range(BUNDLE_SIZE):
+    st.session_state.setdefault(f"bundle_media_{_k}", [])
+if is_commerce_mode:
+    st.radio("쇼핑 영상 구성", list(BUNDLE_LAYOUTS), format_func=BUNDLE_LAYOUTS.get, key="commerce_layout", horizontal=True)
+is_bundle = is_commerce_mode and st.session_state.commerce_layout == "bundle"
+
+
+def bundle_disclosure_short(items: list) -> str:
+    """화면·설명란용 짧은 제휴 표시: 쿠팡 링크가 있으면 쿠팡 파트너스 문구, 아니면 일반 제휴 문구"""
+    from core.shorts_meta import shop_link_kind
+    kinds = {shop_link_kind(it["link"]) for it in items if it.get("link")}
+    if kinds == {"coupang"} or not kinds:
+        return COUPANG_DISCLOSURE
+    return ("쿠팡 파트너스·제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요" if "coupang" in kinds
+            else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요")
+
+
+def bundle_items_now() -> list:
+    """묶음 상품 입력칸 현재 값 [{name, short, usp, link, media}] (이름이 빈 칸 포함, 순서 = 상품 1·2·3)"""
+    out = []
+    for k in range(BUNDLE_SIZE):
+        name = (st.session_state.get(f"bundle_name_{k}") or "").strip()
+        out.append({"name": name, "short": bundle_short_name(name) if name else "",
+                    "usp": (st.session_state.get(f"bundle_usp_{k}") or "").strip(),
+                    "link": (st.session_state.get(f"bundle_link_{k}") or "").strip(),
+                    "media": list(st.session_state.get(f"bundle_media_{k}") or [])})
+    return out
+
+
 # 쿠팡 상품 검색 (파트너스 공식 API): 상품명·고해상도 대표 사진·파트너스 링크를 한 번에
 if is_commerce_mode and CoupangPartners().enabled:
     with st.expander("🔎 쿠팡 상품 검색 (파트너스 공식 API)", expanded=not st.session_state.uploaded_paths):
@@ -680,7 +716,26 @@ if is_commerce_mode and CoupangPartners().enabled:
                 price = f"{int(item['price']):,}원" if str(item.get("price") or "").isdigit() else ""
                 st.markdown(f"**{html.escape(item['name'])}**  \n{price}{' · 로켓배송' if item.get('is_rocket') else ''}")
             with c_btn:
-                if st.button("이 상품 사용", key=f"coupang_pick_{item['product_id']}_{item['image_url'][-12:]}", use_container_width=True):
+                if is_bundle and st.button("묶음에 추가", key=f"coupang_add_{item['product_id']}_{item['image_url'][-12:]}",
+                                           use_container_width=True):
+                    slot = next((k for k in range(BUNDLE_SIZE) if not (st.session_state.get(f"bundle_name_{k}") or "").strip()), None)
+                    if slot is None:
+                        st.warning(f"묶음 {BUNDLE_SIZE}칸이 다 찼어요. 아래 묶음 상품 칸에서 하나를 비운 뒤 다시 눌러 주세요.")
+                    else:
+                        imgs = core.scraper.download_product_images([{"url": item["image_url"]}], current_job().assets_dir, None,
+                                                                    prefix=f"bundle{slot + 1}")     # 상품끼리 덮어쓰지 않게
+                        st.session_state[f"bundle_name_{slot}"] = item["name"]
+                        st.session_state[f"bundle_link_{slot}"] = (cp_client.deeplink(f"https://www.coupang.com/vp/products/{item['product_id']}")
+                                                                   or item["partner_url"])
+                        st.session_state[f"bundle_media_{slot}"] = imgs
+                        st.session_state.uploaded_paths = list(dict.fromkeys(st.session_state.uploaded_paths + imgs))
+                        if not mock_mode and imgs:
+                            pts = analyze_product_photo(item["name"], imgs[0], api_key)["points"]
+                            st.session_state[f"bundle_usp_{slot}"] = ", ".join(pts)
+                        st.session_state.storyboard = []
+                        st.toast(f"상품 {slot + 1}에 추가했어요: {bundle_short_name(item['name'])}", icon="🧺")
+                        st.rerun()
+                if not is_bundle and st.button("이 상품 사용", key=f"coupang_pick_{item['product_id']}_{item['image_url'][-12:]}", use_container_width=True):
                     # 같은 상품 번호의 검색 결과(옵션·판매처별)에 다른 이미지가 있으면 모두 모음 (파트너스 API는 상품당 대표 이미지 1장)
                     same = [it["image_url"] for it in st.session_state.coupang_results if it["product_id"] == item["product_id"]]
                     start_new_job(source_url=item["partner_url"], mode="commerce")
@@ -801,6 +856,30 @@ if is_owner_mode:
     if tricky_name and not st.session_state.get("owner_reading", "").strip():
         st.caption("💡 상호명에 영문·숫자가 있어요. 성우가 철자로 읽을 수 있으니 '읽는 법'에 한글 발음을 적어 주시면 깔끔해요.")
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
+elif is_bundle:
+    st.markdown(f"##### 🧺 묶음 상품 {BUNDLE_SIZE}개 (판매 페이지에 있는 사실만 · 링크는 쿠팡 파트너스/스마트스토어 제휴 링크)")
+    b1, b2 = st.columns([1, 1])
+    with b1:
+        st.text_input("묶음 주제 (상단 타이틀 바 재료)", key="bundle_theme", placeholder="예: 자취생 삶의 질")
+    with b2:
+        st.text_input("하단 구매 안내 바 (영상 내내 고정)", key="bundle_bottom")
+        _bad_bar = bundle_title_ok(st.session_state.bundle_bottom)
+        if _bad_bar and _bad_bar != "빈 값":
+            st.warning(f"⚠️ '{_bad_bar}'는 판매 페이지 근거가 있을 때만 쓸 수 있어요 (표시광고법·제휴 정책). 근거 없이 쓰면 계정 정지 사유예요.")
+    for _k in range(BUNDLE_SIZE):
+        c_n, c_u, c_l = st.columns([1.3, 1.6, 1.4])
+        with c_n:
+            st.text_input(f"상품 {_k + 1} 이름", key=f"bundle_name_{_k}", placeholder="쿠팡 검색 → [묶음에 추가] 또는 직접 입력")
+        with c_u:
+            st.text_input(f"상품 {_k + 1} 특징 (USP)", key=f"bundle_usp_{_k}", placeholder="예: 무선, 500g")
+        with c_l:
+            st.text_input(f"상품 {_k + 1} 구매 링크", key=f"bundle_link_{_k}", placeholder="https://link.coupang.com/...")
+        if st.session_state.get(f"bundle_media_{_k}"):
+            st.caption(f"📸 상품 {_k + 1} 사진: 쿠팡 대표 사진 {len(st.session_state[f'bundle_media_{_k}'])}장")
+    st.caption("💡 사진은 쿠팡 검색으로 추가하면 상품별로 자동 연결돼요. 직접 올리면 올린 순서대로 사진이 없는 상품 1·2·3에 나눠 배정됩니다.")
+    _items = bundle_items_now()
+    product_name = st.session_state.get("bundle_theme", "").strip() or "묶음 큐레이션"
+    usp_desc = ", ".join(it["usp"] for it in _items if it["usp"])
 else:
     # 예시 문구는 placeholder로만 보여 주고 값으로 넣지 않음 (예전 기본값 '파노라마 오션뷰…'가 그대로 대본 근거로 쓰였음)
     col_prod, col_usp = st.columns([1, 2])
@@ -881,7 +960,7 @@ if generate_plan_btn or auto_flow:
         try:
             if is_owner_mode and not product_name.strip():
                 raise ValueError("상호명을 입력해 주세요.")
-            if not is_owner_mode and not product_name.strip():
+            if not is_owner_mode and not is_bundle and not product_name.strip():
                 raise ValueError("숙소명(또는 상품명)을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
             # 여행 모드: 크롤링 사진 인벤토리를 넘겨 실제 없는 시설을 대본에 쓰지 못하게 함
             photo_inventory = None
@@ -900,6 +979,17 @@ if generate_plan_btn or auto_flow:
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
                     hook_hints=hook_hints,
+                )
+            elif is_bundle:
+                # 쇼핑 3단 묶음 큐레이션: 훅 3초 → 상품 1·2·3 각 7초 → 구매 좌표 CTA 3초 (상품별 사진·USP만 근거)
+                scenes = plan_bundle_storyboard(
+                    theme=st.session_state.get("bundle_theme", ""),
+                    items=bundle_items_now(),
+                    media_paths=st.session_state.uploaded_paths,
+                    api_key=api_key,
+                    mock=mock_mode,
+                    thumb_dir=current_job().assets_dir,
+                    output_plan_path=current_job().plan_path,
                 )
             elif is_commerce_mode:
                 # 트랙 A 쇼핑 제휴: 실물 상품 사진을 보고 '써 본 사람' 리뷰 썰 대본, 효능·수치는 판매 페이지 근거만
@@ -956,6 +1046,7 @@ if generate_plan_btn or auto_flow:
                 )
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
+            st.session_state.storyboard_layout = st.session_state.commerce_layout if is_commerce_mode else ""
 
             # [씬별 에셋 배정] 업로드 미디어 우선 배정 → (숙소 제휴) 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
             if is_commerce_mode and scenes and all(s.get("source_path") for s in scenes):
@@ -1212,6 +1303,10 @@ if render_btn:
         if st.session_state.get("storyboard_mode", pipeline_mode) != pipeline_mode:
             st.error("현재 콘티는 다른 제작 모드로 기획되었습니다. 스토리보드를 다시 기획한 뒤 렌더링해 주세요.")
             st.stop()
+        if is_commerce_mode and st.session_state.get("storyboard_layout", "single") != st.session_state.commerce_layout:
+            st.error(f"현재 콘티는 '{BUNDLE_LAYOUTS.get(st.session_state.get('storyboard_layout'), '다른 구성')}'으로 기획되었습니다. "
+                     "스토리보드를 다시 기획해 주세요.")
+            st.stop()
         if is_owner_mode and not product_name.strip():
             st.error("상호명을 입력해 주세요. 워터마크와 네이버 검색 엔딩 카드에 사용됩니다.")
             st.stop()
@@ -1300,8 +1395,9 @@ if render_btn:
                 # 떡상 레이더 다이제스트(주기 수집 → DB 캐시)를 업로드 카피 생성의 필수 맥락으로 자동 주입
                 radar_trend = digest_for(pipeline_mode, business_type)
                 _usp_items = [s.strip() for s in re.split(r"[,/·\n]", usp_desc or "") if s.strip()]
+                _bundle_title = (scenes[0].get("bundle_title") or "") if is_bundle and scenes else ""
                 shorts_copy = make_shorts_copy(
-                    pipeline_mode, hook=hook_text, usp=usp_desc, product_name=product_name, api_key=api_key, mock=mock_mode,
+                    pipeline_mode, hook=hook_text, usp=usp_desc, product_name=_bundle_title or product_name, api_key=api_key, mock=mock_mode,
                     trend=radar_trend, signature=_usp_items[0] if _usp_items else "",
                     region=region_of(st.session_state.get("owner_address", "")) if is_owner_mode else "")
                 st.session_state.shorts_copy = shorts_copy
@@ -1318,8 +1414,11 @@ if render_btn:
                 audio_mode=selected_audio_mode,
                 mode=pipeline_mode,
                 brand=brand_cfg,
-                disclosure=(COUPANG_DISCLOSURE if is_commerce_mode
+                disclosure=(bundle_disclosure_short(bundle_items_now()) if is_bundle
+                            else COUPANG_DISCLOSURE if is_commerce_mode
                             else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
+                bars=((scenes[0].get("bundle_title") or "", st.session_state.get("bundle_bottom") or DEFAULT_BOTTOM_BAR)
+                      if is_bundle and scenes else None),
                 intro_image=thumb_path,
                 bgm_path=bgm_mod.pick_track(bgm_choice) if bgm_on else None,
             )
@@ -1366,7 +1465,14 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         else:
             st.info("🔇 BGM 꺼짐 · 넣으려면 렌더 버튼 옆 '🎵 BGM 사용'을 켜고 다시 만들어 주세요. "
                     "(BGM 없이 올릴 땐 플랫폼 추천 트렌딩 음원을 태그해 보세요)")
-        if is_commerce_mode:
+        if is_bundle:
+            from core.shorts_meta import build_first_comment
+            st.markdown("**📝 고정 댓글용 구매 좌표 + 제휴 고지** (상품별 링크 · 쿠팡 파트너스/스마트스토어 고지 자동)")
+            post_text = build_first_comment("commerce", "", None, items=bundle_items_now())
+            st.code(post_text or "(묶음 상품 칸에 구매 링크를 넣어 주세요)", language=None)
+            if post_text:
+                copy_button(post_text, "📋 구매 좌표+고지 원클릭 복사", key="copy_bundle")
+        elif is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
             post_text = f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: {link}"
@@ -1386,16 +1492,19 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                 st.warning("제휴 ID(.env의 AGODA_CID 또는 TRIP_AID·TRIP_SID)가 없어 수익 링크를 만들지 못했어요.")
     with col_meta:
         _ota = st.session_state.get("affiliate_program")
-        _disc = (COUPANG_DISCLOSURE_FULL if is_commerce_mode
+        _disc = ("" if is_bundle            # 묶음: 상품 링크 종류별 고지를 첫 댓글에서 자동으로 붙임
+                 else COUPANG_DISCLOSURE_FULL if is_commerce_mode
                  else ota_disclosure_full(_ota) if is_travel_mode and _ota else "")
         _sb = st.session_state.get("storyboard") or []
         render_youtube_panel(st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
                              hook=(_sb[0].get("hook_title") or "") if _sb else "",
-                             link=st.session_state.get("affiliate_link", "") if not is_owner_mode else "",
+                             link=st.session_state.get("affiliate_link", "") if not (is_owner_mode or is_bundle) else "",
                              disclosure=_disc, business_name=product_name,
                              search_kw=owner_search_kw if is_owner_mode else "",
                              copy=st.session_state.get("shorts_copy"),
-                             disclosure_short=(COUPANG_DISCLOSURE if is_commerce_mode
+                             items=bundle_items_now() if is_bundle else None,
+                             disclosure_short=(bundle_disclosure_short(bundle_items_now()) if is_bundle
+                                               else COUPANG_DISCLOSURE if is_commerce_mode
                                                else "※ " + OTA_DISCLOSURE if is_travel_mode and _ota else ""))
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:

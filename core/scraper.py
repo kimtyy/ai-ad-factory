@@ -270,8 +270,11 @@ PRODUCT_IMAGE_MIN_SIDE = 400
 
 
 def download_product_images(candidates: List[Dict[str, Any]], output_dir: str, referer: Optional[str],
-                            limit: int = COMMERCE_MAX_IMAGES) -> List[str]:
-    """상품 사진 후보를 순서대로 받아 실물 사진만 저장 (작은 아이콘·가로 배너·중복 제외). 저장 경로 목록 반환"""
+                            limit: int = COMMERCE_MAX_IMAGES, prefix: str = "product") -> List[str]:
+    """
+    상품 사진 후보를 순서대로 받아 실물 사진만 저장 (작은 아이콘·가로 배너·중복 제외). 저장 경로 목록 반환
+    prefix: 파일 이름 앞부분 (묶음 큐레이션은 상품마다 달리 줘야 같은 폴더에서 서로 덮어쓰지 않음)
+    """
     os.makedirs(output_dir, exist_ok=True)
     saved, seen = [], set()
     for cand in candidates:
@@ -293,7 +296,7 @@ def download_product_images(candidates: List[Dict[str, Any]], output_dir: str, r
                 continue
             seen.add(digest)
             ext = ".png" if fmt == "png" else (".webp" if fmt == "webp" else ".jpg")
-            path = os.path.join(output_dir, f"product_{len(saved) + 1:02d}{ext}")
+            path = os.path.join(output_dir, f"{prefix}_{len(saved) + 1:02d}{ext}")
             with open(path, "wb") as f:
                 f.write(data)
             saved.append(os.path.abspath(path))

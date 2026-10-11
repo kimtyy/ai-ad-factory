@@ -24,7 +24,8 @@ TAGS = {   # 업로드 메타데이터 tags (검색용, 화면에 안 보임)
 
 
 def default_texts(mode: str, copy: Optional[Dict[str, Any]], link: str, disclosure_full: str, disclosure_short: str = "",
-                  business_name: str = "", search_kw: str = "", hook: str = "") -> Dict[str, str]:
+                  business_name: str = "", search_kw: str = "", hook: str = "",
+                  items: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
     """
     copy(core.shorts_meta.make_shorts_copy 결과) → 제목·설명·첫 댓글 기본값
     설명: 【제목】 / 제휴 고지(짧게) / 📌 첫 댓글 안내 / 해시태그 5~7개. 링크와 전체 고지는 첫 댓글에
@@ -34,13 +35,15 @@ def default_texts(mode: str, copy: Optional[Dict[str, Any]], link: str, disclosu
     desc = build_shorts_description(mode, title, copy["hashtags"], disclosure_short)
     comment = build_first_comment(mode, copy.get("comment_question", ""), copy.get("hashtags"),
                                   search_keyword=search_kw or (business_name if mode == "owner" else ""),
-                                  link=link, disclosure_full=disclosure_full)
+                                  link=link, disclosure_full=disclosure_full, items=items)
     return {"title": title[:yu.TITLE_MAX], "desc": desc, "comment": comment}
 
 
 def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, hook: str, link: str,
                          disclosure: str, business_name: str = "", search_kw: str = "",
-                         copy: Optional[Dict[str, Any]] = None, disclosure_short: str = "") -> None:
+                         copy: Optional[Dict[str, Any]] = None, disclosure_short: str = "",
+                         items: Optional[List[Dict[str, str]]] = None) -> None:
+    """items: 쇼핑 묶음 큐레이션 상품 [{name, short, link}] → 첫 댓글에 상품별 구매 좌표 + 링크 종류별 제휴 고지"""
     radar = (copy or {}).get("radar")
     if radar:
         pt = radar.get("pattern")
@@ -79,7 +82,7 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
 
     # 영상이 바뀌면 입력 칸도 새로 (위젯 키에 영상 경로·수정 시각을 섞음)
     tag = hashlib.md5(f"{video_path}:{os.path.getmtime(video_path)}".encode()).hexdigest()[:8]
-    d = default_texts(mode, copy, link, disclosure, disclosure_short, business_name, search_kw, hook)
+    d = default_texts(mode, copy, link, disclosure, disclosure_short, business_name, search_kw, hook, items=items)
     title = st.text_input("제목 (#Shorts 자동 추가)", value=d["title"], max_chars=yu.TITLE_MAX, key=f"yt_title_{tag}")
     desc = st.text_area("설명란", value=d["desc"], height=170, key=f"yt_desc_{tag}")
     comment = st.text_area("첫 댓글 (업로드 직후 채널 계정으로 자동 등록 · 참여 질문 + 안내·링크 + 해시태그)", value=d["comment"],
@@ -90,6 +93,10 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
                        key=f"yt_privacy_{tag}", help="처음에는 비공개로 올려 확인한 뒤 스튜디오에서 공개로 바꾸는 것을 권장해요.")
     if mode in ("travel", "commerce") and link and link not in comment:
         st.warning("첫 댓글에 제휴 링크가 빠져 있어요 (설명란이 '첫 번째 댓글 확인' 안내로 바뀌었어요).")
+    missing = [it.get("short") or it.get("name") for it in (items or []) if not (it.get("link") or "").strip()
+               or it["link"].strip() not in comment]
+    if missing:
+        st.warning(f"첫 댓글에 구매 링크가 빠진 상품이 있어요: {', '.join(missing)} (위 묶음 상품 칸에 링크를 넣어 주세요).")
     if mode in ("travel", "commerce") and link and not any(w in desc for w in ("수수료", "파트너스", "제휴")):
         st.warning("설명란 첫 부분에 제휴 고지 문구(공정위 추천·보증 심사지침)가 빠져 있어요.")
 

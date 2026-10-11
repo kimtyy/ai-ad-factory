@@ -110,13 +110,15 @@ def build_timeline(scene_durations: List[float], xfade: float, card_sec: float =
 
 
 def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24, mode: str = "commerce",
-             brand=None, disclosure: Optional[str] = None, intro_image: Optional[str] = None,
+             brand=None, disclosure: Optional[str] = None, intro_image: Optional[str] = None, bars=None,
              xfade: float = 0.35, intro_sec: float = 0.3, hook_solo_sec: float = 1.5,
              center_modes=("travel", "owner", "commerce")) -> str:
     """
     comp: AdCompositor (create_overlay_image·render_disclosure·font_path 재사용)
     manifest 항목: video_path, audio_path, caption/subtitle/voiceover, hook_title, hook_sec
+    bars: (상단 타이틀, 하단 구매 안내) 쇼핑 묶음 고정 바 → 모든 자막 PNG에 함께 합성 (영상 전체 고정)
     """
+    from core.compositor import BUNDLE_CAPTION_CY     # 순환 import 방지 (compositor가 이 모듈을 부름)
     if not manifest:
         raise FFmpegAssembleError("합성할 씬이 없습니다.")
     t0 = time.time()
@@ -152,13 +154,18 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             segs = [(0.0, dur, caption, hook)]
         pngs = []
         for j, (s, e, cap, hk) in enumerate(segs):
-            if not (cap or hk or brand or disclosure):
+            if not (cap or hk or brand or disclosure or bars):
                 continue
-            layer = Image.fromarray(comp.create_overlay_image(caption_text=cap, hook_title=hk, width=W, height=H, mode=mode)).convert("RGBA")
+            layer = Image.fromarray(comp.create_overlay_image(caption_text=cap, hook_title=hk, width=W, height=H, mode=mode,
+                                                              center_y=BUNDLE_CAPTION_CY if bars else None)).convert("RGBA")
             if brand:
                 if "wm" not in static_layers:
                     static_layers["wm"] = brand.render_watermark(W, H, font_path=comp.font_path)
                 layer.alpha_composite(static_layers["wm"])
+            if bars:
+                if "bars" not in static_layers:
+                    static_layers["bars"] = comp.render_bundle_bars(bars[0], bars[1], W, H)
+                layer.alpha_composite(static_layers["bars"])
             if disclosure:
                 if "disc" not in static_layers:
                     static_layers["disc"] = comp.render_disclosure(disclosure, W, H)

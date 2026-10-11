@@ -358,17 +358,56 @@ def naver_map_link(keyword: str) -> str:
     return NAVER_MAP_SEARCH.format(q=quote((keyword or "").strip())) if (keyword or "").strip() else ""
 
 
+# 쇼핑 제휴 링크 종류 → 공정위 추천·보증 고지 (댓글 끝에 링크 종류별로 한 번씩)
+COUPANG_DISCLOSURE_FULL = "이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+NAVER_DISCLOSURE_FULL = "이 포스팅은 네이버 스마트스토어 제휴 활동의 일환으로, 구매 시 일정액의 수수료를 제공받습니다."
+OTHER_DISCLOSURE_FULL = "이 포스팅은 제휴 마케팅 활동의 일환으로, 구매 시 일정액의 수수료를 제공받습니다."
+SHOP_DISCLOSURES = {"coupang": COUPANG_DISCLOSURE_FULL, "naver": NAVER_DISCLOSURE_FULL, "other": OTHER_DISCLOSURE_FULL}
+NUM_EMOJI = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣")
+
+
+def shop_link_kind(url: str) -> str:
+    """제휴 링크 종류: coupang(쿠팡·쿠팡 파트너스 단축) / naver(스마트스토어·브랜드스토어·naver.me) / other"""
+    host = re.sub(r"^https?://", "", (url or "").strip().lower()).split("/")[0]
+    if host.endswith(("coupang.com", "coupa.ng")):
+        return "coupang"
+    if host.endswith(("smartstore.naver.com", "brand.naver.com", "shopping.naver.com", "naver.me")):
+        return "naver"
+    return "other"
+
+
+def shop_disclosures(links: List[str]) -> List[str]:
+    kinds = list(dict.fromkeys(shop_link_kind(u) for u in links if (u or "").strip()))
+    return [SHOP_DISCLOSURES[k] for k in kinds]
+
+
 def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] = None, *, search_keyword: str = "",
-                        link: str = "", disclosure_full: str = "") -> str:
+                        link: str = "", disclosure_full: str = "", items: Optional[List[Dict[str, str]]] = None) -> str:
     """
     업로드 직후 채널 계정으로 다는 첫 댓글 (고정은 스튜디오에서 한 번):
-    참여 유도 질문 → 사장님: 네이버 검색 안내 + 네이버 지도 링크 / 숙소·쇼핑: 제휴 링크 + 공정위 고지 전문 → 핵심 해시태그 3개
+    참여 유도 질문 → 사장님: 네이버 검색 안내 + 네이버 지도 링크 / 숙소: 제휴 링크 + 고지 전문 /
+    쇼핑: 구매 좌표(묶음이면 상품별 번호 + 링크) + 링크 종류별 고지(쿠팡 파트너스·스마트스토어) → 핵심 해시태그 3개
+    items: 쇼핑 묶음 [{short 또는 name, link}]
     """
     blocks = [question.strip()] if (question or "").strip() else []
     if mode == "owner":
         kw = (search_keyword or "").strip()
         if kw:
             blocks.append(f"📍 네이버에서 '{kw}' 검색하면 위치·영업시간·메뉴를 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+    elif mode == "commerce" and (items or link):
+        rows = [it for it in (items or [{"short": "", "link": link}]) if (it.get("link") or "").strip()]
+        if len(rows) == 1 and not items:
+            lines = [f"🛒 제품 상세 정보·구매 링크: {rows[0]['link'].strip()}"]
+        else:
+            lines = ["🛒 구매 좌표"] + [f"{NUM_EMOJI[k % len(NUM_EMOJI)]} {(it.get('short') or it.get('name') or '').strip()} 👉 "
+                                       f"{it['link'].strip()}".replace("  ", " ") for k, it in enumerate(rows)]
+        discs = shop_disclosures([it["link"] for it in rows])
+        if (disclosure_full or "").strip() and disclosure_full.strip() not in discs:
+            discs.insert(0, disclosure_full.strip())
+        if rows:
+            blocks.append("\n".join(lines))
+        if discs:
+            blocks.append("\n".join(discs))
     elif link:
         what = "숙소 상세 정보·예약" if mode == "travel" else "제품 상세 정보·구매"
         blocks.append(f"🔗 {what} 링크: {link}" + (f"\n{disclosure_full.strip()}" if (disclosure_full or "").strip() else ""))

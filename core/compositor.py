@@ -4,7 +4,7 @@ core/compositor.py - Step 3: MoviePy 기반 비디오-오디오 싱크 매칭, �
 import os
 import re
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -50,6 +50,11 @@ CAPTION_STROKE_RATIO = 0.0065    # 1080px 기준 외곽선 약 7px
 # 제휴 광고 표시(쿠팡 파트너스 등): 화면 위쪽 가장자리 안쪽(쇼츠 상단 아이콘 줄 아래)에 작고 옅게
 DISCLOSURE_Y = 0.085
 DISCLOSURE_FONT_RATIO = 0.027
+# 쇼핑 묶음 큐레이션 고정 바 (높이 대비): 제휴 표시(8.5%) 아래 타이틀 바, 상품 카드(31~71%) 아래 구매 안내 바
+BUNDLE_BAR_X = (0.06, 0.94)
+BUNDLE_TITLE_CY, BUNDLE_TITLE_H = 0.138, 0.058
+BUNDLE_BOTTOM_CY, BUNDLE_BOTTOM_H = 0.752, 0.050
+BUNDLE_CAPTION_CY = 0.235      # 고정 바가 있을 때 씬 자막 중심 (타이틀 바 아래, 상품 카드 위)
 HOOK_SOLO_SEC = 1.5              # hook_sec 정보가 없을 때 후킹 단독 노출 시간 (asset_generator.HOOK_SOLO_SEC와 동일)
 
 
@@ -372,6 +377,52 @@ class AdCompositor:
                 continue
         return None
 
+    def render_bundle_bars(self, title: str, bottom: str, width: int, height: int) -> Image.Image:
+        """
+        쇼핑 묶음 큐레이션 고정 바 레이어 (영상 전체에 계속 표시):
+        - 상단 타이틀 바: 노란 바 + 검은 굵은 글씨 '[타이틀]' (제휴 표시 문구 아래, 씬 자막 위)
+        - 하단 구매 안내 바: 검은 반투명 바 + 흰 글씨, 맨 앞 이모지는 컬러 이모지 (상품 카드 아래, 쇼츠 하단 UI 위)
+        """
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+
+        def bar(text, cy, bar_h, fill, color, stroke):
+            text = (text or "").strip()
+            if not text:
+                return
+            emoji = ""
+            m = re.match(r"^([\U0001F000-\U0001FAFF☀-➿]️?)\s*", text)
+            if m:
+                emoji, text = m.group(1), text[m.end():]
+            x0, x1 = int(width * BUNDLE_BAR_X[0]), int(width * BUNDLE_BAR_X[1])
+            y0 = int(height * cy - bar_h / 2)
+            draw.rounded_rectangle([(x0, y0), (x1, y0 + bar_h)], radius=int(bar_h * 0.28), fill=fill)
+            em = self._emoji_image(emoji, int(bar_h * 0.56)) if emoji else None
+            gap = int(bar_h * 0.18) if em else 0
+            room = (x1 - x0) - int(bar_h * 0.5) - ((em.width + gap) if em else 0)
+            size = int(bar_h * 0.56)
+            while size > 12:                                   # 한 줄에 들어가게 글자 크기를 줄임
+                font = self._font(size)
+                bb = draw.textbbox((0, 0), text, font=font, stroke_width=stroke)
+                if bb[2] - bb[0] <= room:
+                    break
+                size -= 2
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+            total = tw + ((em.width + gap) if em else 0)
+            x = (width - total) // 2
+            if em:
+                layer.alpha_composite(em, (x, y0 + (bar_h - em.height) // 2))
+                x += em.width + gap
+            draw.text((x - bb[0], y0 + (bar_h - th) // 2 - bb[1]), text, font=font, fill=color,
+                      stroke_width=stroke, stroke_fill=(0, 0, 0, 255) if stroke else None)
+
+        t = (title or "").strip()
+        if t and not t.startswith("["):
+            t = f"[{t}]"
+        bar(t, BUNDLE_TITLE_CY, int(height * BUNDLE_TITLE_H), (255, 214, 10, 245), (15, 15, 15, 255), 0)
+        bar(bottom, BUNDLE_BOTTOM_CY, int(height * BUNDLE_BOTTOM_H), (12, 12, 12, 215), (255, 255, 255, 255), 0)
+        return layer
+
     def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
         """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -411,6 +462,8 @@ class AdCompositor:
         if mode in CENTER_CAPTION_MODES:
             # 쇼핑은 상품 카드(화면 31~71%)를 가리지 않도록 카드 위쪽에 자막
             center = COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else CAPTION_CENTER_Y
+            if kwargs.get("center_y"):
+                center = float(kwargs["center_y"])
             return self._caption_block(caption_text, hook_title, width, height, center_y=center)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -532,6 +585,7 @@ class AdCompositor:
         disclosure: Optional[str] = None,
         intro_image: Optional[str] = None,
         bgm_path: Optional[str] = None,
+        bars: Optional[Tuple[str, str]] = None,
         **kwargs
     ) -> str:
         """
@@ -539,6 +593,7 @@ class AdCompositor:
         실패하면 MoviePy 경로로 자동 대체. RENDER_ENGINE=moviepy 로 MoviePy 강제 (디자인·타임라인 규칙은 같음)
         bgm_path: 자체 음원(assets/bgm). 완성 영상에 나레이션 덕킹·페이드로 섞음 (core/render/bgm.py).
         실패하면 BGM 없이 두고 self.last_bgm_error에 사유를 남김
+        bars: (상단 타이틀, 하단 구매 안내) - 쇼핑 묶음 큐레이션 고정 바 (render_bundle_bars), 영상 전체에 표시
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
         self.last_bgm_error = None
@@ -548,7 +603,7 @@ class AdCompositor:
             from core.render import ffmpeg_assemble
             try:
                 out = ffmpeg_assemble.assemble(self, asset_manifest, final_output_path, fps=fps, mode=mode, brand=brand,
-                                               disclosure=disclosure, intro_image=intro_image, xfade=XFADE_SEC,
+                                               disclosure=disclosure, bars=bars, intro_image=intro_image, xfade=XFADE_SEC,
                                                intro_sec=INTRO_SEC, hook_solo_sec=HOOK_SOLO_SEC,
                                                center_modes=CENTER_CAPTION_MODES)
             except FileNotFoundError:
@@ -557,7 +612,7 @@ class AdCompositor:
                 logger.warning(f"ffmpeg 조립 실패 → MoviePy로 대체: {e}")
         if out is None:
             out = self._assemble_moviepy(asset_manifest, output_filename=output_filename, fps=fps, audio_mode=audio_mode,
-                                         mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image)
+                                         mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image, bars=bars)
         if bgm_path:
             try:
                 self._mix_bgm(out, asset_manifest, bgm_path, narration=(audio_mode != "silent"))
@@ -594,6 +649,7 @@ class AdCompositor:
         brand: Optional[BrandOverlay] = None,
         disclosure: Optional[str] = None,
         intro_image: Optional[str] = None,
+        bars: Optional[Tuple[str, str]] = None,
         **kwargs
     ) -> str:
         """
@@ -654,7 +710,7 @@ class AdCompositor:
 
                 # 4. 자막 오버레이 (실사 모드 씬 1: 후킹 단독 0~hook_sec → 서브 자막, 나레이션 2단 음성과 같은 시점)
                 w, h = synced_video.size
-                if caption_text or hook_title or brand or disclosure:
+                if caption_text or hook_title or brand or disclosure or bars:
                     split_hook = mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
                     if split_hook:
                         hook_sec = float(item.get("hook_sec") or HOOK_SOLO_SEC)
@@ -677,10 +733,16 @@ class AdCompositor:
                             hook_title=seg_hook,
                             width=w,
                             height=h,
-                            mode=mode
+                            mode=mode,
+                            center_y=BUNDLE_CAPTION_CY if bars else None
                         )
-                        if brand or disclosure:
+                        if brand or disclosure or bars:
                             merged = Image.fromarray(overlay_img_arr).convert("RGBA")
+                            if bars:
+                                key = ("bars", w, h)
+                                if key not in watermark_cache:
+                                    watermark_cache[key] = self.render_bundle_bars(bars[0], bars[1], w, h)
+                                merged.alpha_composite(watermark_cache[key])
                             if brand:
                                 if (w, h) not in watermark_cache:
                                     watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
