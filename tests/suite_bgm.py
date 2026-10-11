@@ -13,7 +13,7 @@ import imageio_ffmpeg
 import numpy as np
 
 import core.render.bgm as bgm
-from core.compositor import XFADE_SEC, AdCompositor
+from core.compositor import AdCompositor
 
 fails = 0
 
@@ -133,6 +133,35 @@ bgm.mix_bgm(silent_v, zero_out, drop_track, [], voice_db=VOICE_DB, start_at=0)
 dm, zm = pcm(drop_out), pcm(zero_out)
 check(amp_of(dm, 1.0, 60) > amp_of(dm, 1.0, 440) * 5 and amp_of(zm, 1.0, 440) > amp_of(zm, 1.0, 60) * 5,
       "믹싱은 드롭부터(1초 지점에 60Hz 킥), start_at=0이면 인트로(440Hz)부터")
+# 영상 길이 맞춤: 첫 드롭(6초) 뒤 8초 만에 브레이크다운(14~26초), 2차 드롭(26초~)은 영상 끝까지 유지 → 2차 드롭 선택
+two_drop = os.path.join(tdir, "two_drop.wav")
+sh("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=6",
+   "-f", "lavfi", "-i", "sine=frequency=60:sample_rate=44100:duration=8",
+   "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=12",
+   "-f", "lavfi", "-i", "sine=frequency=60:sample_rate=44100:duration=30", "-filter_complex",
+   "[0:a]volume=0.05[a];[1:a]volume='0.9*(0.6+0.4*gt(mod(t,0.5),0.25))':eval=frame[b];[2:a]volume=0.06[c];"
+   "[3:a]volume='0.9*(0.6+0.4*gt(mod(t,0.5),0.25))':eval=frame[d];[a][b][c][d]concat=n=4:v=0:a=1", two_drop)
+cands = [s for s, _ in bgm.drop_candidates(two_drop)]
+first_drop = bgm.energy_start(two_drop, use_cache=False)
+best20 = bgm.best_window_start(two_drop, 20.0, use_cache=False)
+best6 = bgm.best_window_start(two_drop, 6.0, use_cache=False)
+check(any(abs(c - 6) < 0.4 for c in cands) and any(abs(c - 26) < 0.4 for c in cands) and abs(first_drop - 6) < 0.4,
+      f"곡 안의 드롭 후보 모두 찾기 (6초·26초) {cands}, 첫 드롭 {first_drop:.2f}초")
+check(abs(best20 - 26) < 0.4 and bgm.window_energy(two_drop, best20, 20) > bgm.window_energy(two_drop, first_drop, 20) + 3,   # 전력 평균: 8초 큰 소리 / 20초 → 약 4dB 차
+      f"20초 영상: 첫 드롭은 8초 뒤 잔잔해짐 → 끝까지 유지되는 2차 드롭 {best20:.2f}초 선택")
+check(abs(best6 - 6) < 0.4 or abs(best6 - 26) < 0.4, f"6초 영상: 어느 드롭이든 6초 내내 꽉 참 → 드롭에서 시작 ({best6:.2f}초)")
+s50 = bgm.best_window_start(two_drop, 50.0, use_cache=False)          # 곡 길이 56초: 26초에서 50초면 넘침
+check(s50 + 50.0 <= 56.0 and abs(s50 - 6) < 0.4,
+      "곡 끝을 넘어가는 시작 지점은 고르지 않음 (반복으로 이어 붙는 어색함 방지)")
+auto_out = os.path.join(work, "two_drop_mix.mp4")
+long_v = os.path.join(work, "long20.mp4")
+sh("-f", "lavfi", "-i", "color=c=black:s=540x960:r=24:d=20", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", long_v)
+bgm.mix_bgm(long_v, auto_out, two_drop, [], voice_db=VOICE_DB)
+am = pcm(auto_out)
+check(amp_of(am, 15.0, 60) > amp_of(am, 15.0, 440) * 5 and amp_of(am, 15.0, 60) > amp_of(am, 3.0, 60) * 0.7,
+      "자동 믹싱(20초 영상): 영상 15초 지점도 킥이 그대로 (첫 드롭이었으면 브레이크다운)")
+os.remove(two_drop)
+
 os.environ["BGM_SIGNATURE_TRACKS"] = "c_song.m4a, b_song.wav"
 check([os.path.basename(p) for p in bgm.ordered_tracks(tdir)][:3] == ["c_song.m4a", "b_song.wav", "a_song.mp3"]
       and bgm.signature_tracks() == ["c_song.m4a", "b_song.wav"], "시그니처 트랙(.env BGM_SIGNATURE_TRACKS)은 목록 맨 앞")

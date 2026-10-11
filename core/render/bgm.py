@@ -40,6 +40,8 @@ ENERGY_BASS_BELOW = 4.0         # 저음(40~150Hz) 활성 기준 = 곡 저음 �
 ENERGY_FULL_BELOW = 3.0         # 전체 음량 활성 기준 = 곡 음량 상위 20% 레벨 - 3dB
 ENERGY_SNAP_SEC = 2.0           # 후보 앞뒤 이 범위에서 저음이 가장 크게 올라서는 순간(드롭 첫 박)으로 맞춤
 ENERGY_MIN_TAIL_SEC = 20.0      # 시작 후 남은 길이가 이보다 짧으면 처음부터
+DROP_MIN_JUMP_DB = 6.0          # 드롭 후보: '다음 1초 저음 평균 - 이전 0.5초 평균'이 이 이상인 지점
+DROP_MIN_GAP_SEC = 2.0          # 드롭 후보끼리 최소 간격 (같은 드롭의 연속 박을 하나로)
 FADE_OUT_SEC = 1.8              # 끝(엔딩 카드) 페이드아웃
 DEFAULT_VOICE_DB = -18.6        # 나레이션 평균 음량 실측값 (Edge-TTS SunHi, 무음 모드 등 측정 불가일 때)
 
@@ -199,6 +201,90 @@ def energy_start(path: str, use_cache: bool = True) -> float:
     return start
 
 
+_analysis_cache: Dict[str, Dict[str, object]] = {}
+
+
+def _analyze(path: str) -> Dict[str, object]:
+    """곡 전체 분석 (한 번만): 0.5초 창 전체 음량(dB), 50ms 간격 저음 에너지, 드롭 점수"""
+    import numpy as np
+    key = f"{path}:{os.path.getsize(path)}:{int(os.path.getmtime(path))}"
+    if key in _analysis_cache:
+        return _analysis_cache[key]
+    sr = 11025
+    raw = subprocess.run([ffmpeg_exe(), "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", str(sr), "-"],
+                         capture_output=True, timeout=180).stdout
+    sig = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+    win = int(sr * ENERGY_WIN_SEC)
+    n = len(sig) // win
+    frames = sig[:n * win].reshape(n, win)
+    full = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+    hop, w2 = int(sr * 0.05), int(sr * 0.1)
+    f2 = np.fft.rfftfreq(w2, 1 / sr)
+    band = (f2 > 40) & (f2 < 150)
+    starts = np.arange(0, len(sig) - w2, hop)
+    fr2 = np.stack([sig[s:s + w2] for s in starts]) * np.hanning(w2)
+    env = 10 * np.log10((np.abs(np.fft.rfft(fr2, axis=1)) ** 2)[:, band].sum(axis=1) + 1e-12)
+    after, before = int(1.0 / 0.05), int(0.5 / 0.05)
+    cs = np.concatenate([[0.0], np.cumsum(env)])
+    score = np.full(len(env), -1e9)
+    k = np.arange(before, len(env) - after)
+    score[k] = (cs[k + after] - cs[k]) / after - (cs[k] - cs[k - before]) / before
+    out = {"sr": sr, "duration": len(sig) / sr, "full": full, "env_hop": 0.05, "drop_score": score}
+    _analysis_cache[key] = out
+    return out
+
+
+def drop_candidates(path: str) -> List[Tuple[float, float]]:
+    """곡 안의 드롭(저음이 크게 올라서는 지점) 후보 [(초, 점수dB)], 2초 안의 연속 박은 가장 센 것 하나만"""
+    import numpy as np
+    a = _analyze(path)
+    score = a["drop_score"]
+    order = np.argsort(score)[::-1]
+    picked: List[int] = []
+    gap = int(DROP_MIN_GAP_SEC / a["env_hop"])
+    for k in order:
+        if score[k] < DROP_MIN_JUMP_DB:
+            break
+        if all(abs(int(k) - q) >= gap for q in picked):
+            picked.append(int(k))
+    return sorted((round(q * a["env_hop"], 2), round(float(score[q]), 1)) for q in picked)
+
+
+def window_energy(path: str, start: float, length: float) -> float:
+    """start초부터 length초 동안 평균 음량(dB, 0.5초 창 RMS의 전력 평균)"""
+    import numpy as np
+    a = _analyze(path)
+    full = a["full"]
+    i0, i1 = int(start / ENERGY_WIN_SEC), int((start + length) / ENERGY_WIN_SEC)
+    seg = full[i0:max(i0 + 1, i1)]
+    return float(10 * np.log10(np.mean(10 ** (seg / 10)) + 1e-12))
+
+
+def best_window_start(path: str, length: float, use_cache: bool = True) -> float:
+    """
+    영상 길이(length초)만큼 이어 들었을 때 평균 에너지가 가장 큰 드롭에서 시작 (곡 끝을 넘는 후보는 제외).
+    첫 드롭 뒤 곧 브레이크다운이 오는 곡(예: Neon Skyline 31초 드롭은 15초 뒤 잔잔해짐)도 영상 끝까지 텐션 유지.
+    후보가 없거나 다 넘치면 첫 드롭(energy_start) 방식
+    """
+    length = max(1.0, float(length))
+    key = f"win:v1:{int(round(length))}:{os.path.basename(path)}:{os.path.getsize(path)}:{int(os.path.getmtime(path))}"
+    if use_cache:
+        cached = _cache_get(path, key)
+        if cached is not None:
+            return float(cached)
+    dur = float(_analyze(path)["duration"])
+    cands = [s for s, _ in drop_candidates(path) if s + length <= dur]
+    if not cands:
+        start = energy_start(path, use_cache=use_cache)
+    else:
+        start = max(cands, key=lambda s: (window_energy(path, s, length), -s))
+    start = round(float(start), 2)
+    _cache_put(path, key, start)
+    logger.info(f"BGM 시작 지점(영상 {length:.0f}초 맞춤): '{os.path.basename(path)}' {start:.2f}초 "
+                f"(이후 {length:.0f}초 평균 {window_energy(path, start, length):.1f}dB, 드롭 후보 {len(cands)}개)")
+    return start
+
+
 def merge_intervals(intervals: Sequence[Tuple[float, float]], gap: float = MERGE_GAP_SEC) -> List[Tuple[float, float]]:
     out: List[List[float]] = []
     for s, e in sorted((float(a), float(b)) for a, b in intervals if b > a):
@@ -230,7 +316,7 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
             voice_db: Optional[float] = None, duck: float = DUCK_GAIN, start_at: Optional[float] = None) -> str:
     """
     완성 영상 + BGM → video_out (영상은 복사, 오디오만 재인코딩). 실패하면 RuntimeError
-    start_at: 음원 시작 지점(초). None이면 energy_start()로 인트로를 건너뛴 지점 자동 탐색, 0이면 처음부터
+    start_at: 음원 시작 지점(초). None이면 best_window_start(): 영상 길이만큼 평균 에너지가 가장 큰 드롭 자동 선택, 0이면 처음부터
     """
     if not bgm_path or not os.path.isfile(bgm_path):
         raise RuntimeError(f"BGM 음원 파일이 없어요: {os.path.basename(bgm_path or '')} (assets/bgm 폴더 확인)")
@@ -241,7 +327,8 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
         raise RuntimeError(f"영상 길이를 읽지 못함: {video_in}")
     total = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     has_voice = "Audio:" in probe
-    offset = energy_start(bgm_path) if start_at is None else max(0.0, float(start_at))
+    # 시작 지점: 영상 길이만큼 이어 들었을 때 가장 에너지가 큰 드롭 (start_at을 주면 그대로, 0이면 처음부터)
+    offset = best_window_start(bgm_path, total) if start_at is None else max(0.0, float(start_at))
     bgm_db = mean_volume_db(bgm_path)
     if bgm_db is None:
         raise RuntimeError(f"BGM 음량을 읽지 못함: {bgm_path}")
