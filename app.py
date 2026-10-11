@@ -119,6 +119,8 @@ if "final_video_path" not in st.session_state:
     st.session_state.final_video_path = None
 if "thumb_path" not in st.session_state:
     st.session_state.thumb_path = None        # 렌더와 함께 만든 썸네일 (final_thumb.png)
+if "bgm_status" not in st.session_state:
+    st.session_state.bgm_status = None        # 마지막 렌더에 실제로 들어간 BGM (완료 화면 표시용)
 if "shorts_copy" not in st.session_state:
     st.session_state.shorts_copy = None       # 업로드 제목·썸네일 카피 (core/shorts_meta.py)
 if "generated_images" not in st.session_state:
@@ -166,6 +168,7 @@ def start_new_job(**meta) -> JobContext:
     st.session_state.final_video_path = None
     st.session_state.thumb_path = None
     st.session_state.shorts_copy = None
+    st.session_state.bgm_status = None
     st.session_state.generated_images = []
     st.session_state.cutout_path = None
     st.session_state.affiliate_link = ""      # 이전 상품의 파트너스 링크가 남지 않게
@@ -389,6 +392,13 @@ if page == "radar":
 # ==============================================================================
 # 사이드바: 기획 및 제작 설정 패널
 # ==============================================================================
+def _sync_bgm(src: str, dst: str):
+    """사이드바 BGM 스위치와 렌더 버튼 옆 스위치를 같은 상태로 (콜백은 다음 실행 전에 돌아 위젯 값 변경 가능)"""
+    st.session_state[dst] = st.session_state.get(src, False)
+    if src == "bgm_on_main":
+        st.session_state.bgm_on = st.session_state[src]
+
+
 with st.sidebar:
     st.markdown("### ⚙️ 광고 제작 설정")
     
@@ -475,7 +485,8 @@ with st.sidebar:
 
     # 자체 음원 BGM (assets/bgm): 나레이션 구간 20% 덕킹 + 시작 페이드인·끝 페이드아웃
     bgm_tracks = bgm_mod.ordered_tracks()
-    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks,
+    st.session_state.setdefault("bgm_on", False)
+    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks, on_change=_sync_bgm, args=("bgm_on", "bgm_on_main"),
                        help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
     bgm_choice = None
     if bgm_tracks:
@@ -1169,7 +1180,17 @@ st.markdown("---")
 # ==============================================================================
 # 3단계: 최종 광고 영상 렌더링 및 플레이어
 # ==============================================================================
-render_btn = st.button("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기", type="primary", use_container_width=True, key="render_cta")
+_rc1, _rc2 = st.columns([4, 1.3], vertical_alignment="center")
+with _rc2:
+    # 모바일은 사이드바가 접혀 있어 BGM 상태가 안 보임 → 렌더 버튼 옆에도 같은 스위치 (사이드바와 양방향 동기화)
+    st.session_state.bgm_on_main = st.session_state.get("bgm_on", False)
+    st.toggle("🎵 BGM 사용", key="bgm_on_main", disabled=not bgm_tracks, on_change=_sync_bgm, args=("bgm_on_main", "bgm_on"),
+              help="자체 음원(assets/bgm)을 나레이션 아래에 깔아요. 음원 선택은 사이드바에서 (기본 랜덤).")
+with _rc1:
+    render_btn = st.button("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기", type="primary", use_container_width=True, key="render_cta")
+bgm_on = st.session_state.get("bgm_on", False) and bool(bgm_tracks)
+if bgm_on and bgm_choice is None:
+    bgm_choice = st.session_state.get("bgm_choice") or bgm_mod.RANDOM
 if is_commerce_mode:
     st.caption("🛒 쇼핑은 [상품 검색] → [이 상품 사용] → [영상 만들기] 세 번이면 끝나요. 기획은 자동으로 진행됩니다.")
 if render_btn and is_commerce_mode and not st.session_state.storyboard:
@@ -1298,6 +1319,8 @@ if render_btn:
             )
             if bgm_on and compositor.last_bgm_error:
                 st.warning(f"BGM을 섞지 못해 BGM 없이 저장했어요: {compositor.last_bgm_error}")
+            st.session_state.bgm_status = {"on": bgm_on, "info": compositor.last_bgm_info, "error": compositor.last_bgm_error}
+            logger.info(f"BGM 상태: {'켜짐' if bgm_on else '꺼짐'} → {compositor.last_bgm_info or compositor.last_bgm_error or '적용 안 함'}")
             st.session_state.thumb_path = thumb_path
             current_job().save_plan(scenes)
 
@@ -1327,10 +1350,16 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                 type="primary",
                 key="download_cta"
             )
-        if st.session_state.get("bgm_on") and bgm_mod.list_tracks():
-            st.info("🎵 자체 음원 BGM이 들어간 영상이에요. 플랫폼 음원을 따로 태그하면 소리가 겹치니 그대로 올려 주세요.")
+        _bs = st.session_state.get("bgm_status") or {}
+        if _bs.get("info"):
+            _bi = _bs["info"]
+            st.success(f"🎵 BGM: {bgm_mod.display_name(_bi['track'])} (적용) · 곡 {_bi['start']:.1f}초부터, 나레이션 중 {_bi['duck']:.0%}")
+            st.caption("자체 음원이 들어간 영상이에요. 플랫폼 음원을 따로 태그하면 소리가 겹치니 그대로 올려 주세요.")
+        elif _bs.get("on") and _bs.get("error"):
+            st.warning(f"🔇 BGM 꺼짐 (섞기 실패: {_bs['error']})")
         else:
-            st.info("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요.")
+            st.info("🔇 BGM 꺼짐 · 넣으려면 렌더 버튼 옆 '🎵 BGM 사용'을 켜고 다시 만들어 주세요. "
+                    "(BGM 없이 올릴 땐 플랫폼 추천 트렌딩 음원을 태그해 보세요)")
         if is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"

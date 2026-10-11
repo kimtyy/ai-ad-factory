@@ -188,5 +188,6 @@ check(sig.parameters["bgm_path"].default is None and "CompositeAudioClip" not in
 app_src = open("app.py", encoding="utf-8").read()
 main_src = open("main.py", encoding="utf-8").read()
 check("voice_and_bgm" not in app_src and "voice_and_bgm" not in main_src, "앱/CLI 오디오 모드에서 BGM 옵션 제거")
-check("💡 인스타 릴스/쇼츠 업로드 시 플랫폼 내 추천 트렌딩 음원을 함께 태그해 보세요." in app_src, "렌더 완료 하단 트렌딩 음원 안내 문구")
+check("🔇 BGM 꺼짐" in app_src and "BGM 없이 올릴 땐 플랫폼 추천 트렌딩 음원을 태그해 보세요" in app_src,
+      "렌더 완료: BGM 없이 만든 영상엔 'BGM 꺼짐' + 트렌딩 음원 태그 안내")
 finish(fails)

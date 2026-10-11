@@ -3,7 +3,7 @@ core/render/bgm.py - 자체 음원(BGM) 자동 믹싱: 나레이션 구간 덕�
 
 - 음원: 프로젝트 assets/bgm/ 의 mp3·wav·m4a (직접 만들었거나 권리를 가진 음원만. 남의 곡은 넣지 않음)
 - 레벨: 음원마다 평균 음량을 한 번 재서(캐시) 나레이션 평균보다 BGM_FULL_BELOW_VOICE_DB 낮게 맞춤
-  → 나레이션이 나오는 동안은 그 레벨의 DUCK_GAIN(20%, 약 -14dB)으로 내림. 덕킹은 실제 나레이션 위치(타임라인)로
+  → 나레이션이 나오는 동안은 그 레벨의 DUCK_GAIN(32%, 약 -10dB)으로 내림. 덕킹은 실제 나레이션 위치(타임라인)로
      정확히 걸고, 앞뒤 ATTACK/RELEASE초 동안 부드럽게 오르내림. 나레이션 사이 짧은 틈(MERGE_GAP 미만)은 계속 낮춰 둠
      (씬 사이 0.2초마다 음악이 튀어 오르는 펌핑 방지)
 - 짧은 곡은 반복, 긴 곡은 영상 길이에서 자름. 영상은 다시 인코딩하지 않음(-c:v copy), 오디오만 새로 섞음
@@ -27,7 +27,7 @@ BGM_DIR = os.path.join(ROOT, "assets", "bgm")
 BGM_EXTS = (".mp3", ".wav", ".m4a")
 RANDOM = "__random__"
 
-DUCK_GAIN = 0.20                # 나레이션 중 BGM 배율 (20% ≈ -14dB)
+DUCK_GAIN = 0.32                # 나레이션 중 BGM 배율 (32% ≈ -9.9dB → 나레이션보다 약 14dB 아래, 폰 스피커에서도 비트가 들림)
 BGM_FULL_BELOW_VOICE_DB = 4.0   # 나레이션이 없을 때 BGM 평균 음량 = 나레이션 평균 - 4dB
 ATTACK_SEC = 0.25               # 나레이션 시작 전부터 낮추기 시작
 RELEASE_SEC = 0.40              # 나레이션 끝난 뒤 천천히 올림
@@ -68,6 +68,12 @@ def ordered_tracks(bgm_dir: Optional[str] = None) -> List[str]:
     tracks = list_tracks(bgm_dir)
     first = [t for name in sig for t in tracks if os.path.basename(t) == name]
     return first + [t for t in tracks if t not in first]
+
+
+def display_name(track: str) -> str:
+    """'Neon Skyline_5-2.wav' → 'Neon Skyline' (완료 화면 표시용: 확장자·테이크 번호 제거)"""
+    stem = os.path.splitext(os.path.basename(track or ""))[0]
+    return re.sub(r"_\d+-\d+$", "", stem).strip() or stem
 
 
 def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Optional[random.Random] = None) -> Optional[str]:
@@ -313,7 +319,8 @@ def narration_intervals(scene_audio: Sequence[Tuple[float, float]]) -> List[Tupl
 
 
 def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tuple[float, float]],
-            voice_db: Optional[float] = None, duck: float = DUCK_GAIN, start_at: Optional[float] = None) -> str:
+            voice_db: Optional[float] = None, duck: float = DUCK_GAIN, start_at: Optional[float] = None,
+            info: Optional[Dict[str, object]] = None) -> str:
     """
     완성 영상 + BGM → video_out (영상은 복사, 오디오만 재인코딩). 실패하면 RuntimeError
     start_at: 음원 시작 지점(초). None이면 best_window_start(): 영상 길이만큼 평균 에너지가 가장 큰 드롭 자동 선택, 0이면 처음부터
@@ -355,6 +362,8 @@ def mix_bgm(video_in: str, video_out: str, bgm_path: str, intervals: Sequence[Tu
             os.remove(tmp)
         raise RuntimeError(f"BGM 믹싱 실패: {(res.stderr or '')[-300:]}")
     shutil.move(tmp, video_out)
+    if info is not None:     # 실제로 적용된 내용 (완료 화면 표시용)
+        info.update({"track": os.path.basename(bgm_path), "start": round(offset, 2), "gain_db": round(gain_db, 1), "duck": duck})
     logger.info(f"BGM 믹싱: '{os.path.basename(bgm_path)}' {offset:.2f}초부터 (평균 {bgm_db:.1f}dB → {gain_db:+.1f}dB 보정, 나레이션 {len(merged)}구간 "
                 f"{duck:.0%}로 덕킹, 페이드인 {FADE_IN_SEC}s·아웃 {fo:.1f}s) → {video_out}")
     return video_out

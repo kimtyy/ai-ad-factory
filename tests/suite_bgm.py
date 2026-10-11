@@ -1,4 +1,4 @@
-"""자체 음원 BGM 믹싱: 음원 고르기, 나레이션 구간 20% 덕킹, 페이드인·아웃, 반복, 음량 보정, 영상 무손실 복사, 실패 시 BGM 없이 저장, 사이드바 UI"""
+"""자체 음원 BGM 믹싱: 음원 고르기, 나레이션 구간 32% 덕킹, 페이드인·아웃, 반복, 음량 보정, 영상 무손실 복사, 실패 시 BGM 없이 저장, 사이드바 UI"""
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _support import ROOT, fixture, tmp, finish  # noqa: E402
@@ -77,13 +77,14 @@ def amp_of(sig, t, f, w=0.2):
 
 x = pcm(out)
 amp = lambda t, f, w=0.2: amp_of(x, t, f, w)
-EXPECT = 10 ** ((bgm.BGM_FULL_BELOW_VOICE_DB + 20 * np.log10(1 / bgm.DUCK_GAIN)) / 20)   # 나레이션 : 덕킹된 BGM ≈ 7.9배
+EXPECT = 10 ** ((bgm.BGM_FULL_BELOW_VOICE_DB + 20 * np.log10(1 / bgm.DUCK_GAIN)) / 20)   # 나레이션 : 덕킹된 BGM ≈ 4.9배 (32%)
 
 full = amp(2.6, 150)          # 나레이션 사이 1.2초 틈(> 0.8초) 가운데: BGM 원래 레벨
 duck1, duck2 = amp(1.25, 150), amp(3.9, 150)
 start, end = amp(0.04, 150, 0.06), amp(5.93, 150, 0.1)
-check(0.15 < duck1 / full < 0.26 and 0.15 < duck2 / full < 0.26,
-      f"나레이션 구간 BGM = 원래 레벨의 {duck1 / full:.0%}·{duck2 / full:.0%} (목표 20%, 약 -14dB)")
+lo_, hi_ = bgm.DUCK_GAIN * 0.8, bgm.DUCK_GAIN * 1.2
+check(bgm.DUCK_GAIN == 0.32 and lo_ < duck1 / full < hi_ and lo_ < duck2 / full < hi_,
+      f"나레이션 구간 BGM = 원래 레벨의 {duck1 / full:.0%}·{duck2 / full:.0%} (목표 32%, 약 -10dB: 폰 스피커에서도 비트가 들리게)")
 check(start < full * 0.3 and end < full * 0.3, f"시작 페이드인({start / full:.0%})·끝 페이드아웃({end / full:.0%})")
 ratio = amp(1.25, 1000) / duck1
 check(EXPECT * 0.7 < ratio < EXPECT * 1.3, f"나레이션 중: 나레이션이 BGM의 {ratio:.1f}배 (목표 {EXPECT:.1f}배 = 4dB + 14dB 아래)")
@@ -205,6 +206,37 @@ try:
     sel = at.sidebar.selectbox(key="bgm_choice")
     check(not at.exception and sel.options[0].startswith("🎲") and "a_song.mp3" in sel.options and sel.value == bgm.RANDOM,
           f"음원이 있으면 켜고 고르기 (기본 랜덤) {sel.options}")
+    check(at.toggle(key="bgm_on_main").value is True and not at.toggle(key="bgm_on_main").disabled,
+          "렌더 버튼 옆 '🎵 BGM 사용' 스위치도 켜짐으로 (사이드바와 같은 상태)")
+    at.toggle(key="bgm_on_main").set_value(False).run()
+    check(at.sidebar.toggle(key="bgm_on").value is False and at.toggle(key="bgm_on_main").value is False,
+          "렌더 버튼 옆에서 끄면 사이드바도 꺼짐 (모바일: 사이드바를 안 열어도 됨)")
+    at.toggle(key="bgm_on_main").set_value(True).run()
+    check(at.sidebar.toggle(key="bgm_on").value is True and at.sidebar.selectbox(key="bgm_choice").value == bgm.RANDOM,
+          "렌더 버튼 옆에서 켜면 사이드바도 켜지고 음원은 랜덤")
+
+    # 렌더 후 완료 화면: 실제로 들어간 BGM 표시 (BGM 켬 / 끔 두 번)
+    real_track = os.path.join(tdir, "Neon Skyline_5-2.wav")
+    sh("-f", "lavfi", "-i", "sine=frequency=150:sample_rate=44100:duration=40", "-af", "volume=0.5", real_track)
+    job = at.session_state.job
+    srcs = [fixture("photo_pool.jpg"), fixture("photo_room.jpg")]
+    at.session_state.uploaded_paths = [shutil.copy(p, os.path.join(job.uploads_dir, f"u{i}.jpg")) for i, p in enumerate(srcs)]
+    at.sidebar.checkbox[0].check()
+    at.text_input(key="owner_name").input("설맥 가평현리점")
+    at.run()
+    at.sidebar.selectbox(key="bgm_choice").set_value("Neon Skyline_5-2.wav").run()
+    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "영상 만들기" in b.label][0].click().run()
+    created.append(job.workdir)
+    st_ok = [s.value for s in at.success if "BGM:" in (s.value or "")]
+    # 맨 앞 이모지(🎵)는 Streamlit 알림 아이콘으로 빠지므로 본문만 비교
+    check(not at.exception and st_ok and "BGM: Neon Skyline (적용)" in st_ok[0] and "초부터" in st_ok[0],
+          f"완료 화면: 실제로 섞인 BGM 표시 {st_ok[:1]}")
+    at.toggle(key="bgm_on_main").set_value(False).run()
+    [b for b in at.button if "영상 만들기" in b.label][0].click().run()
+    off = [i.value for i in at.info if "BGM 꺼짐" in (i.value or "")]
+    check(not at.exception and off and not [s for s in at.success if "BGM:" in (s.value or "")],
+          "BGM을 끄고 만들면 완료 화면에 '🔇 BGM 꺼짐' (토글 상태가 아니라 실제 결과 기준)")
 finally:
     bgm.BGM_DIR = _orig_dir
     for wd in created:

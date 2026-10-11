@@ -541,6 +541,7 @@ class AdCompositor:
         """
         final_output_path = os.path.join(self.output_dir, output_filename)
         self.last_bgm_error = None
+        self.last_bgm_info = None      # 실제로 섞인 BGM {track, start, gain_db, duck} (없거나 실패하면 None)
         out = None
         if os.getenv("RENDER_ENGINE", "ffmpeg").strip().lower() != "moviepy":
             from core.render import ffmpeg_assemble
@@ -577,7 +578,10 @@ class AdCompositor:
             levels = [bgm_mod.mean_volume_db(it["audio_path"]) for it in manifest[:3]]
             levels = [v for v in levels if v is not None and v > -60]
             voice_db = sum(levels) / len(levels) if levels else None
-        return bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db)
+        info: Dict[str, Any] = {}
+        out = bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db, info=info)
+        self.last_bgm_info = info
+        return out
 
     def _assemble_moviepy(
         self,
