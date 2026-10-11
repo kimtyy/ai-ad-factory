@@ -36,3 +36,6 @@ tests/_fixtures/
 # 자체 음원(BGM): 용량·권리 문제로 git에 올리지 않음 (폴더 안내 README만)
 assets/bgm/*
 !assets/bgm/README.md
+
+# 캘린더 자동 제작 사진 폴더 (사용자 사진)
+inbox/

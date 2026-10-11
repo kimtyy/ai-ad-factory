@@ -109,7 +109,7 @@ def authorize_interactive() -> Dict[str, Any]:
     if not os.path.exists(secrets):
         raise CalendarError(f"OAuth 클라이언트 파일이 없어요: {secrets}")
     flow = InstalledAppFlow.from_client_secrets_file(secrets, SCOPES)
-    creds = flow.run_local_server(port=0, prompt="consent", authorization_prompt_message="")
+    creds = flow.run_local_server(port=0, prompt="consent select_account", authorization_prompt_message="")
     granted = set(getattr(creds, "granted_scopes", None) or getattr(creds, "scopes", None) or SCOPES)
     missing = [s for s in SCOPES if s not in granted]
     if missing:
