@@ -245,7 +245,7 @@ def radar_summary(trend: Optional[Dict[str, Any]], pattern: Optional[Dict[str, A
 
 def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str = "", api_key: Optional[str] = None,
                      mock: bool = False, seed: Optional[int] = None, trend: Optional[Dict[str, Any]] = None,
-                     region: str = "", signature: str = "") -> Dict[str, Any]:
+                     region: str = "", signature: str = "", hidden_terms: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     → {title('… #Shorts'), thumb_main, thumb_sub, accent, hashtags[5~7], source('gemini'|'template'), rejected[], radar}
     trend: 떡상 레이더 다이제스트(core/radar/trends.py) → 프롬프트 필수 맥락 (제목 패턴·감정어·해시태그 풀)
@@ -262,7 +262,9 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
     base["radar"] = radar_summary(trend, chosen, [t for t in base["hashtags"] if t in radar_tags])
     if mock or not api_key:
         return base
-    name_rule = ("숙소 이름은 쓰지 마세요 (궁금증으로 댓글 링크를 누르게)" if mode == "travel"
+    hidden = [h.strip() for h in (hidden_terms or []) if h and len(h.strip()) >= 2]
+    name_rule = ("이 단어들은 쓰지 마세요 (영상 마지막에 공개): " + ", ".join(hidden) if hidden
+                 else "숙소 이름은 쓰지 마세요 (궁금증으로 댓글 링크를 누르게)" if mode == "travel"
                  else f"이름이 필요하면 '{product_name}'만 그대로" if product_name else "")
     prompt = f"""
 유튜브 쇼츠 업로드용 카피를 만드세요. 모드: {dict(travel='숙소 소개', commerce='제품 리뷰', owner='동네 가게 소개', book='동네 책방의 도서 큐레이션')[mode]}
@@ -306,6 +308,8 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
             bad = "진부한 후킹"
         if mode == "travel" and product_name and product_name.strip() and product_name.strip() in val:
             bad = "숙소명 노출"
+        if any(re.sub(r"\s+", "", h) in re.sub(r"\s+", "", val) for h in hidden):
+            bad = "마지막 공개 전 노출"
         if bad or len(val) > limit + 4:
             out["rejected"].append(f"{field}: '{val}' ({bad or '너무 김'})")
             continue
@@ -321,7 +325,8 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
     out["accent"] = _clean_accent(raw.get("accent")) or base["accent"]
     if out["accent"] in ("?!", "ㄷㄷ") and re.search(r"[?!ㄷ]$", out["thumb_main"]):
         out["accent"] = "😱" if out["thumb_main"].endswith("?") else "🔥"     # '모른다고??!'처럼 부호가 겹치지 않게
-    tags = [t for t in (raw.get("hashtags") or []) if isinstance(t, str) and not find_hype_claim(t, usp)]
+    tags = [t for t in (raw.get("hashtags") or []) if isinstance(t, str) and not find_hype_claim(t, usp)
+            and not any(_norm_tag(h) in _norm_tag(t) for h in hidden)]
     if mode == "travel" and product_name:
         tags = [t for t in tags if _norm_tag(product_name) not in _norm_tag(t)]
     pool = set(trend_tag_pool(trend))

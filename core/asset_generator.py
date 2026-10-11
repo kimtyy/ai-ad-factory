@@ -32,8 +32,8 @@ logger = logging.getLogger("ad_factory.asset_generator")
 # 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장·상품 사진은 허위광고)
 # 쇼핑도 포함: AI 이미지(Imagen)로 장면을 만들면 화면 속 물건이 실제 상품과 달라짐 (전기히터 링크 → 세럼 장면). Imagen 호출은 제거됨
 REAL_MEDIA_MODES = ("travel", "owner", "commerce", "book")
-# 시골책방: 차분한 호흡 (성우 -5%, 후킹도 쇼핑처럼 빠르게 읽지 않음)
-MODE_RATE = {"book": "-5%"}
+# 시골책방 듀얼 템포: 훅·상황·위로는 기본 속도(0%), 책 속 문장 낭독 씬만 -5% (씬 tts_rate) - 도서 레이더 실측 반영
+MODE_RATE = {"book": "+0%"}
 MODE_HOOK_RATE = {"book": "+5%"}
 
 # Ken Burns 모션 강도: 줌 1.0 ↔ 1.20배 (기존 1.12배 계획이 5초 클립 중 앞 3초만 노출돼 실제 약 1.07배로 정지 화면처럼 보였음)
@@ -403,7 +403,7 @@ class AssetGenerator:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         actor_info = VOICE_ACTOR_PROFILES.get(self.voice_actor, VOICE_ACTOR_PROFILES["female_20s"])
         # Edge-TTS 파라미터: rate="+12%"(지루함 제거), pitch="+3Hz"(발랄한 톤), 여성 SunHi / 남성 InJoon
-        rate = rate or MODE_RATE.get(self.mode) or actor_info.get("rate", "+12%")
+        rate = rate or scene.get("tts_rate") or MODE_RATE.get(self.mode) or actor_info.get("rate", "+12%")
         pitch = actor_info.get("pitch", "+3Hz")
         logger.info(f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor}, Rate={rate}, Pitch={pitch}): '{text}'")
 

@@ -147,8 +147,8 @@ ys, xs = np.where(mask)
 cw, ch = xs.max() - xs.min(), ys.max() - ys.min()
 check(abs(cw / ch - 2 / 3) < 0.03 and abs(xs.min() / fr.shape[1] - BOOK_CARD_BOX[0]) < 0.02,
       f"책 표지 카드 2:3 고정 비율 (가로 사진도 채움) {cw}x{ch} = {cw / ch:.3f}")
-check(MODE_RATE.get("book") == "-5%" and XFADE_BY_MODE.get("book") == 0.6 and DUCK_BY_MODE.get("book", 1) < 0.32,
-      "호흡 프리셋: 성우 -5%, 디졸브 0.6초, BGM 덕킹 더 낮게")
+check(MODE_RATE.get("book") == "+0%" and XFADE_BY_MODE.get("book") == 0.6 and DUCK_BY_MODE.get("book", 1) < 0.32,
+      "호흡 프리셋: 성우 기본 속도(인용만 -5%), 디졸브 0.6초, BGM 덕킹 더 낮게")
 import core.render.ffmpeg_assemble as fa  # noqa: E402
 _orig_asm, got = fa.assemble, {}
 fa.assemble = lambda comp_, manifest, out, **kw: (got.update(kw), out)[1]
@@ -163,11 +163,13 @@ check(got.get("xfade") == 0.6 and got.get("label") == "📚 시골책방의 한 
 rates = []
 gen2 = AssetGenerator(mode="book", cache_dir=work, mock=False)
 gen2._speak_checked = lambda text, path, rate, pitch, n, keep_commas=False: (rates.append(rate), path)[1]
-try:
-    gen2._synthesize("천천히 읽기 좋은 책이에요.", os.path.join(work, "v.mp3"), {"scene_index": 1}, True)
-except Exception:
-    pass
-check(rates and rates[0] == "-5%", f"시골책방 나레이션은 실제로 -5%로 합성 요청 {rates[:1]}")
+for sc in ({"scene_index": 1}, {"scene_index": 4, "tts_rate": "-5%"}):
+    try:
+        gen2._synthesize("천천히 읽기 좋은 책이에요.", os.path.join(work, f"v{sc['scene_index']}.mp3"), sc, True)
+    except Exception:
+        pass
+check(rates[:2] == ["+0%", "-5%"] and sb[3].get("tts_rate") == "-5%" and not sb[1].get("tts_rate"),
+      f"듀얼 템포: 훅·상황은 기본 속도, 책 속 문장 낭독 씬만 -5%로 합성 요청 {rates[:2]}")
 
 # ---------------------------------------------------------------- 4. 첫 댓글: 책방 지도 + 알라딘 링크 + 알라딘 제휴 고지 → 대기열
 cm = build_first_comment("book", "이 책, 어떤 밤에 읽고 싶어요? 👇", ["#책추천", "#동네책방", "#시집", "#x"], search_keyword="시골책방",
@@ -237,4 +239,95 @@ finally:
     yu.DRAFTS_PATH = _drafts
     for j in set(jobs):
         shutil.rmtree(j, ignore_errors=True)
+
+# ---------------------------------------------------------------- 6. 우화·사유 스토리텔링 템플릿 (도서 레이더 우화형 벤치마크)
+from core.planners.book_fable import FABLE_CTA, FABLE_QUOTE_MAX, QUOTE_CHUNK_MAX, QUOTE_CY, split_quote  # noqa: E402
+FABLE_Q = ("쥐들이 모여 회의를 했다. 고양이 목에 방울을 달자는 의견이 나왔고, 모두가 손뼉을 쳤다. 그런데 한 늙은 쥐가 물었다. "
+           "그렇다면 누가 방울을 달 것인가? 아무도 대답하지 못했다. 좋은 생각보다 어려운 것은, 그 생각을 실행할 용기다.")
+chunks = split_quote(FABLE_Q)
+long_sent = "가" * 50 + ", " + "나" * 50 + ", " + "다" * 30 + "."
+check(" ".join(chunks) == FABLE_Q and all(len(c) <= QUOTE_CHUNK_MAX for c in chunks) and len(chunks) == 2
+      and all(len(c) <= QUOTE_CHUNK_MAX for c in split_quote(long_sent)) and " ".join(split_quote(long_sent)) == long_sent,
+      f"원문 분할: 문장 경계(길면 쉼표)에서만 나눔, 글자는 그대로 {[len(c) for c in chunks]}")
+try:
+    plan_book_storyboard("시골책방", "이솝 우화", "이솝", "", "가" * (FABLE_QUOTE_MAX + 1), media_paths=[COVER], mock=True, template="fable")
+    check(False, "350자 초과")
+except ValueError as e:
+    check(f"{FABLE_QUOTE_MAX}자" in str(e), "우화 원문은 350자까지 (넘으면 자르지 않고 안내)")
+try:
+    plan_book_storyboard("시골책방", "이솝 우화", media_paths=[COVER], mock=True, template="fable")
+    check(False, "원문 없음")
+except ValueError:
+    check(True, "우화 템플릿은 원문 필수")
+
+os.environ["ANTHROPIC_API_KEY"] = "test-claude"
+seen.update(prompts=[], labels=[])
+reply = {"hook_title": "듣기 좋은 말만 들으면 손해예요",
+         "scenes": [{"scene_index": 1, "voiceover": "다들 회의에선 좋은 말만 하죠?"},
+                    {"scene_index": 2, "voiceover": "이솝 우화처럼 말만 앞서는 회의, 오늘도 그냥 넘어갔잖아요."},   # 제목 노출 → 템플릿
+                    {"scene_index": 3, "voiceover": "작은 실천 하나가 백 마디 계획보다 큰 용기가 된다는 걸 기억해요."}]}
+rt._overrides = {"claude": fake_claude}
+PAGE = os.path.join(work, "page.png")
+Image.new("RGB", (1200, 800), (235, 228, 210)).save(PAGE)
+fb = plan_book_storyboard("시골책방", "이솝 우화", "이솝", "고대 그리스 우화 모음집", FABLE_Q,
+                          media_paths=[COVER, PAGE, STORE1, STORE2], book_photo_count=2, api_key=None, template="fable")
+rt._overrides = {}
+os.environ["ANTHROPIC_API_KEY"] = ""
+roles = [s["role"] for s in fb]
+check(roles == ["hook", "situation", "quote", "quote", "comfort", "cta"] and fb[0]["book"]["template"] == "fable",
+      f"우화 구조: 훅·상황 → 원문 카드 여러 장 → 위로 → 책 공개 CTA {roles}")
+check([s["voiceover"] for s in fb if s["role"] == "quote"] == chunks and all(s["quote_source"] == "" and s["quote_cy"] == QUOTE_CY
+                                                                             for s in fb if s["role"] == "quote"),
+      "원문 낭독: 나눈 원문 그대로, 카드 출처 숨김(제목 미공개), 카드는 화면 가운데")
+check([s.get("tts_rate") for s in fb] == [None, None, "-5%", "-5%", None, None] and fb[3].get("hold_sec") == 1.5,
+      "듀얼 템포: 원문 낭독 씬만 -5%, 마지막 원문 카드 뒤 1.5초 여운")
+check(fb[-1]["voiceover"] == FABLE_CTA.format(title="이솝 우화", store="시골책방")
+      == "오늘 마음을 다독여준 이 책은 『이솝 우화』입니다. 시골책방 서가에서 직접 펼쳐보세요."
+      and fb[-1]["source_path"] == COVER and fb[-1]["layout"] == "book_quote" and fb[-1]["caption_center_y"] == 0.68,
+      "엔딩 CTA(지정 문구)에서 책 제목 첫 공개 + 표지 카드")
+check(COVER not in [s.get("source_path") for s in fb[:-1]] and not any("이솝" in s["voiceover"] for s in fb[:-1])
+      and "이솝" not in fb[0]["hook_title"], "마지막 장면 전에는 표지·제목·저자가 안 나옴 (제목이 든 AI 대사는 템플릿으로)")
+check(fb[0]["hook_title"] == "듣기 좋은 말만 들으면 손해예요" and fb[0]["script_engine"] == "claude", "경고형 훅 헤드라인 (해요체)")
+fprompt = seen["prompts"][0]
+check("마지막에만 공개" in fprompt and "경고형" in fprompt and "리스트형" in fprompt and FABLE_Q in fprompt
+      and not any(l == "[책 사진]" for l in seen["labels"][0]),
+      "우화 프롬프트: 제목은 마지막 공개·경고/리스트형 훅·원문은 낭독용으로만, 책 사진은 안 보냄")
+basic_q = [s for s in sb if s["role"] == "quote"][0]
+check(basic_q.get("tts_rate") == "-5%" and basic_q["quote_source"], "기본 큐레이션도 인용 낭독만 -5% (출처 표시는 유지)")
+
+# 우화 카드 위치·업로드 카피 제목 숨김·BGM 기본값
+mid = np.array(comp.render_quote_card(chunks[0], "", W, H, cy=QUOTE_CY))
+ys = np.where(mid[..., 3] > 200)[0]
+check(abs((ys.min() + ys.max()) / 2 / H - QUOTE_CY) < 0.03, "우화 인용 카드는 화면 가운데")
+import google.genai as gg  # noqa: E402
+from core.shorts_meta import make_shorts_copy  # noqa: E402
+_oc = gg.Client
+gem = {"title": "이솝 우화 속 쥐들의 회의가 알려 준 것", "thumb_main": "이 말 듣고 멈췄어요", "thumb_sub": "마음을 다독이는 책",
+       "accent": "🔥", "hashtags": ["#이솝우화", "#책추천", "#위로"], "comment_question": "요즘 미뤄 둔 일 있나요? 👇"}
+gg.Client = lambda api_key=None: type("C", (), {"models": type("M", (), {"generate_content": lambda self, **kw: type(
+    "R", (), {"text": json.dumps(gem, ensure_ascii=False)})()})()})()
+cp = make_shorts_copy("book", hook="h", usp="", product_name="시골책방", api_key="fake", signature="마음을 다독이는 책",
+                      hidden_terms=["이솝 우화", "이솝"])
+gg.Client = _oc
+check("이솝" not in cp["title"] and "#이솝우화" not in cp["hashtags"] and any("마지막 공개 전" in r for r in cp["rejected"]),
+      f"우화: 업로드 제목·해시태그에도 책 제목 숨김 ({cp['title']})")
+import core.render.bgm as bgm_mod  # noqa: E402
+bdir = os.path.join(work, "bgm")
+os.makedirs(bdir, exist_ok=True)
+open(os.path.join(bdir, "calm piano.wav"), "wb").write(b"0")
+_env = os.environ.get("BGM_BOOK_TRACK")
+os.environ["BGM_BOOK_TRACK"] = "calm piano.wav"
+ok_track = bgm_mod.book_default_track(bdir)
+os.environ["BGM_BOOK_TRACK"] = "없는 곡.wav"
+missing = bgm_mod.book_default_track(bdir)
+if _env is None:
+    os.environ.pop("BGM_BOOK_TRACK", None)
+else:
+    os.environ["BGM_BOOK_TRACK"] = _env
+fa.assemble = lambda comp_, manifest, out, **kw: out
+comp.assemble_ad([{"x": 1}], output_filename="z.mp4", mode="book")
+fa.assemble = _orig_asm
+check(ok_track == "calm piano.wav" and missing is None and comp.bgm_from_start,
+      "시골책방 기본 BGM = .env BGM_BOOK_TRACK (없는 파일이면 끔), 잔잔한 곡은 드롭이 아니라 처음부터")
+
 finish(fails)

@@ -50,13 +50,16 @@ def book_hype(text: str, info: str = "") -> Optional[str]:
     return None
 
 
-def check_quote(quote: str) -> str:
+def check_quote(quote: str, max_len: int = QUOTE_MAX) -> str:
     """인용문 정리 (따옴표 제거·공백 정리). 너무 길면 ValueError (원문을 임의로 자르지 않음)"""
     q = re.sub(r"\s+", " ", (quote or "").strip().strip('"“”「」『』\''))
-    if len(q) > QUOTE_MAX:
-        raise ValueError(f"책 속 한 문장이 {len(q)}자예요. 인용 카드·낭독에 맞게 {QUOTE_MAX}자 이내의 한두 문장으로 골라 주세요 "
+    if len(q) > max_len:
+        raise ValueError(f"책 속 문장이 {len(q)}자예요. 인용 카드·낭독에 맞게 {max_len}자 이내로 골라 주세요 "
                          "(원문을 임의로 자르지 않아요).")
     return q
+
+
+TEMPLATES = {"basic": "기본 큐레이션", "fable": "우화·사유 스토리텔링"}
 
 
 def split_book_media(media_paths: List[str], book_photo_count: int = 1):
@@ -92,15 +95,21 @@ def plan_book_storyboard(
     mock: bool = False,
     thumb_dir: Optional[str] = None,
     output_plan_path: Optional[str] = None,
+    template: str = "basic",
 ) -> List[Dict[str, Any]]:
     """
-    → 씬 5~6개. scenes[0]에 book(제목·저자·책방·라벨 문구)·script_engine 기록.
+    template: basic(한 권 큐레이션, 약 30~35초) / fable(우화·사유: 고민 → 원문 낭독 카드 여러 장 → 위로 → 마지막에 책 공개, 50~75초)
+    → 씬 5~6개(fable은 원문 길이만큼 더). scenes[0]에 book(제목·저자·책방·라벨 문구)·script_engine 기록.
     씬마다 layout(book_card / book_quote / full), source_path, caption_center_y, 인용 씬은 quote_card·quote_source
     """
     store_name, book_title, author = (store_name or "").strip(), (book_title or "").strip(), (author or "").strip()
     if not store_name or not book_title:
         raise ValueError("책방 이름과 책 제목을 입력해 주세요.")
-    q = check_quote(quote)
+    template = template if template in TEMPLATES else "basic"
+    from core.planners import book_fable
+    q = check_quote(quote, book_fable.FABLE_QUOTE_MAX if template == "fable" else QUOTE_MAX)
+    if template == "fable" and not q:
+        raise ValueError("우화·사유 템플릿은 책 속 원문이 꼭 필요해요 (낭독이 영상의 중심이에요).")
     book_photos, store_photos = split_book_media(media_paths or [], book_photo_count)
     if not mock and not book_photos:
         raise ValueError("책 사진이 없어요. 책 표지 사진을 첫 번째로 올려 주세요 (AI로 표지를 만들지 않아요).")
@@ -112,9 +121,14 @@ def plan_book_storyboard(
     llm = None
     if not mock and script_llm_ready(api_key):
         try:
-            llm = _plan_with_llm(store_name, book_title, author, book_info, book_photos, store_photos, api_key, thumb_dir)
+            llm = _plan_with_llm(store_name, book_title, author, book_info, book_photos, store_photos, api_key, thumb_dir,
+                                 template=template, quote=q)
         except Exception as e:
             logger.warning(f"시골책방 대본 엔진 모두 실패, 템플릿 대사로 대체: {e}")
+    if template == "fable":
+        scenes = book_fable.plan_fable(store_name, book_title, author, book_info, q, book_photos, store_photos, llm, _scene,
+                                       lambda t: book_hype(t, book_info) or _claim(t, book_info))
+        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
     lines = [str((s or {}).get("voiceover") or "") for s in ((llm or {}).get("scenes") or []) if isinstance(s, dict)]
 
     templated: set = set()
@@ -154,7 +168,7 @@ def plan_book_storyboard(
     source = f"「{book_title}」" + (f", {author}" if author else "")
     if q:
         scenes.append(_scene(len(scenes), "quote", q, page, "book_quote", quote_card=q, quote_source=source,
-                             media_kind="page", hold_sec=QUOTE_HOLD_SEC))
+                             media_kind="page", hold_sec=QUOTE_HOLD_SEC, tts_rate=book_fable.QUOTE_RATE))
     store_line = clean(len(scenes), line(3), STORE_TEMPLATE, STORE_LINE_RANGE[1] + 10)
     scenes.append(_scene(len(scenes), "store", store_line, store1 or cover, "full" if store1 else "book_card",
                          media_kind="store"))
@@ -175,13 +189,18 @@ def plan_book_storyboard(
     for c in changes:
         logger.info(f"[감탄사 중복 분산] {c}")
 
+    return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
+
+
+def _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path) -> List[Dict[str, Any]]:
     scenes[0].update({"script_engine": (llm or {}).get("_engine") or "template",
-                      "book": {"title": book_title, "author": author, "store": store_name,
+                      "book": {"title": book_title, "author": author, "store": store_name, "template": template,
                                "label": LABEL_TEMPLATE.format(store=store_name), "quote": q}})
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
-    logger.info(f"시골책방 콘티 완료: 「{book_title}」 {len(scenes)}개 씬 (인용 {'있음' if q else '없음'}, LLM={scenes[0]['script_engine']})")
+    logger.info(f"시골책방 콘티 완료 [{TEMPLATES[template]}]: 「{book_title}」 {len(scenes)}개 씬 "
+                f"(인용 {'있음' if q else '없음'}, LLM={scenes[0]['script_engine']})")
     return scenes
 
 
@@ -190,18 +209,25 @@ BOOK_SYSTEM = ("당신은 동네 책방의 도서 큐레이션 숏폼(쇼츠) �
                "반드시 JSON 하나만 출력합니다.")
 
 
-def _plan_with_llm(store_name, book_title, author, book_info, book_photos, store_photos, api_key, thumb_dir) -> Dict[str, Any]:
+def _plan_with_llm(store_name, book_title, author, book_info, book_photos, store_photos, api_key, thumb_dir,
+                   template: str = "basic", quote: str = "") -> Dict[str, Any]:
     from core.llm import generate_json, repair_scene_lines
     from core.planners.owner import _media_preview_image
     from core.script_guard import STYLE_REPAIR_RULES, script_violation_finder
 
     contents: List[Any] = []
+    if template == "fable":                 # 우화: 책 사진은 안 보여 줌 (대사에 제목이 새지 않게), 책방 사진만
+        book_photos = []
     for label, paths in (("책 사진", book_photos[:2]), ("책방 사진", store_photos[:2])):
         for p in paths:
             img = _media_preview_image(p, thumb_dir)
             if img is not None:
                 contents += [f"[{label}]", img]
-    contents.append(f"""
+    if template == "fable":
+        from core.planners.book_fable import fable_prompt
+        contents.append(fable_prompt(book_title, author, book_info, quote, store_name, COPY_TONE_RULES))
+    else:
+        contents.append(f"""
 [책] 「{book_title}」{(' / ' + author) if author else ''}
 [책 소개 - 여기 있는 사실만 근거] {book_info or '(없음 - 제목과 사진으로 알 수 있는 것만)'}
 [책방] {store_name}

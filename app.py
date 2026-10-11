@@ -59,7 +59,7 @@ from core.radar.trends import digest_for
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
-from core.planners.book import plan_book_storyboard
+from core.planners.book import TEMPLATES as BOOK_TEMPLATES, plan_book_storyboard
 from core.planners.commerce_bundle import (BUNDLE_SIZE, DEFAULT_BOTTOM_BAR, bundle_title_ok, plan_bundle_storyboard,
                                            short_name as bundle_short_name)
 from core.planners.travel import plan_travel_storyboard
@@ -374,7 +374,7 @@ init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
-           "book_photo_count",
+           "book_photo_count", "book_template",
            *[f"bundle_{f}_{k}" for f in ("name", "usp", "link") for k in range(3)],
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
@@ -495,6 +495,10 @@ with st.sidebar:
     # 자체 음원 BGM (assets/bgm): 나레이션 구간 20% 덕킹 + 시작 페이드인·끝 페이드아웃
     bgm_tracks = bgm_mod.ordered_tracks()
     st.session_state.setdefault("bgm_on", False)
+    # 시골책방: 잔잔한 피아노 BGM 기본 (.env BGM_BOOK_TRACK) - 이 세션에서 처음 시골책방에 들어올 때 한 번만 켜 둠
+    _book_track = bgm_mod.book_default_track() if is_book_mode else None
+    if _book_track and not st.session_state.get("bgm_book_init"):
+        st.session_state.bgm_on, st.session_state.bgm_choice, st.session_state.bgm_book_init = True, _book_track, True
     bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks, on_change=_sync_bgm, args=("bgm_on", "bgm_on_main"),
                        help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
     bgm_choice = None
@@ -886,6 +890,11 @@ if is_owner_mode:
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
 elif is_book_mode:
     st.session_state.setdefault("book_photo_count", 1)
+    st.session_state.setdefault("book_template", "basic")
+    st.radio("시골책방 템플릿", list(BOOK_TEMPLATES), key="book_template", horizontal=True,
+             format_func=lambda k: {"basic": "📖 기본 큐레이션 (한 권 · 약 30~35초)",
+                                    "fable": "🕯️ 우화·사유 스토리텔링 (고민 → 원문 낭독 → 위로 → 책 공개 · 50~75초)"}[k])
+    _fable = st.session_state.book_template == "fable"
     k1, k2 = st.columns([1, 1])
     with k1:
         st.text_input("책방 이름 (라벨 바·CTA)", key="book_store", placeholder="예: 시골책방")
@@ -898,8 +907,16 @@ elif is_book_mode:
         st.text_input("저자", key="book_author", placeholder="예: 한강")
     st.text_area("책 소개 (출판사 소개·장르 등 사실만 - 대본 근거)", key="book_info", height=80,
                  placeholder="예: 장편소설. 제주 4·3을 다룬 이야기. (베스트셀러·수상 같은 말은 여기 있을 때만 대본에 들어가요)")
-    st.text_area("📖 책 속 한 문장 (원문 그대로, 선택 · 90자 이내)", key="book_quote", height=70,
-                 help="AI가 문장을 만들지 않아요. 비워 두면 인용 장면 없이 약 28초로 만들어요.")
+    if _fable:
+        st.text_area("📖 책 속 우화·문장 (원문 그대로, 필수 · 350자 이내 · 문장 단위로 카드 여러 장)", key="book_quote", height=140,
+                     help="AI가 문장을 만들지 않아요. 원문을 문장 경계에서 나눠 카드로 넘기며 천천히(-5%) 낭독해요. "
+                          "책 제목은 마지막 장면에서 처음 공개돼요 (앞 장면엔 표지·출처를 안 보여 줘요).")
+        _ql = len((st.session_state.get("book_quote") or "").strip())
+        st.caption(f"원문 {_ql}/350자 · 예상 영상 길이 약 {int(24 + _ql * 0.13)}초 "
+                   "(실측: 원문 200자 ≈ 50초, 350자 ≈ 70초 → 50~75초 호흡은 원문 200~350자)")
+    else:
+        st.text_area("📖 책 속 한 문장 (원문 그대로, 선택 · 90자 이내)", key="book_quote", height=70,
+                     help="AI가 문장을 만들지 않아요. 비워 두면 인용 장면 없이 약 28초로 만들어요.")
     st.text_input("알라딘 구매 링크 (알라딘 제휴 링크 그대로 붙여 넣기)", key="book_link",
                   placeholder="https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=...")
     from core.shorts_meta import shop_link_kind
@@ -908,6 +925,9 @@ elif is_book_mode:
         st.warning("알라딘 링크가 아니에요. 그대로 쓰면 그 링크 종류의 제휴 고지가 붙어요.")
     st.radio("올린 사진 중 책 사진", [1, 2], key="book_photo_count", horizontal=True,
              format_func=lambda n: "1번째 = 책 표지" if n == 1 else "1번째 = 표지, 2번째 = 펼친 면")
+    if _fable and not bgm_mod.book_default_track():
+        st.caption("🎹 우화 템플릿은 잔잔한 피아노 BGM을 권장해요. 피아노 음원을 assets/bgm에 넣고 .env에 "
+                   "`BGM_BOOK_TRACK=파일이름`을 적으면 시골책방에서 자동으로 켜져요.")
     product_name = (st.session_state.get("book_store") or "").strip()
     usp_desc = (st.session_state.get("book_info") or "").strip()
 elif is_bundle:
@@ -1048,6 +1068,7 @@ if generate_plan_btn or auto_flow:
                     quote=st.session_state.get("book_quote", ""),
                     media_paths=st.session_state.uploaded_paths,
                     book_photo_count=st.session_state.get("book_photo_count", 1),
+                    template=st.session_state.get("book_template", "basic"),
                     api_key=api_key,
                     mock=mock_mode,
                     thumb_dir=current_job().assets_dir,
@@ -1469,11 +1490,14 @@ if render_btn:
                 radar_trend = digest_for(pipeline_mode, business_type)
                 _usp_items = [s.strip() for s in re.split(r"[,/·\n]", usp_desc or "") if s.strip()]
                 _bundle_title = (scenes[0].get("bundle_title") or "") if is_bundle and scenes else ""
+                _book_fable = is_book_mode and scenes and (scenes[0].get("book") or {}).get("template") == "fable"
                 shorts_copy = make_shorts_copy(
                     pipeline_mode, hook=hook_text, usp=usp_desc, product_name=_bundle_title or product_name, api_key=api_key, mock=mock_mode,
                     trend=radar_trend,
-                    signature=(st.session_state.get("book_title", "").strip() if is_book_mode
-                               else _usp_items[0] if _usp_items else ""),
+                    signature=(("마음을 다독이는 책" if _book_fable else st.session_state.get("book_title", "").strip())
+                               if is_book_mode else _usp_items[0] if _usp_items else ""),
+                    hidden_terms=([st.session_state.get("book_title", ""), st.session_state.get("book_author", "")]
+                                  if _book_fable else None),
                     region=region_of(st.session_state.get("owner_address", "")) if is_owner_mode else "")
                 st.session_state.shorts_copy = shorts_copy
                 thumb_path = compositor.render_thumbnail(first_frame, shorts_copy["thumb_main"],

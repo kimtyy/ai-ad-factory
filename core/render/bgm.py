@@ -76,6 +76,14 @@ def display_name(track: str) -> str:
     return re.sub(r"_\d+-\d+$", "", stem).strip() or stem
 
 
+def book_default_track(bgm_dir: Optional[str] = None) -> Optional[str]:
+    """시골책방 기본 BGM (.env BGM_BOOK_TRACK = assets/bgm 안 파일 이름, 잔잔한 피아노 곡 권장). 없거나 파일이 없으면 None"""
+    name = os.getenv("BGM_BOOK_TRACK", "").strip()
+    if not name:
+        return None
+    return name if name in [os.path.basename(t) for t in list_tracks(bgm_dir)] else None
+
+
 def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Optional[random.Random] = None) -> Optional[str]:
     """choice: 파일 이름(또는 경로) / RANDOM / None·'' → 없음"""
     if not choice:

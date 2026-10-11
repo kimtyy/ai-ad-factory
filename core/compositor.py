@@ -30,6 +30,7 @@ CENTER_CAPTION_MODES = ("travel", "owner", "commerce", "book")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
 XFADE_BY_MODE = {"book": 0.6}          # 시골책방: 차분한 호흡 (긴 디졸브)
 DUCK_BY_MODE = {"book": 0.25}          # 시골책방: 나레이션 중 BGM을 조금 더 낮게 (기본 32%)
+BGM_FROM_START_MODES = ("book",)       # 잔잔한 곡은 드롭이 아니라 처음부터
 INTRO_SEC = 0.8             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 쇼츠 썸네일은 영상 프레임 중에서 고르므로
                             # 0~0.8초를 '시그니처 비주얼 + 헤드카피' 커버로 고정 (첫 프레임 = 커버, IDR 키프레임)
 THUMB_FONT_RATIO = 0.26     # 썸네일 메인 카피 최대 글자 크기 (폭 대비, 기존 0.115의 약 2.3배 - 짧은 카피면 2줄 안에서 이 크기)
@@ -516,7 +517,7 @@ class AdCompositor:
         draw.text((x - bb[0], y0 + (bar_h - th) // 2 - bb[1]), text, font=font, fill=BOOK_INK + (255,))
         return layer
 
-    def render_quote_card(self, quote: str, source: str, width: int, height: int) -> Image.Image:
+    def render_quote_card(self, quote: str, source: str, width: int, height: int, cy: Optional[float] = None) -> Image.Image:
         """
         책 속 한 문장 인용 카드 (인용 씬에만): 종이 질감 카드 + 큰 따옴표 + 명조체 본문(최대 4줄, 넘치면 글자 축소) + 출처
         문장은 사용자가 입력한 원문 그대로 (AI가 만들지 않음)
@@ -539,7 +540,7 @@ class AdCompositor:
         src_font = ImageFont.truetype(self.serif_font_path, max(14, int(size * 0.62)))
         src_h = int(src_font.size * 1.9) if source else 0
         card_h = pad_y * 2 + len(lines) * line_h + src_h
-        y0 = int(height * QUOTE_CARD_CY - card_h / 2)
+        y0 = int(height * (cy or QUOTE_CARD_CY) - card_h / 2)
         # 그림자 → 종이 카드 (모서리 둥글게)
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle([x0 + 6, y0 + 14, x1 + 6, y0 + card_h + 14], radius=int(width * 0.03), fill=(0, 0, 0, 130))
@@ -741,6 +742,7 @@ class AdCompositor:
         """
         self.xfade = XFADE_BY_MODE.get(mode, XFADE_SEC)
         self.duck = DUCK_BY_MODE.get(mode)
+        self.bgm_from_start = mode in BGM_FROM_START_MODES
         final_output_path = os.path.join(self.output_dir, output_filename)
         self.last_bgm_error = None
         self.last_bgm_info = None      # 실제로 섞인 BGM {track, start, gain_db, duck} (없거나 실패하면 None)
@@ -786,6 +788,8 @@ class AdCompositor:
             voice_db = sum(levels) / len(levels) if levels else None
         info: Dict[str, Any] = {}
         duck = {"duck": self.duck} if getattr(self, "duck", None) else {}
+        if getattr(self, "bgm_from_start", False):
+            duck["start_at"] = 0.0
         out = bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db, info=info, **duck)
         self.last_bgm_info = info
         return out
@@ -899,7 +903,8 @@ class AdCompositor:
                                     watermark_cache[key] = self.render_book_label(label, w, h)
                                 merged.alpha_composite(watermark_cache[key])
                             if item.get("quote_card"):
-                                merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h))
+                                merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h,
+                                                                              cy=item.get("quote_cy")))
                             if bars:
                                 key = ("bars", w, h)
                                 if key not in watermark_cache:

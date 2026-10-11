@@ -174,7 +174,8 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 layer.alpha_composite(static_layers["label"])
             if quote:
                 if ("quote", idx) not in static_layers:
-                    static_layers[("quote", idx)] = comp.render_quote_card(quote, item.get("quote_source", ""), W, H)
+                    static_layers[("quote", idx)] = comp.render_quote_card(quote, item.get("quote_source", ""), W, H,
+                                                                           cy=item.get("quote_cy"))
                 layer.alpha_composite(static_layers[("quote", idx)])
             if bars:
                 if "bars" not in static_layers:
