@@ -23,14 +23,18 @@ import json
 from core.guardrail import validate_model_call
 from core.media import normalize_ugc_clip, extract_thumbnail
 from core.media.normalize import DEFAULT_TRIM_START
-from core.render.commerce_layout import (COMMERCE_BG_BLUR, COMMERCE_BG_DIM, COMMERCE_BG_ZOOM, COMMERCE_CARD_BOX,
-                                         COMMERCE_CARD_RADIUS, COMMERCE_CARD_ZOOM, shot_crop)
+from core.render.commerce_layout import (BOOK_CARD_BOX, BOOK_CARD_ZOOM, BOOK_QUOTE_BOX, COMMERCE_BG_BLUR, COMMERCE_BG_DIM,
+                                         COMMERCE_BG_ZOOM, COMMERCE_CARD_BOX, COMMERCE_CARD_RADIUS, COMMERCE_CARD_ZOOM,
+                                         shot_crop)
 
 logger = logging.getLogger("ad_factory.asset_generator")
 
 # 실물 사진/영상만 허용하는 모드 (AI 생성 숙소·매장·상품 사진은 허위광고)
 # 쇼핑도 포함: AI 이미지(Imagen)로 장면을 만들면 화면 속 물건이 실제 상품과 달라짐 (전기히터 링크 → 세럼 장면). Imagen 호출은 제거됨
-REAL_MEDIA_MODES = ("travel", "owner", "commerce")
+REAL_MEDIA_MODES = ("travel", "owner", "commerce", "book")
+# 시골책방: 차분한 호흡 (성우 -5%, 후킹도 쇼핑처럼 빠르게 읽지 않음)
+MODE_RATE = {"book": "-5%"}
+MODE_HOOK_RATE = {"book": "+5%"}
 
 # Ken Burns 모션 강도: 줌 1.0 ↔ 1.20배 (기존 1.12배 계획이 5초 클립 중 앞 3초만 노출돼 실제 약 1.07배로 정지 화면처럼 보였음)
 KB_ZOOM = 1.20
@@ -333,7 +337,7 @@ class AssetGenerator:
         hook_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_hook.mp3")
         body_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_body.mp3")
         if force or not (self.is_cached(out_path) and self.is_cached(hook_path)):
-            self._synthesize(hook, hook_path, {**scene, "duration_sec": 1.2}, force, rate=HOOK_RATE)
+            self._synthesize(hook, hook_path, {**scene, "duration_sec": 1.2}, force, rate=MODE_HOOK_RATE.get(self.mode, HOOK_RATE))
             self._synthesize(scene.get("voiceover", ""), body_path, scene, force)
             hook_sec = max(HOOK_SOLO_SEC, (_audio_seconds(hook_path) or 0.0) + HOOK_GAP_SEC)
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -399,7 +403,7 @@ class AssetGenerator:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         actor_info = VOICE_ACTOR_PROFILES.get(self.voice_actor, VOICE_ACTOR_PROFILES["female_20s"])
         # Edge-TTS 파라미터: rate="+12%"(지루함 제거), pitch="+3Hz"(발랄한 톤), 여성 SunHi / 남성 InJoon
-        rate = rate or actor_info.get("rate", "+12%")
+        rate = rate or MODE_RATE.get(self.mode) or actor_info.get("rate", "+12%")
         pitch = actor_info.get("pitch", "+3Hz")
         logger.info(f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor}, Rate={rate}, Pitch={pitch}): '{text}'")
 
@@ -615,9 +619,13 @@ class AssetGenerator:
         motion_type: str = "zoom_in",
         motion_sec: Optional[float] = None,
         shot: str = "full",
-        product_box=None
+        product_box=None,
+        card_box=COMMERCE_CARD_BOX,
+        card_zoom: float = COMMERCE_CARD_ZOOM,
+        fit: str = "contain"
     ) -> str:
         """
+        card_box·card_zoom·fit: 시골책방은 BOOK_CARD_BOX + fit='cover'(사진을 카드 비율 2:3에 맞춰 가운데 기준으로 채움)
         shot: 대표 사진 1장으로 여러 씬을 만들 때의 앵글 (full 전체 / center 중앙 줌인 / top·bottom 디테일, commerce_layout.shot_crop)
         쇼핑 전용 9:16 클립: 흐린 배경(같은 사진) + 중앙~하단 상품 카드(원본 비율 그대로, 잘림 없이) + 카드 안 Ken Burns.
         자막은 컴포지터가 카드 위쪽(COMMERCE_CAPTION_CENTER_Y)에 올리므로 상품을 가리지 않음.
@@ -627,6 +635,15 @@ class AssetGenerator:
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
         full_img = Image.open(image_path).convert("RGB")
         img = shot_crop(full_img, shot, product_box)          # 카드에 들어갈 앵글 (배경은 원본 전체 사진으로 깔아 같은 상품임을 유지)
+        if fit == "cover":                                     # 카드 비율 고정: 가운데 기준으로 잘라 카드를 꽉 채움
+            ratio = ((card_box[2] - card_box[0]) * W) / ((card_box[3] - card_box[1]) * H)
+            cw0, ch0 = img.size
+            if cw0 / ch0 > ratio:
+                nw = int(ch0 * ratio)
+                img = img.crop(((cw0 - nw) // 2, 0, (cw0 - nw) // 2 + nw, ch0))
+            else:
+                nh = int(cw0 / ratio)
+                img = img.crop((0, (ch0 - nh) // 2, cw0, (ch0 - nh) // 2 + nh))
         iw, ih = img.size
         fw, fh = full_img.size
 
@@ -639,12 +656,11 @@ class AssetGenerator:
         bg_np = np.array(bg)
 
         # 상품 카드: 영역 안에 원본 비율로 '담기'(contain) → 상품이 잘리지 않음
-        x0, y0, x1, y1 = (int(COMMERCE_CARD_BOX[0] * W), int(COMMERCE_CARD_BOX[1] * H),
-                          int(COMMERCE_CARD_BOX[2] * W), int(COMMERCE_CARD_BOX[3] * H))
+        x0, y0, x1, y1 = (int(card_box[0] * W), int(card_box[1] * H), int(card_box[2] * W), int(card_box[3] * H))
         fit = min((x1 - x0) / iw, (y1 - y0) / ih)
         cw, ch = int(iw * fit), int(ih * fit)
         cx, cy = (W - cw) // 2, y0 + ((y1 - y0) - ch) // 2
-        src = np.array(img.resize((int(cw * COMMERCE_CARD_ZOOM), int(ch * COMMERCE_CARD_ZOOM)), Image.Resampling.LANCZOS))
+        src = np.array(img.resize((int(cw * card_zoom), int(ch * card_zoom)), Image.Resampling.LANCZOS))
         sh, sw = src.shape[:2]
 
         radius = int(W * COMMERCE_CARD_RADIUS)
@@ -669,11 +685,11 @@ class AssetGenerator:
             frame *= (1.0 - shadow * 0.85)
             # 카드 안 Ken Burns: 줌인/줌아웃, 패닝은 같은 폭 안에서 좌우·상하로 살짝 이동
             if motion_type == "zoom_out":
-                z = COMMERCE_CARD_ZOOM - (COMMERCE_CARD_ZOOM - 1.0) * e
+                z = card_zoom - (card_zoom - 1.0) * e
             elif motion_type.startswith("pan_"):
-                z = 1.0 + (COMMERCE_CARD_ZOOM - 1.0) * 0.7
+                z = 1.0 + (card_zoom - 1.0) * 0.7
             else:
-                z = 1.0 + (COMMERCE_CARD_ZOOM - 1.0) * e
+                z = 1.0 + (card_zoom - 1.0) * e
             kw, kh = int(sw / z), int(sh / z)
             slack_x, slack_y = sw - kw, sh - kh
             px, py = slack_x // 2, slack_y // 2
@@ -744,6 +760,14 @@ class AssetGenerator:
                     f"클립 {duration_sec:.1f}초, 원본: {image_path})")
         # 제휴(travel) 모드만 씬 1 상단 간판을 프레임 밖으로 밀어 숙소명을 숨김. 사장님(owner) 모드는 간판 노출이 목적
         is_focus_bottom = bool(scene.get("focus_bottom") or (self.mode == "travel" and scene_num == 1))
+        if self.mode == "book" and scene.get("layout") in ("book_card", "book_quote"):
+            # 시골책방: 흐린 배경 + 2:3 책 표지 카드 (인용 씬은 카드를 위로 줄여 아래에 인용 카드 자리)
+            self._create_product_card_video(image_path=image_path, duration_sec=duration_sec, out_path=out_path, fps=24,
+                                            motion_type=motion_type, motion_sec=motion_sec, shot=scene.get("shot") or "full",
+                                            card_box=BOOK_QUOTE_BOX if scene["layout"] == "book_quote" else BOOK_CARD_BOX,
+                                            card_zoom=BOOK_CARD_ZOOM, fit="cover")
+            logger.info(f"씬 {scene_num} 책 표지 카드 클립 렌더링 완료 -> {out_path}")
+            return out_path
         if self.mode == "commerce":
             # 쇼핑: 상품을 가리지 않는 '상단 자막 + 중앙~하단 상품 카드' 배치
             self._create_product_card_video(image_path=image_path, duration_sec=duration_sec, out_path=out_path, fps=24,

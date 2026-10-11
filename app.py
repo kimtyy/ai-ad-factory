@@ -59,6 +59,7 @@ from core.radar.trends import digest_for
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
+from core.planners.book import plan_book_storyboard
 from core.planners.commerce_bundle import (BUNDLE_SIZE, DEFAULT_BOTTOM_BAR, bundle_title_ok, plan_bundle_storyboard,
                                            short_name as bundle_short_name)
 from core.planners.travel import plan_travel_storyboard
@@ -343,7 +344,8 @@ def rematch_scenes(target_scenes: list, api_key: str):
 #   travel   (트랙 A) 숙소 제휴 쇼츠: URL 크롤링 + 비전 매칭, 숙소명 은닉, 댓글 유도 CTA
 #   commerce (트랙 A) 쇼핑 제휴 쇼츠(쿠팡 파트너스): 판매 페이지 실물 사진/직접 올린 사진 + 리뷰 썰 대본 + 제휴 표시
 # ==============================================================================
-MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce"}
+MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce",
+         "📚 시골책방 도서 큐레이션": "book"}
 MODE_LABELS = {v: k for k, v in MODES.items()}
 SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
                      "room": "🛏 객실", "cta": "📍 CTA", "hero": "🛒 첫인상", "usage": "🙌 사용 장면"}
@@ -371,6 +373,8 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
+           "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
+           "book_photo_count",
            *[f"bundle_{f}_{k}" for f in ("name", "usp", "link") for k in range(3)],
            "brand_watermark", "brand_end_card", "brand_position", "brand_sub", "page_switch") + RADAR_PERSIST_KEYS:
     if _k in st.session_state:
@@ -379,7 +383,8 @@ for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_ad
 is_owner_mode = pipeline_mode == "owner"
 is_travel_mode = pipeline_mode == "travel"
 is_commerce_mode = pipeline_mode == "commerce"
-uses_scene_media = pipeline_mode in ("owner", "travel", "commerce")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드 (전 모드 실물만)
+is_book_mode = pipeline_mode == "book"
+uses_scene_media = pipeline_mode in ("owner", "travel", "commerce", "book")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드 (전 모드 실물만)
 
 # ==============================================================================
 # 상단 헤더 + 화면 전환 (영상 만들기 / 실시간 떡상 레이더)
@@ -539,12 +544,13 @@ st.segmented_control(
     "제작 모드", list(MODES), key="mode_switch", on_change=_on_mode_change, width="stretch",
     help="🏠 사장님 매장 홍보: 내 폰 사진·영상으로 상호명과 네이버 검색 유도가 들어간 홍보 영상\n"
          "🧳 숙소 제휴 쇼츠: 숙소 URL 크롤링, 숙소명을 숨긴 호기심 유발 + 댓글 유도\n"
-         "🛒 쇼핑 제휴 쇼츠: 판매 페이지 실물 사진(또는 직접 올린 사진) + 써 본 사람 리뷰 썰 + 쿠팡 파트너스 표시"
+         "🛒 쇼핑 제휴 쇼츠: 판매 페이지 실물 사진(또는 직접 올린 사진) + 써 본 사람 리뷰 썰 + 쿠팡 파트너스 표시\n"
+         "📚 시골책방 도서 큐레이션: 책 한 권을 차분하게 (책 속 한 문장 인용 카드) + 책방 방문·알라딘 구매 링크"
 )
 production_mode = MODE_LABELS[pipeline_mode]
 
 target_url, crawl_btn = "", False
-if not is_owner_mode:
+if not (is_owner_mode or is_book_mode):
     col_url, col_btn = st.columns([4, 1])
     with col_url:
         url_placeholder = (
@@ -667,6 +673,28 @@ for _k in range(BUNDLE_SIZE):
 if is_commerce_mode:
     st.radio("쇼핑 영상 구성", list(BUNDLE_LAYOUTS), format_func=BUNDLE_LAYOUTS.get, key="commerce_layout", horizontal=True)
 is_bundle = is_commerce_mode and st.session_state.commerce_layout == "bundle"
+
+
+def book_comment_text(copy) -> str:
+    """시골책방 첫 댓글: 참여 질문 → 책방 네이버 검색·지도 → 「책」 알라딘 구매 링크 → 알라딘 제휴 고지 → 해시태그"""
+    from core.shorts_meta import build_first_comment
+    copy = copy or {}
+    store = (st.session_state.get("book_store") or "").strip()
+    title = (st.session_state.get("book_title") or "").strip()
+    link = (st.session_state.get("book_link") or "").strip()
+    return build_first_comment("book", copy.get("comment_question", ""), copy.get("hashtags"),
+                               search_keyword=(st.session_state.get("book_search_kw") or "").strip() or store,
+                               items=[{"short": f"「{title}」", "link": link}] if link else None)
+
+
+def book_disclosure_short() -> str:
+    """화면 위쪽 작은 제휴 표시 (알라딘 링크가 있을 때만)"""
+    from core.shorts_meta import shop_link_kind
+    link = (st.session_state.get("book_link") or "").strip()
+    if not link:
+        return ""
+    return "알라딘 제휴 링크 포함 · 도서 구매 시 수수료를 받을 수 있어요" if shop_link_kind(link) == "aladin" \
+        else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요"
 
 
 def bundle_disclosure_short(items: list) -> str:
@@ -856,6 +884,32 @@ if is_owner_mode:
     if tricky_name and not st.session_state.get("owner_reading", "").strip():
         st.caption("💡 상호명에 영문·숫자가 있어요. 성우가 철자로 읽을 수 있으니 '읽는 법'에 한글 발음을 적어 주시면 깔끔해요.")
     owner_search_kw = owner_search_kw.strip() or product_name.strip()
+elif is_book_mode:
+    st.session_state.setdefault("book_photo_count", 1)
+    k1, k2 = st.columns([1, 1])
+    with k1:
+        st.text_input("책방 이름 (라벨 바·CTA)", key="book_store", placeholder="예: 시골책방")
+    with k2:
+        st.text_input("네이버 검색어 (첫 댓글 지도 링크)", key="book_search_kw", placeholder="비우면 책방 이름으로 검색")
+    k3, k4 = st.columns([1.4, 1])
+    with k3:
+        st.text_input("책 제목", key="book_title", placeholder="예: 작별하지 않는다")
+    with k4:
+        st.text_input("저자", key="book_author", placeholder="예: 한강")
+    st.text_area("책 소개 (출판사 소개·장르 등 사실만 - 대본 근거)", key="book_info", height=80,
+                 placeholder="예: 장편소설. 제주 4·3을 다룬 이야기. (베스트셀러·수상 같은 말은 여기 있을 때만 대본에 들어가요)")
+    st.text_area("📖 책 속 한 문장 (원문 그대로, 선택 · 90자 이내)", key="book_quote", height=70,
+                 help="AI가 문장을 만들지 않아요. 비워 두면 인용 장면 없이 약 28초로 만들어요.")
+    st.text_input("알라딘 구매 링크 (알라딘 제휴 링크 그대로 붙여 넣기)", key="book_link",
+                  placeholder="https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=...")
+    from core.shorts_meta import shop_link_kind
+    _bl = (st.session_state.get("book_link") or "").strip()
+    if _bl and shop_link_kind(_bl) != "aladin":
+        st.warning("알라딘 링크가 아니에요. 그대로 쓰면 그 링크 종류의 제휴 고지가 붙어요.")
+    st.radio("올린 사진 중 책 사진", [1, 2], key="book_photo_count", horizontal=True,
+             format_func=lambda n: "1번째 = 책 표지" if n == 1 else "1번째 = 표지, 2번째 = 펼친 면")
+    product_name = (st.session_state.get("book_store") or "").strip()
+    usp_desc = (st.session_state.get("book_info") or "").strip()
 elif is_bundle:
     st.markdown(f"##### 🧺 묶음 상품 {BUNDLE_SIZE}개 (판매 페이지에 있는 사실만 · 링크는 쿠팡 파트너스/스마트스토어 제휴 링크)")
     b1, b2 = st.columns([1, 1])
@@ -916,6 +970,9 @@ if uses_scene_media:
         )
     elif is_owner_mode:
         st.caption("💡 가게 외관, 대표 메뉴·상품, 내부 분위기를 찍은 사진·영상을 순서대로 2~8개 올려 주세요. 올린 순서대로 씬이 만들어집니다.")
+    elif is_book_mode:
+        st.caption("💡 책 표지(필요하면 펼친 면)를 먼저, 그다음 책방 서가·창가·외관 사진을 올려 주세요. "
+                   "책 장면은 2:3 표지 카드로, 책방 장면은 전체 화면으로 나와요. AI로 표지나 책방 사진을 만들지 않아요.")
     elif is_commerce_mode:
         st.caption("💡 판매 페이지에서 가져온 사진과 직접 찍은 사진·영상을 함께 쓸 수 있어요. 위에서부터 씬 순서이며, "
                    "사진이 씬보다 적으면 앵글을 바꿔 돌려 씁니다. AI로 상품 이미지를 만들지 않습니다.")
@@ -943,7 +1000,7 @@ with col_plan_desc:
                    + (" · ⚠️ Dry-run 테스트 데이터" if hook_hints.is_dryrun else ""))
     elif hook_vertical and hints_enabled():
         st.caption("🔥 레이더 패턴 없음 → 기본 후킹 규칙으로 기획 (🔥 실시간 떡상 레이더 화면에서 수집)")
-    if is_owner_mode or is_commerce_mode:
+    if is_owner_mode or is_commerce_mode or is_book_mode:
         st.caption(f"모드: **{production_mode}** | 사진·영상 **{len(st.session_state.uploaded_paths)}개** 기준으로 씬 구성 | 성우: **{selected_actor_label}**")
     else:
         st.caption(f"모드: **{production_mode}** | 스타일: **{script_style_options[selected_script_style]}** | **{selected_tone_label}** | 성우: **{selected_actor_label}**")
@@ -955,12 +1012,13 @@ if generate_plan_btn or auto_flow:
         "owner": "🧠 올린 사진·영상을 보고 우리 가게 홍보 대본을 쓰고 있습니다...",
         "travel": f"🧠 숙소 제휴 스토리보드({script_style_options[selected_script_style]})를 기획하고 있습니다...",
         "commerce": "🧠 쇼핑 제휴 스토리보드를 기획하고 있습니다...",
+        "book": "🧠 책 한 권을 차분하게 소개하는 대본을 쓰고 있습니다...",
     }[pipeline_mode]
     with st.spinner(plan_spinner_msg):
         try:
             if is_owner_mode and not product_name.strip():
                 raise ValueError("상호명을 입력해 주세요.")
-            if not is_owner_mode and not is_bundle and not product_name.strip():
+            if not is_owner_mode and not is_bundle and not is_book_mode and not product_name.strip():
                 raise ValueError("숙소명(또는 상품명)을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
             # 여행 모드: 크롤링 사진 인벤토리를 넘겨 실제 없는 시설을 대본에 쓰지 못하게 함
             photo_inventory = None
@@ -979,6 +1037,21 @@ if generate_plan_btn or auto_flow:
                     thumb_dir=current_job().assets_dir,
                     output_plan_path=current_job().plan_path,
                     hook_hints=hook_hints,
+                )
+            elif is_book_mode:
+                # 시골책방: 한 권 깊게 (훅 → 이런 날 이 책 → 책 속 한 문장 → 책방 분위기 → CTA), 문장은 입력 원문만
+                scenes = plan_book_storyboard(
+                    store_name=st.session_state.get("book_store", ""),
+                    book_title=st.session_state.get("book_title", ""),
+                    author=st.session_state.get("book_author", ""),
+                    book_info=st.session_state.get("book_info", ""),
+                    quote=st.session_state.get("book_quote", ""),
+                    media_paths=st.session_state.uploaded_paths,
+                    book_photo_count=st.session_state.get("book_photo_count", 1),
+                    api_key=api_key,
+                    mock=mock_mode,
+                    thumb_dir=current_job().assets_dir,
+                    output_plan_path=current_job().plan_path,
                 )
             elif is_bundle:
                 # 쇼핑 3단 묶음 큐레이션: 훅 3초 → 상품 1·2·3 각 7초 → 구매 좌표 CTA 3초 (상품별 사진·USP만 근거)
@@ -1049,7 +1122,7 @@ if generate_plan_btn or auto_flow:
             st.session_state.storyboard_layout = st.session_state.commerce_layout if is_commerce_mode else ""
 
             # [씬별 에셋 배정] 업로드 미디어 우선 배정 → (숙소 제휴) 나머지 씬만 핀포인트 매칭 (모두 씬 키로 기록)
-            if is_commerce_mode and scenes and all(s.get("source_path") for s in scenes):
+            if (is_commerce_mode or is_book_mode) and scenes and all(s.get("source_path") for s in scenes):
                 # 쇼핑: Gemini 비전이 고른 컷(전체 소개 → 기능·디테일 → 실사용/마무리)대로 1:1 배정 (앵글·상품 위치 포함)
                 for s in scenes:
                     assign_media_to_scene(s, s["source_path"], "matched")
@@ -1085,7 +1158,7 @@ if st.session_state.storyboard:
     if st.session_state.get("storyboard_mode", pipeline_mode) != pipeline_mode:
         st.warning(f"⚠️ 이 콘티는 '{MODE_LABELS.get(st.session_state.get('storyboard_mode'), '다른')}' 모드로 기획되었습니다. "
                    f"현재 모드로 만들려면 스토리보드를 다시 기획해 주세요.")
-    if is_owner_mode or is_commerce_mode:
+    if is_owner_mode or is_commerce_mode or is_book_mode:
         cols_to_display = ["scene_index", "role", "duration_sec", "hook_title", "voiceover"]
     elif is_travel_mode:
         cols_to_display = ["scene_index", "role", "target_visual_role", "visual_keywords", "duration_sec", "hook_title", "subtitle", "voiceover", "video_motion_prompt_en"]
@@ -1398,7 +1471,9 @@ if render_btn:
                 _bundle_title = (scenes[0].get("bundle_title") or "") if is_bundle and scenes else ""
                 shorts_copy = make_shorts_copy(
                     pipeline_mode, hook=hook_text, usp=usp_desc, product_name=_bundle_title or product_name, api_key=api_key, mock=mock_mode,
-                    trend=radar_trend, signature=_usp_items[0] if _usp_items else "",
+                    trend=radar_trend,
+                    signature=(st.session_state.get("book_title", "").strip() if is_book_mode
+                               else _usp_items[0] if _usp_items else ""),
                     region=region_of(st.session_state.get("owner_address", "")) if is_owner_mode else "")
                 st.session_state.shorts_copy = shorts_copy
                 thumb_path = compositor.render_thumbnail(first_frame, shorts_copy["thumb_main"],
@@ -1414,7 +1489,9 @@ if render_btn:
                 audio_mode=selected_audio_mode,
                 mode=pipeline_mode,
                 brand=brand_cfg,
-                disclosure=(bundle_disclosure_short(bundle_items_now()) if is_bundle
+                label=(scenes[0].get("book") or {}).get("label") if is_book_mode and scenes else None,
+                disclosure=(book_disclosure_short() if is_book_mode
+                            else bundle_disclosure_short(bundle_items_now()) if is_bundle
                             else COUPANG_DISCLOSURE if is_commerce_mode
                             else OTA_DISCLOSURE if is_travel_mode and st.session_state.get("affiliate_program") else None),
                 bars=((scenes[0].get("bundle_title") or "", st.session_state.get("bundle_bottom") or DEFAULT_BOTTOM_BAR)
@@ -1428,6 +1505,11 @@ if render_btn:
             logger.info(f"BGM 상태: {'켜짐' if bgm_on else '꺼짐'} → {compositor.last_bgm_info or compositor.last_bgm_error or '적용 안 함'}")
             st.session_state.thumb_path = thumb_path
             current_job().save_plan(scenes)
+            if is_book_mode:
+                # 업로드 연결 전: 첫 댓글 텍스트를 대기열(outputs/youtube/comment_drafts.json)에 바로 저장
+                from core.youtube_upload import queue_comment_draft
+                st.session_state.book_comment = book_comment_text(st.session_state.get("shorts_copy"))
+                queue_comment_draft("book", final_mp4, st.session_state.book_comment, job_id=current_job().job_id)
 
             progress_bar.progress(100, text="✨ 렌더링 완료!")
             st.session_state.final_video_path = final_mp4
@@ -1465,7 +1547,21 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         else:
             st.info("🔇 BGM 꺼짐 · 넣으려면 렌더 버튼 옆 '🎵 BGM 사용'을 켜고 다시 만들어 주세요. "
                     "(BGM 없이 올릴 땐 플랫폼 추천 트렌딩 음원을 태그해 보세요)")
-        if is_bundle:
+        if is_book_mode:
+            st.markdown("**💬 첫 댓글 (책방 위치 + 알라딘 구매 링크 + 제휴 고지)** · 유튜브 업로드 연결 전이라 대기열에 저장돼요")
+            if "book_comment" not in st.session_state:
+                st.session_state.book_comment = book_comment_text(st.session_state.get("shorts_copy"))
+            st.text_area("첫 댓글 초안", key="book_comment", height=230)
+            b_save, b_copy = st.columns([1, 1])
+            with b_save:
+                if st.button("💾 첫 댓글 대기열에 저장", use_container_width=True, key="book_comment_save"):
+                    from core.youtube_upload import queue_comment_draft
+                    queue_comment_draft("book", st.session_state.final_video_path, st.session_state.book_comment,
+                                        job_id=current_job().job_id)
+                    st.success("저장했어요 (outputs/youtube/comment_drafts.json). 업로드를 연결하면 이 댓글을 그대로 달아요.")
+            with b_copy:
+                copy_button(st.session_state.book_comment, "📋 첫 댓글 복사", key="copy_book_comment")
+        elif is_bundle:
             from core.shorts_meta import build_first_comment
             st.markdown("**📝 고정 댓글용 구매 좌표 + 제휴 고지** (상품별 링크 · 쿠팡 파트너스/스마트스토어 고지 자동)")
             post_text = build_first_comment("commerce", "", None, items=bundle_items_now())
@@ -1496,16 +1592,19 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                  else COUPANG_DISCLOSURE_FULL if is_commerce_mode
                  else ota_disclosure_full(_ota) if is_travel_mode and _ota else "")
         _sb = st.session_state.get("storyboard") or []
-        render_youtube_panel(st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
-                             hook=(_sb[0].get("hook_title") or "") if _sb else "",
-                             link=st.session_state.get("affiliate_link", "") if not (is_owner_mode or is_bundle) else "",
-                             disclosure=_disc, business_name=product_name,
-                             search_kw=owner_search_kw if is_owner_mode else "",
-                             copy=st.session_state.get("shorts_copy"),
-                             items=bundle_items_now() if is_bundle else None,
-                             disclosure_short=(bundle_disclosure_short(bundle_items_now()) if is_bundle
-                                               else COUPANG_DISCLOSURE if is_commerce_mode
-                                               else "※ " + OTA_DISCLOSURE if is_travel_mode and _ota else ""))
+        if is_book_mode:
+            st.info("📚 시골책방 채널 업로드는 아직 연결 전이에요. 영상은 로컬에 저장됐고, 첫 댓글은 왼쪽에서 대기열로 저장돼요.")
+        else:
+            render_youtube_panel(st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
+                                 hook=(_sb[0].get("hook_title") or "") if _sb else "",
+                                 link=st.session_state.get("affiliate_link", "") if not (is_owner_mode or is_bundle) else "",
+                                 disclosure=_disc, business_name=product_name,
+                                 search_kw=owner_search_kw if is_owner_mode else "",
+                                 copy=st.session_state.get("shorts_copy"),
+                                 items=bundle_items_now() if is_bundle else None,
+                                 disclosure_short=(bundle_disclosure_short(bundle_items_now()) if is_bundle
+                                                   else COUPANG_DISCLOSURE if is_commerce_mode
+                                                   else "※ " + OTA_DISCLOSURE if is_travel_mode and _ota else ""))
         st.markdown("#### 🖼️ 씬별 키프레임 갤러리")
         if st.session_state.generated_images:
             cols = st.columns(len(st.session_state.generated_images))

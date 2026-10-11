@@ -26,8 +26,10 @@ logger = logging.getLogger("ad_factory.compositor")
 # 하단 단일 자막 블록 스타일을 쓰는 모드 (실사 공간 영상: 수영장·객실 등 사진 핵심을 가리지 않음)
 #   씬 1은 후킹 헤드라인 단독(0~hook_sec) → 서브 자막 순서로 시간차 노출, 위치는 화면 정중앙 한곳 (배경 박스 없음)
 #   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
-CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
+CENTER_CAPTION_MODES = ("travel", "owner", "commerce", "book")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
+XFADE_BY_MODE = {"book": 0.6}          # 시골책방: 차분한 호흡 (긴 디졸브)
+DUCK_BY_MODE = {"book": 0.25}          # 시골책방: 나레이션 중 BGM을 조금 더 낮게 (기본 32%)
 INTRO_SEC = 0.8             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 쇼츠 썸네일은 영상 프레임 중에서 고르므로
                             # 0~0.8초를 '시그니처 비주얼 + 헤드카피' 커버로 고정 (첫 프레임 = 커버, IDR 키프레임)
 THUMB_FONT_RATIO = 0.26     # 썸네일 메인 카피 최대 글자 크기 (폭 대비, 기존 0.115의 약 2.3배 - 짧은 카피면 2줄 안에서 이 크기)
@@ -55,6 +57,20 @@ BUNDLE_BAR_X = (0.06, 0.94)
 BUNDLE_TITLE_CY, BUNDLE_TITLE_H = 0.138, 0.058
 BUNDLE_BOTTOM_CY, BUNDLE_BOTTOM_H = 0.752, 0.050
 BUNDLE_CAPTION_CY = 0.235      # 고정 바가 있을 때 씬 자막 중심 (타이틀 바 아래, 상품 카드 위)
+# 시골책방(도서 큐레이션): 명조체 자막 + 종이색 상단 라벨 바 + 종이 질감 인용 카드
+SERIF_FONT_FILE = "NotoSerifKR-Bold.otf"
+SERIF_FONT_URLS = ("https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Serif/SubsetOTF/KR/NotoSerifKR-Bold.otf",
+                   "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/SubsetOTF/KR/NotoSerifKR-Bold.otf")
+BOOK_LABEL_X = (0.16, 0.84)
+BOOK_LABEL_CY, BOOK_LABEL_H = 0.138, 0.050
+BOOK_PAPER = (246, 239, 224)           # 종이색
+BOOK_INK = (58, 42, 28)                # 짙은 갈색 글씨
+BOOK_ACCENT = (150, 105, 60)           # 따옴표·출처 색
+BOOK_CAPTION_CY = 0.250                # 표지 카드 씬 자막 중심 (라벨 바 아래, 카드 위: 3줄도 카드에 안 닿게)
+BOOK_CAPTION_FONT_RATIO = 0.060        # 명조체 자막은 조금 작게 (차분한 톤, 30~38자 문장이 3줄 안에)
+QUOTE_CARD_X = (0.08, 0.92)
+QUOTE_CARD_CY = 0.680                  # 인용 씬: 위로 줄인 표지 카드 아래 (쇼츠 하단 UI 위)
+QUOTE_FONT_RATIO = 0.052
 HOOK_SOLO_SEC = 1.5              # hook_sec 정보가 없을 때 후킹 단독 노출 시간 (asset_generator.HOOK_SOLO_SEC와 동일)
 
 
@@ -69,6 +85,29 @@ class AdCompositor:
 
         # 숏폼 전용 극강의 상업용 무료 볼드 폰트 자동 확보
         self.font_path = self._ensure_bold_font()
+        self._serif_path: Optional[str] = None      # 시골책방 명조체 (처음 쓸 때 받음)
+
+    @property
+    def serif_font_path(self) -> str:
+        """Noto Serif KR Bold (SIL OFL, 상업 무료). fonts/에 없으면 받음, 실패하면 고딕 볼드로 대체"""
+        if self._serif_path:
+            return self._serif_path
+        target = os.path.abspath(os.path.join(self.font_dir, SERIF_FONT_FILE))
+        if not (os.path.exists(target) and os.path.getsize(target) > 1_000_000):
+            for url in SERIF_FONT_URLS:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        data = r.read()
+                    if len(data) > 1_000_000:
+                        with open(target, "wb") as f:
+                            f.write(data)
+                        logger.info(f"명조체 다운로드 완료 ({len(data):,} bytes): {target}")
+                        break
+                except Exception as e:
+                    logger.warning(f"명조체 다운로드 실패 ({url}): {e}")
+        self._serif_path = target if os.path.exists(target) and os.path.getsize(target) > 1_000_000 else self.font_path
+        return self._serif_path
 
     def _ensure_bold_font(self) -> str:
         """
@@ -159,7 +198,8 @@ class AdCompositor:
 
 
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
-                       center_y: float = CAPTION_CENTER_Y) -> np.ndarray:
+                       center_y: float = CAPTION_CENTER_Y, font_path: Optional[str] = None,
+                       caption_ratio: float = CAPTION_FONT_RATIO) -> np.ndarray:
         """
         travel/owner 공통 하단 자막 (배경 박스 없음):
         - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
@@ -172,7 +212,7 @@ class AdCompositor:
 
         def font(size):
             try:
-                return ImageFont.truetype(self.font_path, size)
+                return ImageFont.truetype(font_path or self.font_path, size)
             except Exception:
                 return ImageFont.load_default()
 
@@ -183,7 +223,7 @@ class AdCompositor:
             if lines:
                 groups.append((lines, hf, HOOK_HEADLINE_COLOR + (255,), int(hf.size * 1.2)))
         if caption_text and caption_text.strip():
-            cf = font(int(width * CAPTION_FONT_RATIO))
+            cf = font(int(width * caption_ratio))
             lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * CAPTION_MAX_WIDTH))
             if lines:
                 groups.append((lines, cf, (255, 255, 255, 255), int(cf.size * 1.28)))
@@ -423,6 +463,105 @@ class AdCompositor:
         bar(bottom, BUNDLE_BOTTOM_CY, int(height * BUNDLE_BOTTOM_H), (12, 12, 12, 215), (255, 255, 255, 255), 0)
         return layer
 
+    @staticmethod
+    def _paper_texture(w: int, h: int, seed: int = 7) -> Image.Image:
+        """종이 질감: 종이색 + 아주 옅은 얼룩·섬유 노이즈 (매번 같은 모양이 나오게 seed 고정)"""
+        rng = np.random.default_rng(seed)
+        base = np.ones((h, w, 3), np.float32) * np.array(BOOK_PAPER, np.float32)
+        blot = rng.normal(0, 1, (max(2, h // 24), max(2, w // 24))).astype(np.float32)
+        blot = np.array(Image.fromarray(((blot - blot.min()) / (np.ptp(blot) + 1e-6) * 255).astype(np.uint8))
+                        .resize((w, h), Image.BICUBIC), np.float32) / 255.0 - 0.5
+        grain = rng.normal(0, 1, (h, w)).astype(np.float32)
+        fibers = np.array(Image.fromarray(((grain - grain.min()) / (np.ptp(grain) + 1e-6) * 255).astype(np.uint8))
+                          .filter(ImageFilter.GaussianBlur(0.6)), np.float32) / 255.0 - 0.5
+        img = base + (blot * 14.0 + fibers * 9.0)[..., None] * np.array([1.0, 0.95, 0.85], np.float32)
+        return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA")
+
+    def render_book_label(self, text: str, width: int, height: int) -> Image.Image:
+        """시골책방 상단 라벨 바 (영상 내내): 종이색 둥근 바 + 짙은 갈색 명조체 + 맨 앞 이모지(📚)"""
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        text = (text or "").strip()
+        if not text:
+            return layer
+        draw = ImageDraw.Draw(layer)
+        emoji = ""
+        m = re.match(r"^([\U0001F000-\U0001FAFF\u2600-\u27BF]\uFE0F?)\s*", text)
+        if m:
+            emoji, text = m.group(1), text[m.end():]
+        x0, x1 = int(width * BOOK_LABEL_X[0]), int(width * BOOK_LABEL_X[1])
+        bar_h = int(height * BOOK_LABEL_H)
+        y0 = int(height * BOOK_LABEL_CY - bar_h / 2)
+        paper = self._paper_texture(x1 - x0, bar_h, seed=3)
+        mask = Image.new("L", (x1 - x0, bar_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, x1 - x0 - 1, bar_h - 1], radius=int(bar_h * 0.5), fill=242)
+        layer.paste(paper, (x0, y0), mask)
+        em = self._emoji_image(emoji, int(bar_h * 0.56)) if emoji else None
+        gap = int(bar_h * 0.18) if em else 0
+        room = (x1 - x0) - int(bar_h * 0.8) - ((em.width + gap) if em else 0)
+        size = int(bar_h * 0.52)
+        while True:
+            try:
+                font = ImageFont.truetype(self.serif_font_path, size)
+            except Exception:
+                font = ImageFont.load_default()
+            bb = draw.textbbox((0, 0), text, font=font)
+            if bb[2] - bb[0] <= room or size <= 12:
+                break
+            size -= 2
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        x = (width - tw - ((em.width + gap) if em else 0)) // 2
+        if em:
+            layer.alpha_composite(em, (x, y0 + (bar_h - em.height) // 2))
+            x += em.width + gap
+        draw.text((x - bb[0], y0 + (bar_h - th) // 2 - bb[1]), text, font=font, fill=BOOK_INK + (255,))
+        return layer
+
+    def render_quote_card(self, quote: str, source: str, width: int, height: int) -> Image.Image:
+        """
+        책 속 한 문장 인용 카드 (인용 씬에만): 종이 질감 카드 + 큰 따옴표 + 명조체 본문(최대 4줄, 넘치면 글자 축소) + 출처
+        문장은 사용자가 입력한 원문 그대로 (AI가 만들지 않음)
+        """
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        quote = re.sub(r"\s+", " ", (quote or "").strip().strip('"“”「」'))
+        if not quote:
+            return layer
+        draw = ImageDraw.Draw(layer)
+        x0, x1 = int(width * QUOTE_CARD_X[0]), int(width * QUOTE_CARD_X[1])
+        pad_x, pad_y = int(width * 0.075), int(width * 0.06)
+        size = int(width * QUOTE_FONT_RATIO)
+        while True:
+            font = ImageFont.truetype(self.serif_font_path, size)
+            lines = self._wrap_text(quote, draw, font, max_width=(x1 - x0) - pad_x * 2)
+            if len(lines) <= 4 or size <= int(width * 0.034):
+                break
+            size -= 2
+        line_h = int(size * 1.55)
+        src_font = ImageFont.truetype(self.serif_font_path, max(14, int(size * 0.62)))
+        src_h = int(src_font.size * 1.9) if source else 0
+        card_h = pad_y * 2 + len(lines) * line_h + src_h
+        y0 = int(height * QUOTE_CARD_CY - card_h / 2)
+        # 그림자 → 종이 카드 (모서리 둥글게)
+        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle([x0 + 6, y0 + 14, x1 + 6, y0 + card_h + 14], radius=int(width * 0.03), fill=(0, 0, 0, 130))
+        layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(int(width * 0.02))))
+        mask = Image.new("L", (x1 - x0, card_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, x1 - x0 - 1, card_h - 1], radius=int(width * 0.03), fill=250)
+        layer.paste(self._paper_texture(x1 - x0, card_h), (x0, y0), mask)
+        # 큰 여는 따옴표 (카드 왼쪽 위, 옅은 갈색)
+        qf = ImageFont.truetype(self.serif_font_path, int(size * 2.4))
+        draw.text((x0 + int(pad_x * 0.35), y0 - int(size * 0.55)), "“", font=qf, fill=BOOK_ACCENT + (200,))
+        y = y0 + pad_y
+        for ln in lines:
+            bb = draw.textbbox((0, 0), ln, font=font)
+            draw.text(((width - (bb[2] - bb[0])) // 2 - bb[0], y + (line_h - (bb[3] - bb[1])) // 2 - bb[1]), ln,
+                      font=font, fill=BOOK_INK + (255,))
+            y += line_h
+        if source:
+            bb = draw.textbbox((0, 0), source, font=src_font)
+            draw.text((x1 - pad_x - (bb[2] - bb[0]) - bb[0], y + int(src_font.size * 0.55) - bb[1]), source,
+                      font=src_font, fill=BOOK_ACCENT + (255,))
+        return layer
+
     def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
         """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -464,7 +603,9 @@ class AdCompositor:
             center = COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else CAPTION_CENTER_Y
             if kwargs.get("center_y"):
                 center = float(kwargs["center_y"])
-            return self._caption_block(caption_text, hook_title, width, height, center_y=center)
+            return self._caption_block(caption_text, hook_title, width, height, center_y=center,
+                                       font_path=self.serif_font_path if mode == "book" else None,
+                                       caption_ratio=BOOK_CAPTION_FONT_RATIO if mode == "book" else CAPTION_FONT_RATIO)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
@@ -586,6 +727,7 @@ class AdCompositor:
         intro_image: Optional[str] = None,
         bgm_path: Optional[str] = None,
         bars: Optional[Tuple[str, str]] = None,
+        label: Optional[str] = None,
         **kwargs
     ) -> str:
         """
@@ -594,7 +736,11 @@ class AdCompositor:
         bgm_path: 자체 음원(assets/bgm). 완성 영상에 나레이션 덕킹·페이드로 섞음 (core/render/bgm.py).
         실패하면 BGM 없이 두고 self.last_bgm_error에 사유를 남김
         bars: (상단 타이틀, 하단 구매 안내) - 쇼핑 묶음 큐레이션 고정 바 (render_bundle_bars), 영상 전체에 표시
+        label: 시골책방 상단 라벨 바 문구 (render_book_label). 씬 manifest의 quote_card가 있으면 그 씬은 인용 카드
+        디졸브 길이·BGM 덕킹은 모드별 (XFADE_BY_MODE·DUCK_BY_MODE)
         """
+        self.xfade = XFADE_BY_MODE.get(mode, XFADE_SEC)
+        self.duck = DUCK_BY_MODE.get(mode)
         final_output_path = os.path.join(self.output_dir, output_filename)
         self.last_bgm_error = None
         self.last_bgm_info = None      # 실제로 섞인 BGM {track, start, gain_db, duck} (없거나 실패하면 None)
@@ -603,7 +749,8 @@ class AdCompositor:
             from core.render import ffmpeg_assemble
             try:
                 out = ffmpeg_assemble.assemble(self, asset_manifest, final_output_path, fps=fps, mode=mode, brand=brand,
-                                               disclosure=disclosure, bars=bars, intro_image=intro_image, xfade=XFADE_SEC,
+                                               disclosure=disclosure, bars=bars, label=label, intro_image=intro_image,
+                                               xfade=self.xfade,
                                                intro_sec=INTRO_SEC, hook_solo_sec=HOOK_SOLO_SEC,
                                                center_modes=CENTER_CAPTION_MODES)
             except FileNotFoundError:
@@ -612,7 +759,8 @@ class AdCompositor:
                 logger.warning(f"ffmpeg 조립 실패 → MoviePy로 대체: {e}")
         if out is None:
             out = self._assemble_moviepy(asset_manifest, output_filename=output_filename, fps=fps, audio_mode=audio_mode,
-                                         mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image, bars=bars)
+                                         mode=mode, brand=brand, disclosure=disclosure, intro_image=intro_image, bars=bars,
+                                         label=label)
         if bgm_path:
             try:
                 self._mix_bgm(out, asset_manifest, bgm_path, narration=(audio_mode != "silent"))
@@ -626,8 +774,10 @@ class AdCompositor:
         from core.render import bgm as bgm_mod
         from core.render.ffmpeg_assemble import build_timeline, probe
         a_durs = [probe(it["audio_path"])["duration"] or 0.0 for it in manifest]
-        durs = [a + (1.0 if i == len(a_durs) - 1 else 0.2 + XFADE_SEC) for i, a in enumerate(a_durs)]
-        starts, _ = build_timeline(durs, XFADE_SEC)
+        xf = getattr(self, "xfade", XFADE_SEC)
+        durs = [a + (1.0 if i == len(a_durs) - 1 else 0.2 + xf) + float(manifest[i].get("hold_sec") or 0)
+                for i, a in enumerate(a_durs)]
+        starts, _ = build_timeline(durs, xf)
         intervals = bgm_mod.narration_intervals(zip(starts, a_durs)) if narration else []
         voice_db = None
         if narration:
@@ -635,7 +785,8 @@ class AdCompositor:
             levels = [v for v in levels if v is not None and v > -60]
             voice_db = sum(levels) / len(levels) if levels else None
         info: Dict[str, Any] = {}
-        out = bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db, info=info)
+        duck = {"duck": self.duck} if getattr(self, "duck", None) else {}
+        out = bgm_mod.mix_bgm(video_path, video_path, bgm_path, intervals, voice_db=voice_db, info=info, **duck)
         self.last_bgm_info = info
         return out
 
@@ -650,6 +801,7 @@ class AdCompositor:
         disclosure: Optional[str] = None,
         intro_image: Optional[str] = None,
         bars: Optional[Tuple[str, str]] = None,
+        label: Optional[str] = None,
         **kwargs
     ) -> str:
         """
@@ -660,6 +812,7 @@ class AdCompositor:
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
         disclosure(제휴 광고 표시 문구, 예: 쿠팡 파트너스)가 주어지면 전 씬 위쪽에 작게 표시.
         """
+        XFADE = XFADE_BY_MODE.get(mode, XFADE_SEC)     # 모드별 디졸브 (시골책방 0.6초)
         final_output_path = os.path.join(self.output_dir, output_filename)
         logger.info(f"Step 3 시작 (모드={mode}): 타임라인 조립, 자막 오버레이 합성 진행 (총 {len(asset_manifest)}개 씬, 오디오 모드: {audio_mode})")
 
@@ -674,6 +827,8 @@ class AdCompositor:
                 video_path = item.get("video_path")
                 audio_path = item.get("audio_path")
                 caption_text = item.get("subtitle") or item.get("caption") or item.get("voiceover", "")
+                if item.get("quote_card"):
+                    caption_text = ""          # 인용 씬: 자막 대신 인용 카드
                 hook_title = item.get("hook_title", "")
 
                 if not video_path or not os.path.exists(video_path):
@@ -691,7 +846,7 @@ class AdCompositor:
                 is_last_scene = (idx == len(asset_manifest))
                 # 다음 씬과 XFADE_SEC만큼 겹쳐 디졸브: 겹치는 만큼 꼬리를 늘려 나레이션 간격(0.2초)·전체 길이는 그대로,
                 # 겹침 구간에는 앞 씬의 무음 꼬리만 깔리므로 두 나레이션이 섞이지 않음
-                tail_margin = 1.0 if is_last_scene else 0.2 + XFADE_SEC
+                tail_margin = (1.0 if is_last_scene else 0.2 + XFADE) + float(item.get("hold_sec") or 0)
                 scene_target_duration = audio_duration + tail_margin
                 logger.info(f"씬 {scene_num} (마지막={is_last_scene}): 오디오 {audio_duration:.2f}초 + 테일 마진 {tail_margin:.2f}초 -> 비디오 목표 재생 시간: {scene_target_duration:.2f}초")
 
@@ -710,7 +865,7 @@ class AdCompositor:
 
                 # 4. 자막 오버레이 (실사 모드 씬 1: 후킹 단독 0~hook_sec → 서브 자막, 나레이션 2단 음성과 같은 시점)
                 w, h = synced_video.size
-                if caption_text or hook_title or brand or disclosure or bars:
+                if caption_text or hook_title or brand or disclosure or bars or label or item.get("quote_card"):
                     split_hook = mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
                     if split_hook:
                         hook_sec = float(item.get("hook_sec") or HOOK_SOLO_SEC)
@@ -734,10 +889,17 @@ class AdCompositor:
                             width=w,
                             height=h,
                             mode=mode,
-                            center_y=BUNDLE_CAPTION_CY if bars else None
+                            center_y=item.get("caption_center_y") or (BUNDLE_CAPTION_CY if bars else None)
                         )
-                        if brand or disclosure or bars:
+                        if brand or disclosure or bars or label or item.get("quote_card"):
                             merged = Image.fromarray(overlay_img_arr).convert("RGBA")
+                            if label:
+                                key = ("label", w, h)
+                                if key not in watermark_cache:
+                                    watermark_cache[key] = self.render_book_label(label, w, h)
+                                merged.alpha_composite(watermark_cache[key])
+                            if item.get("quote_card"):
+                                merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h))
                             if bars:
                                 key = ("bars", w, h)
                                 if key not in watermark_cache:
@@ -780,7 +942,7 @@ class AdCompositor:
                 last_clip = processed_clips[-1]
                 last_frame = last_clip.get_frame(max(0, last_clip.duration - 0.05))
                 card_arr = brand.render_end_card(last_frame, font_path=self.font_path)
-                card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec) + XFADE_SEC).fadeout(0.4)
+                card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec) + XFADE).fadeout(0.4)
                 opened_clips.append(card_clip)
                 processed_clips.append(card_clip)
                 logger.info(f"브랜드 엔딩 카드 추가 ({brand.end_card.duration_sec:.1f}초): '{brand.business_name}' / 검색어 '{brand.end_card.search_keyword}'")
@@ -799,16 +961,16 @@ class AdCompositor:
 
             # 전체 씬 결합
             logger.info(f"전체 {len(processed_clips)}개 클립 타임라인 결합 중...")
-            # 씬 전환: 하드 컷 대신 XFADE_SEC 디졸브 (다음 씬이 앞 씬 위로 서서히 겹쳐 나타남, 검은 화면 없음)
-            if len(processed_clips) > 1 and XFADE_SEC > 0:
-                processed_clips = [processed_clips[0]] + [c.crossfadein(XFADE_SEC) for c in processed_clips[1:]]
+            # 씬 전환: 하드 컷 대신 XFADE 디졸브 (다음 씬이 앞 씬 위로 서서히 겹쳐 나타남, 검은 화면 없음)
+            if len(processed_clips) > 1 and XFADE > 0:
+                processed_clips = [processed_clips[0]] + [c.crossfadein(XFADE) for c in processed_clips[1:]]
                 opened_clips.extend(processed_clips[1:])
-                logger.info(f"씬 전환 디졸브 {XFADE_SEC:.2f}초 x {len(processed_clips) - 1}곳")
+                logger.info(f"씬 전환 디졸브 {XFADE:.2f}초 x {len(processed_clips) - 1}곳")
             final_composite = concatenate_videoclips(processed_clips, method="compose",
-                                                     padding=-XFADE_SEC if len(processed_clips) > 1 else 0)
-            if len(processed_clips) > 1 and XFADE_SEC > 0:
+                                                     padding=-XFADE if len(processed_clips) > 1 else 0)
+            if len(processed_clips) > 1 and XFADE > 0:
                 # MoviePy는 마지막 클립 뒤에도 padding을 빼서 끝 XFADE_SEC가 잘림 → 마지막 클립 끝까지 복원 (엔딩 여유·페이드아웃 보존)
-                final_composite = final_composite.set_duration(final_composite.duration + XFADE_SEC)
+                final_composite = final_composite.set_duration(final_composite.duration + XFADE)
             opened_clips.append(final_composite)
 
             # 비디오 전체 타임라인 길이가 '모든 씬 오디오 총합 + 엔딩 여유 마진 1.0초'보다 짧지 않도록 강제 보장

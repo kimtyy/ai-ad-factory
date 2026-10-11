@@ -318,6 +318,35 @@ def upload_short(video_path: str, title: str, description: str, *, mode: str, th
     return out
 
 
+DRAFTS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "youtube",
+                           "comment_drafts.json")    # 업로드 연결 전 모드(시골책방)의 첫 댓글 초안 (업로드 연결 시 그대로 사용)
+
+
+def queue_comment_draft(mode: str, video_path: str, text: str, job_id: str = "") -> Dict[str, Any]:
+    """
+    업로드 없이 첫 댓글 텍스트만 대기열에 저장 (같은 영상이면 덮어씀). 업로드 연결 후 video_id가 생기면
+    pending_comments와 같은 흐름으로 등록하면 됨 → 저장된 항목 반환
+    """
+    import datetime
+    import json
+    try:
+        with open(DRAFTS_PATH, encoding="utf-8") as f:
+            items = json.load(f)
+        items = items if isinstance(items, list) else []
+    except (OSError, ValueError):
+        items = []
+    vp = os.path.abspath(video_path) if video_path else ""
+    entry = {"mode": mode, "video_path": vp, "job_id": job_id, "text": (text or "").strip()[:COMMENT_MAX],
+             "status": "draft", "saved_at": datetime.datetime.now().isoformat(timespec="seconds")}
+    items = [d for d in items if d.get("video_path") != vp] + [entry]
+    os.makedirs(os.path.dirname(DRAFTS_PATH), exist_ok=True)
+    tmp = DRAFTS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DRAFTS_PATH)
+    return entry
+
+
 def _load_pending() -> List[Dict[str, Any]]:
     import json
     try:

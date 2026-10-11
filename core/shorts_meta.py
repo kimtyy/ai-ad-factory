@@ -27,6 +27,7 @@ PINNED_NOTICE = {
     "travel": "📌 숙소 상세 정보 및 예약 링크는 첫 번째 댓글을 확인해 주세요!",
     "commerce": "📌 제품 상세 정보 및 구매 링크는 첫 번째 댓글을 확인해 주세요!",
     "owner": "📌 가게 위치·예약 정보는 첫 번째 댓글을 확인해 주세요!",
+    "book": "📌 책방 위치와 도서 구매 링크는 첫 번째 댓글을 확인해 주세요!",
 }
 
 # 수요·인기·희소성 사실 주장 (USP에 없으면 금지) - 가격·순위·수치는 script_guard.find_unsupported_claim/spec이 검사
@@ -47,6 +48,7 @@ BASE_TAGS = {
     "travel": ["#숙소추천", "#국내여행", "#여행", "#주말여행", "#여행브이로그", "#가볼만한곳", "#힐링"],
     "commerce": ["#추천템", "#살림템", "#꿀템", "#생활꿀팁", "#쇼핑추천", "#리뷰", "#신박한템"],
     "owner": ["#가게추천", "#가볼만한곳", "#동네핫플", "#로컬추천", "#오늘뭐하지", "#핫플", "#추천"],
+    "book": ["#책추천", "#동네책방", "#독립서점", "#오늘의책", "#북스타그램", "#독서", "#책방투어"],
 }
 # 근거 없이도 쓸 수 있는 템플릿 (사실 주장 없음). {kw}=시그니처·USP 키워드, {where}=지역(없으면 '국내'·'동네' 등)
 # 호기심 공백·손실 회피형. '여길 아직도 안 가봤다고?' 같은 진부한 패턴은 쓰지 않음 (STALE_HOOKS로 모델 출력에서도 차단)
@@ -57,22 +59,25 @@ TITLE_TEMPLATES = {
                  "사기 전에 꼭 봐야 할 {kw}"],
     "owner": ["{where}에 이런 {kw}{iga} 숨겨져 있었다니?!", "모르면 무조건 손해! {where} {kw}의 정체", "아무도 안 알려준 {where} {kw}",
               "{where} 사람들도 잘 모르는 {kw} 🔥", "{where}에서 한 번 오면 다시 찾게 되는 {kw}의 비밀"],
+    "book": ["오늘 밤 펼치기 좋은 한 권, 「{kw}」", "작은 책방이 고른 이번 주의 책 「{kw}」", "잠 안 오는 밤에 꺼내 읽는 「{kw}」"],
 }
 THUMB_TEMPLATES = {
     "travel": [("이게 숨어 있었다고?", "{kw}"), ("모르면 무조건 손해!", "{kw}"), ("사진보다 실물이 반전", "{kw}")],
     "commerce": [("모르면 무조건 손해!", "{kw}"), ("왜 이제 알았지?", "{kw}")],
     "owner": [("이게 숨어 있었다고?", "{kw}"), ("모르면 무조건 손해!", "{kw}"), ("아무도 안 알려준 곳", "{kw}")],
+    "book": [("오늘 밤의 한 권", "{kw}"), ("책방지기가 고른 책", "{kw}")],
 }
-WHERE_FALLBACK = {"travel": "국내", "commerce": "", "owner": "동네"}
+WHERE_FALLBACK = {"travel": "국내", "commerce": "", "owner": "동네", "book": "동네"}
 # 진부한 후킹 (모델이 써도 버리고 템플릿·다른 필드로): '여길 아직도 안 가봤다고?', '여길 모른다고?', '여길 안 간다고?' 계열
 STALE_HOOKS = (r"여길\s*(아직도\s*)?(안\s*가|안\s*간|모르|모른|몰라|몰랐)", r"아직도\s*안\s*가\s*봤", r"여기\s*아직도\s*모르")
-KW_FALLBACK = {"travel": "숙소", "commerce": "꿀템", "owner": "가게"}
+KW_FALLBACK = {"travel": "숙소", "commerce": "꿀템", "owner": "가게", "book": "책"}
 # 첫 댓글 참여 유도 질문 (답하기 쉬운 선택·경험 질문, 사실 주장 없음). AI 질문이 없거나 검증에서 걸리면 사용
 COMMENT_QUESTIONS = {
     "owner": ["여기 가면 제일 먼저 시킬 메뉴는? 댓글로 골라 주세요 👇", "{kw}, 누구랑 같이 오고 싶어요? 친구 태그 👇",
               "여러분 동네 {kw} 맛집도 댓글로 알려 주세요 👇"],
     "travel": ["이 숙소, 누구랑 가고 싶어요? 댓글로 태그해 주세요 👇", "{kw} 숙소에서 제일 먼저 하고 싶은 건? 👇"],
     "commerce": ["여러분은 이거 어디에 제일 먼저 쓰고 싶어요? 👇", "{kw} 고를 때 제일 중요하게 보는 건? 👇"],
+    "book": ["이 책, 어떤 밤에 읽고 싶어요? 👇", "요즘 읽고 있는 책도 댓글로 알려 주세요 👇"],
 }
 COMMENT_QUESTION_MAX = 45
 COMMENT_TAGS = 3
@@ -260,7 +265,7 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
     name_rule = ("숙소 이름은 쓰지 마세요 (궁금증으로 댓글 링크를 누르게)" if mode == "travel"
                  else f"이름이 필요하면 '{product_name}'만 그대로" if product_name else "")
     prompt = f"""
-유튜브 쇼츠 업로드용 카피를 만드세요. 모드: {dict(travel='숙소 소개', commerce='제품 리뷰', owner='동네 가게 소개')[mode]}
+유튜브 쇼츠 업로드용 카피를 만드세요. 모드: {dict(travel='숙소 소개', commerce='제품 리뷰', owner='동네 가게 소개', book='동네 책방의 도서 큐레이션')[mode]}
 영상 첫 문장(후킹): {hook or '(없음)'}
 사실 근거(USP, 여기 있는 사실만 쓸 수 있음): {usp or '(없음)'}
 지역: {region or '(없음)'} / 시그니처(대표 메뉴·특징): {signature or '(없음)'}{(' / 가게 이름: ' + product_name) if mode == 'owner' and product_name else ''}
@@ -362,13 +367,17 @@ def naver_map_link(keyword: str) -> str:
 COUPANG_DISCLOSURE_FULL = "이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
 NAVER_DISCLOSURE_FULL = "이 포스팅은 네이버 스마트스토어 제휴 활동의 일환으로, 구매 시 일정액의 수수료를 제공받습니다."
 OTHER_DISCLOSURE_FULL = "이 포스팅은 제휴 마케팅 활동의 일환으로, 구매 시 일정액의 수수료를 제공받습니다."
-SHOP_DISCLOSURES = {"coupang": COUPANG_DISCLOSURE_FULL, "naver": NAVER_DISCLOSURE_FULL, "other": OTHER_DISCLOSURE_FULL}
+ALADIN_DISCLOSURE_FULL = "이 포스팅은 알라딘 제휴 마케팅 활동의 일환으로, 도서 구매 시 일정액의 수수료를 제공받습니다."
+SHOP_DISCLOSURES = {"coupang": COUPANG_DISCLOSURE_FULL, "naver": NAVER_DISCLOSURE_FULL, "aladin": ALADIN_DISCLOSURE_FULL,
+                    "other": OTHER_DISCLOSURE_FULL}
 NUM_EMOJI = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣")
 
 
 def shop_link_kind(url: str) -> str:
-    """제휴 링크 종류: coupang(쿠팡·쿠팡 파트너스 단축) / naver(스마트스토어·브랜드스토어·naver.me) / other"""
+    """제휴 링크 종류: coupang(쿠팡·쿠팡 파트너스 단축) / naver(스마트스토어·브랜드스토어·naver.me) / aladin / other"""
     host = re.sub(r"^https?://", "", (url or "").strip().lower()).split("/")[0]
+    if host.endswith(("aladin.co.kr", "aladin.kr")):
+        return "aladin"
     if host.endswith(("coupang.com", "coupa.ng")):
         return "coupang"
     if host.endswith(("smartstore.naver.com", "brand.naver.com", "shopping.naver.com", "naver.me")):
@@ -394,6 +403,16 @@ def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] 
         kw = (search_keyword or "").strip()
         if kw:
             blocks.append(f"📍 네이버에서 '{kw}' 검색하면 위치·영업시간·메뉴를 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+    elif mode == "book":
+        # 시골책방: 책방 방문(네이버 검색·지도) + 도서 구매 링크(알라딘 우선) + 링크 종류별 제휴 고지
+        kw = (search_keyword or "").strip()
+        if kw:
+            blocks.append(f"📍 네이버에서 '{kw}' 검색하면 책방 위치·영업시간을 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+        rows = [it for it in (items or ([{"short": "", "link": link}] if link else [])) if (it.get("link") or "").strip()]
+        if rows:
+            blocks.append("\n".join(f"📖 {(it.get('short') or it.get('name') or '이 책').strip()} 구매 👉 {it['link'].strip()}"
+                                    for it in rows))
+            blocks.append("\n".join(shop_disclosures([it["link"] for it in rows])))
     elif mode == "commerce" and (items or link):
         rows = [it for it in (items or [{"short": "", "link": link}]) if (it.get("link") or "").strip()]
         if len(rows) == 1 and not items:

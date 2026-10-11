@@ -110,13 +110,15 @@ def build_timeline(scene_durations: List[float], xfade: float, card_sec: float =
 
 
 def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24, mode: str = "commerce",
-             brand=None, disclosure: Optional[str] = None, intro_image: Optional[str] = None, bars=None,
+             brand=None, disclosure: Optional[str] = None, intro_image: Optional[str] = None, bars=None, label=None,
              xfade: float = 0.35, intro_sec: float = 0.3, hook_solo_sec: float = 1.5,
              center_modes=("travel", "owner", "commerce")) -> str:
     """
     comp: AdCompositor (create_overlay_image·render_disclosure·font_path 재사용)
     manifest 항목: video_path, audio_path, caption/subtitle/voiceover, hook_title, hook_sec
     bars: (상단 타이틀, 하단 구매 안내) 쇼핑 묶음 고정 바 → 모든 자막 PNG에 함께 합성 (영상 전체 고정)
+    label: 시골책방 상단 라벨 바 (영상 전체). manifest 항목의 quote_card(+quote_source)가 있으면 그 씬은 자막 대신 인용 카드,
+           caption_center_y가 있으면 그 씬 자막 위치
     """
     from core.compositor import BUNDLE_CAPTION_CY     # 순환 import 방지 (compositor가 이 모듈을 부름)
     if not manifest:
@@ -144,8 +146,11 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         if not a_dur:
             raise FFmpegAssembleError(f"씬 {idx + 1} 오디오 길이를 읽지 못함: {ap}")
         is_last = idx == len(manifest) - 1
-        dur = a_dur + (1.0 if is_last else 0.2 + xfade)
+        dur = a_dur + (1.0 if is_last else 0.2 + xfade) + float(item.get("hold_sec") or 0)   # hold_sec: 낭독 뒤 화면 여운 (인용 카드)
         caption = item.get("subtitle") or item.get("caption") or item.get("voiceover", "")
+        quote = item.get("quote_card") or ""
+        if quote:
+            caption = ""                     # 인용 씬: 자막 대신 종이 인용 카드
         hook = item.get("hook_title", "") or ""
         if mode in center_modes and hook.strip():
             hs = max(0.5, min(float(item.get("hook_sec") or hook_solo_sec), dur - 0.5))
@@ -154,14 +159,23 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             segs = [(0.0, dur, caption, hook)]
         pngs = []
         for j, (s, e, cap, hk) in enumerate(segs):
-            if not (cap or hk or brand or disclosure or bars):
+            if not (cap or hk or brand or disclosure or bars or label or quote):
                 continue
             layer = Image.fromarray(comp.create_overlay_image(caption_text=cap, hook_title=hk, width=W, height=H, mode=mode,
-                                                              center_y=BUNDLE_CAPTION_CY if bars else None)).convert("RGBA")
+                                                              center_y=item.get("caption_center_y")
+                                                              or (BUNDLE_CAPTION_CY if bars else None))).convert("RGBA")
             if brand:
                 if "wm" not in static_layers:
                     static_layers["wm"] = brand.render_watermark(W, H, font_path=comp.font_path)
                 layer.alpha_composite(static_layers["wm"])
+            if label:
+                if "label" not in static_layers:
+                    static_layers["label"] = comp.render_book_label(label, W, H)
+                layer.alpha_composite(static_layers["label"])
+            if quote:
+                if ("quote", idx) not in static_layers:
+                    static_layers[("quote", idx)] = comp.render_quote_card(quote, item.get("quote_source", ""), W, H)
+                layer.alpha_composite(static_layers[("quote", idx)])
             if bars:
                 if "bars" not in static_layers:
                     static_layers["bars"] = comp.render_bundle_bars(bars[0], bars[1], W, H)
