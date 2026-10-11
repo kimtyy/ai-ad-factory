@@ -32,6 +32,8 @@ logger = logging.getLogger("ad_factory.radar.trends")
 
 DIGEST_DDL = """CREATE TABLE IF NOT EXISTS trend_digest (
   vertical TEXT PRIMARY KEY, built_at TEXT, latest_run_at TEXT, n_outliers INTEGER, n_videos INTEGER, data TEXT)"""
+MIN_VERTICAL_PATTERNS = 3      # 업종 제목 패턴이 이보다 적으면 viral 고성과 구조를 [범용 차용]으로 보충
+MAX_PATTERNS = 6
 MAX_AGE_DAYS = 14               # 이보다 오래된 다이제스트는 '오래됨' 표시 (그래도 사용은 함)
 MIN_CHANNELS = 2                # 단어·태그는 서로 다른 채널 2곳 이상에서 쓰였을 때만 (남의 상호·브랜드 배제)
 TOP_TITLES_FOR_LLM = 15
@@ -139,7 +141,7 @@ def _first3s_hooks(conn, vertical: str, days: int, min_ratio: float) -> List[Dic
 TITLE_PATTERN_PROMPT = """아래는 최근 30일 한국 유튜브 쇼츠 중 '구독자 대비 조회수 배수'가 높은 떡상 영상 제목들입니다 (배수 높은 순).
 제목에서 사람들을 클릭하게 만든 '문장 구조'만 뽑아 최대 6개 패턴으로 정리하세요.
 - template: 구조만 남긴 문장. 상호·지명·브랜드·숫자·가격은 {{장소}} {{지역}} {{특징}} {{메뉴}} {{숫자}} {{가격}} 같은 자리표시자로 바꾸고,
-  원문 제목을 그대로 옮기지 마세요. 20자 안팎. 예: "여길 아직도 모른다고? {{특징}} {{장소}}"
+  원문 제목을 그대로 옮기지 마세요. 20자 안팎. 예: "{{지역}}에 이런 {{특징}}이 숨겨져 있었다니?!"
 - hook_type: {types} 중 하나
 - why: 왜 클릭되는지 한 줄 (손실 회피, 호기심 공백, 반전 등)
 - source_ratio: 이 구조가 나온 제목 중 가장 높은 배수
@@ -229,6 +231,15 @@ def load_digest(vertical: Optional[str], db_path: Optional[str] = None) -> Optio
             d["age_days"] = round((datetime.now(timezone.utc) - built).total_seconds() / 86400, 1)
             d["stale"] = d["age_days"] > MAX_AGE_DAYS
             d["fallback_from"] = vertical if fallback else None
+            d["cross_from_viral"] = 0
+            if not fallback and v != VIRAL and len(d.get("title_patterns") or []) < MIN_VERTICAL_PATTERNS:
+                vrow = conn.execute("SELECT data FROM trend_digest WHERE vertical=?", (VIRAL,)).fetchone()
+                if vrow:
+                    vpats = sorted(json.loads(vrow[0]).get("title_patterns") or [], key=lambda p: -float(p.get("ratio") or 0))
+                    have = {p["template"] for p in d.get("title_patterns") or []}
+                    extra = [{**p, "cross": True} for p in vpats if p["template"] not in have][:MAX_PATTERNS - len(have)]
+                    d["title_patterns"] = list(d.get("title_patterns") or []) + extra
+                    d["cross_from_viral"] = len(extra)
             return d
     finally:
         conn.close()

@@ -28,7 +28,7 @@ logger = logging.getLogger("ad_factory.render.ffmpeg")
 
 HW_ENCODERS = ("h264_qsv", "h264_nvenc", "h264_amf")
 ENCODER_ARGS = {
-    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "22"],
+    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "22", "-forced_idr", "1"],
     "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "22"],
     "h264_amf": ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp", "-qp_i", "22", "-qp_p", "24"],
     "libx264": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
@@ -238,7 +238,8 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
     tried = []
     for enc in dict.fromkeys([encoder, "libx264"]):
         cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", *inputs, "-/filter_complex", script,
-               "-map", "[vout]", "-map", "[aout]", *ENCODER_ARGS[enc], "-pix_fmt", "yuv420p", "-r", str(fps),
+               "-map", "[vout]", "-map", "[aout]", *ENCODER_ARGS[enc], "-force_key_frames", "0",   # 시각 0 = IDR (커버 프레임)
+               "-pix_fmt", "yuv420p", "-r", str(fps),
                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", f"{total:.3f}", out_path]
         res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:

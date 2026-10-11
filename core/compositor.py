@@ -28,8 +28,8 @@ logger = logging.getLogger("ad_factory.compositor")
 #   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
 CENTER_CAPTION_MODES = ("travel", "owner", "commerce")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
-INTRO_SEC = 0.5             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 업로드는 쇼츠 썸네일 파일 대신 영상 프레임이 지정되므로
-                            # 0~0.5초를 '시그니처 비주얼 + 헤드카피' 커버로 고정 (첫 프레임 = 커버, 키프레임)
+INTRO_SEC = 0.8             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 쇼츠 썸네일은 영상 프레임 중에서 고르므로
+                            # 0~0.8초를 '시그니처 비주얼 + 헤드카피' 커버로 고정 (첫 프레임 = 커버, IDR 키프레임)
 THUMB_FONT_RATIO = 0.26     # 썸네일 메인 카피 최대 글자 크기 (폭 대비, 기존 0.115의 약 2.3배 - 짧은 카피면 2줄 안에서 이 크기)
 THUMB_TEXT_WIDTH = 0.90
 THUMB_TEXT_TOP = 0.085      # 메인 카피 첫 줄 위치 (높이 대비): 쇼츠 상단 UI 아래

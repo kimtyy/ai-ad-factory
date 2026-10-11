@@ -111,23 +111,23 @@ import json
 import google.genai as gg
 _orig_client = gg.Client
 gg.Client = lambda api_key=None: type("C", (), {"models": GemModels()})()
-gem_reply = {"title": "모르면 무조건 손해! 예약 폭주하는 인생 숙소", "thumb_main": "여길 안 간다고?", "thumb_sub": "St John's Hotel 오션뷰",
+gem_reply = {"title": "모르면 무조건 손해! 예약 폭주하는 인생 숙소", "thumb_main": "이게 숨어 있었다고?", "thumb_sub": "St John's Hotel 오션뷰",
              "accent": "💥", "hashtags": ["#감성숙소", "#품절임박숙소", "#풀빌라"]}
 cp_g = make_shorts_copy("travel", hook="h", usp=USP, product_name="St John's Hotel", api_key="fake", seed=3)
-gem_reply = {"title": "여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ", "thumb_main": "여길 안 간다고?", "thumb_sub": "오션뷰 인피니티 풀",
+gem_reply = {"title": "강릉에 이런 오션뷰 숙소가 숨겨져 있었다니 ㄷㄷ", "thumb_main": "이게 숨어 있었다고?", "thumb_sub": "오션뷰 인피니티 풀",
              "accent": "🔥", "hashtags": ["#감성숙소", "#오션뷰"]}
 cp_ok = make_shorts_copy("travel", hook="h", usp=USP, product_name="St John's Hotel", api_key="fake", seed=3)
 gg.Client = _orig_client
-check(cp_g["title"] == cp_t["title"] and cp_g["thumb_main"] == "여길 안 간다고?" and "St John" not in cp_g["thumb_sub"]
+check(cp_g["title"] == cp_t["title"] and cp_g["thumb_main"] == "이게 숨어 있었다고?" and "St John" not in cp_g["thumb_sub"]
       and cp_g["accent"] == "💥" and "#품절임박숙소" not in cp_g["hashtags"] and len(cp_g["rejected"]) == 2,
       f"Gemini 카피 검증: '예약 폭주' 제목·숙소명 노출 서브·'품절' 태그는 버리고 안전한 템플릿 유지 {cp_g['rejected']}")
-check(cp_ok["title"] == "여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ #Shorts" and cp_ok["source"] == "gemini" and "#감성숙소" in cp_ok["hashtags"],
+check(cp_ok["title"] == "강릉에 이런 오션뷰 숙소가 숨겨져 있었다니 ㄷㄷ #Shorts" and cp_ok["source"] == "gemini" and "#감성숙소" in cp_ok["hashtags"],
       "Gemini 카피가 규칙을 지키면 그대로 사용 (#Shorts 자동)")
 
 DISC_SHORT = "※ 제휴 링크 포함 · 예약 시 수수료를 받을 수 있어요"
 dt = default_texts("travel", cp_ok, "https://www.agoda.com/x.html?cid=1234567", "이 영상은 아고다 제휴 … 수수료를 받을 수 있습니다.", DISC_SHORT)
 lines = dt["desc"].split("\n")
-check(lines[0] == "【 여길 안 간다고? 국내 끝판왕 오션뷰 숙소 ㄷㄷ 】" and lines[1] == DISC_SHORT
+check(lines[0] == "【 강릉에 이런 오션뷰 숙소가 숨겨져 있었다니 ㄷㄷ 】" and lines[1] == DISC_SHORT
       and PINNED_NOTICE["travel"] in lines and lines[-1].count("#") >= 5 and "cid=" not in dt["desc"],
       "설명란: 1줄 제목 → 제휴 고지 → 📌 첫 댓글 안내 → 해시태그 (링크는 설명란에 안 넣음)")
 check("cid=1234567" in dt["comment"] and "수수료" in dt["comment"] and dt["title"] == cp_ok["title"],

@@ -55,7 +55,7 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
                                                                if radar.get("stale") else ""))
     elif copy is not None:
         st.warning("🔥 떡상 레이더 데이터가 없어 기본 카피로 만들었어요. 레이더 자동 수집(scripts/install_radar_schedule.ps1)을 확인해 주세요.")
-    st.markdown("#### 🖼️ 썸네일 (영상 첫 0.5초에도 들어감)")
+    st.markdown("#### 🖼️ 썸네일 (영상 첫 0.8초 커버로도 들어감)")
     if thumb_path and os.path.exists(thumb_path):
         c1, c2 = st.columns([1, 1.4])
         with c1:

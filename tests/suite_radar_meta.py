@@ -103,7 +103,7 @@ check("#드라마이름" in [t["tag"] for t in lv["hashtag_pool"]] and sm.trend_
 block = sm.radar_block(ld)
 check("필수 반영" in block and "{지역} 사람들만 아는 {메뉴} 맛집" in block and "#가평맛집" in block and "40.0배" in block
       and "여기 모르면 진짜 손해 가평 고기집" not in block, "프롬프트 블록: 제목 패턴·배수·감정어·태그 풀 (원문 제목 없음)")
-gen = FakeModels({"title": "가평 사람들만 아는 숙성 삼겹살 맛집", "thumb_main": "여길 모른다고?", "thumb_sub": "숙성 삼겹살",
+gen = FakeModels({"title": "가평 사람들만 아는 숙성 삼겹살 맛집", "thumb_main": "이게 숨어 있었다고?", "thumb_sub": "숙성 삼겹살",
                   "accent": "🔥", "hashtags": ["#설맥가평현리점", "#숙성삼겹살"], "pattern_used": 1})
 gg.Client = lambda api_key=None: type("C", (), {"models": gen})()
 c = sm.make_shorts_copy("owner", hook="", usp="숙성 삼겹살, 통창 계곡 뷰", product_name="설맥 가평현리점", api_key="fake",
@@ -128,6 +128,36 @@ gg.Client = _orig
 m = sm.make_shorts_copy("owner", usp="숙성 삼겹살", product_name="설맥", trend=ld, mock=True)
 check(m["radar"] and any(t in tags for t in m["hashtags"]) and m["radar"]["pattern"] is None,
       "키 없음·mock: 제목은 안전한 기본 훅, 해시태그에는 레이더 풀 반영 (자리표시자 기계 치환 안 함)")
+
+# ---------------------------------------------------------------- 2-1. 진부한 후킹 차단 + 새 기본 템플릿 + 범용 패턴 차용
+check(all(not sm.is_stale_hook(t.format(kw="풀빌라", where="가평", iga="가")) for ts in sm.TITLE_TEMPLATES.values() for t in ts)
+      and all(not sm.is_stale_hook(m) for ts in sm.THUMB_TEMPLATES.values() for m, _ in ts)
+      and sm.is_stale_hook("여길 아직도 안 가봤다고? 풀빌라") and sm.is_stale_hook("여길 모른다고?") and not sm.is_stale_hook("여기 진짜 한국 맞아요?"),
+      "기본 템플릿에서 '여길 아직도 안 가봤다고?' 계열 전면 삭제, 진부한 후킹 판별")
+tpl = [sm.make_shorts_copy("owner", usp="맥주얼음 맥주", product_name="설맥", region="경기 가평군", mock=True, seed=s)["title"] for s in range(6)]
+check(all("가평" in t and "맥주얼음 맥주" in t for t in tpl) and any("숨겨져 있었다니?!" in t for t in tpl) and any("모르면 무조건 손해" in t for t in tpl)
+      and "가평군" not in " ".join(tpl), f"데이터 없을 때 기본 제목: 지역(가평) + 시그니처 + 호기심·손실 회피 {sorted(set(tpl))[:2]}")
+gg.Client = lambda api_key=None: type("C", (), {"models": FakeModels({"title": "여길 아직도 안 가봤다고? 가평 맥주집", "thumb_main": "여길 모른다고?",
+                                                                       "thumb_sub": "맥주얼음 맥주", "accent": "🔥", "hashtags": []})})()
+st_ = sm.make_shorts_copy("owner", usp="맥주얼음 맥주", product_name="설맥", api_key="fake", region="경기 가평군", signature="맥주얼음 맥주", seed=1)
+gg.Client = _orig
+check(not sm.is_stale_hook(st_["title"]) and not sm.is_stale_hook(st_["thumb_main"]) and any("진부한 후킹" in r for r in st_["rejected"]),
+      f"모델이 진부한 후킹을 써도 버리고 새 템플릿으로 '{st_['title']}' / '{st_['thumb_main']}'")
+conn = store.connect(db)
+trends.save_digest(conn, {**trends.build_digest(conn, "viral", api_key=None), "title_patterns": [
+    {"template": "대부분 모르는 {대상} {행동}하는 법", "hook_type": "loss_warning", "why": "손실 회피", "ratio": 652.0},
+    {"template": "이게 된다고? {문제} {해결} 방법", "hook_type": "reversal", "why": "의외성", "ratio": 677.3}]})
+conn.close()
+lf = trends.load_digest("food", db)
+check(lf["cross_from_viral"] == 2 and [p.get("cross", False) for p in lf["title_patterns"]] == [False, False, True, True]
+      and lf["title_patterns"][2]["template"] == "이게 된다고? {문제} {해결} 방법" and "[범용 차용]" in sm.radar_block(lf)
+      and "#가평맛집" in sm.radar_block(lf), "업종 제목 패턴이 3개 미만이면 범용 고성과 구조를 [범용 차용]으로 보충 (배수 순, 태그는 업종 것)")
+
+pt_trend = {"title_patterns": [{"template": "상위 {숫자}% {지역} {특징} {장소}", "ratio": 99}, {"template": "{인물}이 말해주는 {장소}", "ratio": 26},
+                               {"template": "{지역}에 이런 {특징}이 숨겨져 있었다니", "ratio": 20}, {"template": "{가격}대로 떠나는 {장소}", "ratio": 14}]}
+check([q["template"] for q in sm.usable_patterns(pt_trend, "오션뷰 인피니티 풀")] == ["{지역}에 이런 {특징}이 숨겨져 있었다니"]
+      and len(sm.usable_patterns(pt_trend, "1박 9만원대 오션뷰")) == 3,
+      "사실로 못 채우는 패턴은 프롬프트에서 제외 (숫자·가격은 USP에 숫자가 있을 때만, 인물·브랜드는 항상) → '상위 1%' 지어내기 방지")
 
 # ---------------------------------------------------------------- 3. 업로드 패널 표시
 from streamlit.testing.v1 import AppTest
@@ -172,11 +202,11 @@ def frame_n(n):
     return np.frombuffer(raw, np.uint8).reshape(1920, 1080, 3).astype(int)
 
 
-d0, d11, d14 = (float(np.abs(frame_n(k) - ti).mean()) for k in (0, 11, 14))
-check(INTRO_SEC == 0.5 and d0 < 6 and d11 < 6 and d14 > 20,
-      f"커버: 0~0.5초(프레임 0~11) = 썸네일 (차이 {d0:.1f}·{d11:.1f}), 0.58초부터 본편 ({d14:.1f})")
+d0, d18, d21 = (float(np.abs(frame_n(k) - ti).mean()) for k in (0, 18, 21))
+check(INTRO_SEC == 0.8 and d0 < 6 and d18 < 6 and d21 > 20,
+      f"커버: 0~0.8초(프레임 0~18) = 썸네일 (차이 {d0:.1f}·{d18:.1f}), 0.875초부터 본편 ({d21:.1f})")
 probe = subprocess.run([ff, "-hide_banner", "-i", out, "-vf", "select=eq(n\\,0),showinfo", "-frames:v", "1", "-f", "null", "-"],
                        capture_output=True, text=True).stderr
-check("iskey:1" in probe and "pts_time:0 " in probe.replace("pts_time:0\t", "pts_time:0 "),
+check("iskey:1" in probe and "type:I" in probe and "pts_time:0 " in probe.replace("pts_time:0\t", "pts_time:0 "),
       "첫 프레임은 시각 0의 키프레임 (스튜디오·플레이어가 첫 화면으로 커버를 잡음)")
 finish(fails)
