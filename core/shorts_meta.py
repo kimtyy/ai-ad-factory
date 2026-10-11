@@ -6,12 +6,14 @@ core/shorts_meta.py - 쇼츠 업로드 메타데이터(제목·설명·해시태
   (표시광고법상 기만 광고 + 제휴 계정 정지 사유). '끝판왕'·'인생 숙소' 같은 주관적 감탄은 허용
 - Gemini가 있으면 카피 생성, 없거나(mock·키 없음) 검증에서 걸리면 근거 안전한 템플릿으로 대체
 - 설명란: 1줄 제목 → 제휴 고지(공정위 추천·보증 심사지침: 게시물 첫 부분) → 📌 첫 댓글 안내 → 해시태그 5~7개
+- 첫 댓글(업로드 직후 자동 등록): 참여 유도 질문 → 사장님=네이버 검색·지도 링크 / 제휴=링크 + 고지 전문 → 핵심 해시태그 3개
 """
 import json
 import logging
 import random
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 logger = logging.getLogger("ad_factory.shorts_meta")
 
@@ -65,6 +67,16 @@ WHERE_FALLBACK = {"travel": "국내", "commerce": "", "owner": "동네"}
 # 진부한 후킹 (모델이 써도 버리고 템플릿·다른 필드로): '여길 아직도 안 가봤다고?', '여길 모른다고?', '여길 안 간다고?' 계열
 STALE_HOOKS = (r"여길\s*(아직도\s*)?(안\s*가|안\s*간|모르|모른|몰라|몰랐)", r"아직도\s*안\s*가\s*봤", r"여기\s*아직도\s*모르")
 KW_FALLBACK = {"travel": "숙소", "commerce": "꿀템", "owner": "가게"}
+# 첫 댓글 참여 유도 질문 (답하기 쉬운 선택·경험 질문, 사실 주장 없음). AI 질문이 없거나 검증에서 걸리면 사용
+COMMENT_QUESTIONS = {
+    "owner": ["여기 가면 제일 먼저 시킬 메뉴는? 댓글로 골라 주세요 👇", "{kw}, 누구랑 같이 오고 싶어요? 친구 태그 👇",
+              "여러분 동네 {kw} 맛집도 댓글로 알려 주세요 👇"],
+    "travel": ["이 숙소, 누구랑 가고 싶어요? 댓글로 태그해 주세요 👇", "{kw} 숙소에서 제일 먼저 하고 싶은 건? 👇"],
+    "commerce": ["여러분은 이거 어디에 제일 먼저 쓰고 싶어요? 👇", "{kw} 고를 때 제일 중요하게 보는 건? 👇"],
+}
+COMMENT_QUESTION_MAX = 45
+COMMENT_TAGS = 3
+NAVER_MAP_SEARCH = "https://map.naver.com/p/search/{q}"     # 네이버 지도 검색 결과 링크 (페이지 접속·크롤링 없음, 링크만 만듦)
 
 
 def is_stale_hook(text: str) -> bool:
@@ -143,8 +155,9 @@ def _template_copy(mode: str, usp: str, product_name: str, hook: str, seed: Opti
     if hook and len(hook) <= THUMB_MAIN_MAX and not is_stale_hook(hook):
         main = hook                       # 씬 1 후킹이 짧으면 썸네일과 영상 첫 문장을 맞춤
     accent = "😱" if main.endswith("?") else "🔥"
+    question = rnd.choice(COMMENT_QUESTIONS.get(mode, COMMENT_QUESTIONS["travel"])).format(kw=kw)
     return {"title": ensure_shorts(title), "thumb_main": main, "thumb_sub": sub.format(kw=kw)[:THUMB_SUB_MAX],
-            "accent": accent, "source": "template"}
+            "accent": accent, "comment_question": question, "source": "template"}
 
 
 RADAR_PATTERNS_IN_PROMPT = 6
@@ -260,9 +273,12 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
 3) thumb_sub: 썸네일 서브 카피 ({THUMB_SUB_MAX}자 이내, USP 핵심 명사구. 예: "오션뷰 인피니티 풀")
 4) accent: {list(ACCENTS)} 중 하나 (메인 카피 끝에 붙일 포인트)
 5) hashtags: 핵심 키워드 해시태그 5~7개 (#숙소추천 #감성숙소 #풀빌라 처럼, 띄어쓰기 없이)
+6) comment_question: 업로드 직후 채널이 다는 첫 댓글의 참여 유도 질문 한 줄 ({COMMENT_QUESTION_MAX}자 이내, 물음표 포함, 끝에 👇 가능).
+   시청자가 한 단어로 답하기 쉬운 선택·경험 질문 (예: "여기 가면 제일 먼저 시킬 메뉴는? 👇", "누구랑 오고 싶어요? 친구 태그 👇").
+   가격·순위·인기 같은 사실 주장 금지
 규칙: 예약 폭주·품절·완판·마감 임박·1위·최저가·할인율·인원·시간 같은 사실 주장은 USP에 적힌 것만. 없으면 쓰지 마세요.
 '끝판왕', '인생 숙소', 'ㄷㄷ', '미쳤다' 같은 감탄은 괜찮아요. {name_rule}
-JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "accent": "...", "hashtags": ["#...", "..."], "pattern_used": 0}}
+JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "accent": "...", "hashtags": ["#...", "..."], "comment_question": "...", "pattern_used": 0}}
 """
     try:
         from google import genai
@@ -289,6 +305,14 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
             out["rejected"].append(f"{field}: '{val}' ({bad or '너무 김'})")
             continue
         out[field] = ensure_shorts(val) if field == "title" else val[:limit]
+    q = str(raw.get("comment_question") or "").strip()
+    q_bad = (None if not q else find_hype_claim(q, usp) or ("물음표 없음" if "?" not in q else None)
+             or ("너무 김" if len(q) > COMMENT_QUESTION_MAX + 5 else None)
+             or ("숙소명 노출" if mode == "travel" and product_name and product_name.strip() in q else None))
+    if q_bad:
+        out["rejected"].append(f"comment_question: '{q}' ({q_bad})")
+    elif q:
+        out["comment_question"] = q
     out["accent"] = _clean_accent(raw.get("accent")) or base["accent"]
     if out["accent"] in ("?!", "ㄷㄷ") and re.search(r"[?!ㄷ]$", out["thumb_main"]):
         out["accent"] = "😱" if out["thumb_main"].endswith("?") else "🔥"     # '모른다고??!'처럼 부호가 겹치지 않게
@@ -309,7 +333,7 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
     out["radar"] = radar_summary(trend, chosen_g, [t for t in out["hashtags"] if t in pool])
     if out["rejected"]:
         logger.info(f"[쇼츠 카피 검증] 근거 없는 주장·규칙 위반 → 템플릿 유지: {out['rejected']}")
-    if all(r.split(":")[0] in ("title", "thumb_main", "thumb_sub") for r in out["rejected"]) and len(out["rejected"]) == 3:
+    if len([r for r in out["rejected"] if r.split(":")[0] in ("title", "thumb_main", "thumb_sub")]) == 3:
         out["source"] = "template"
     return out
 
@@ -328,3 +352,27 @@ def build_shorts_description(mode: str, title: str, hashtags: List[str], disclos
         lines.append(disclosure_short.strip())
     lines += ["", PINNED_NOTICE.get(mode, PINNED_NOTICE["travel"]), "", " ".join(hashtags[:HASHTAG_MAX])]
     return "\n".join(lines).strip()
+
+
+def naver_map_link(keyword: str) -> str:
+    return NAVER_MAP_SEARCH.format(q=quote((keyword or "").strip())) if (keyword or "").strip() else ""
+
+
+def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] = None, *, search_keyword: str = "",
+                        link: str = "", disclosure_full: str = "") -> str:
+    """
+    업로드 직후 채널 계정으로 다는 첫 댓글 (고정은 스튜디오에서 한 번):
+    참여 유도 질문 → 사장님: 네이버 검색 안내 + 네이버 지도 링크 / 숙소·쇼핑: 제휴 링크 + 공정위 고지 전문 → 핵심 해시태그 3개
+    """
+    blocks = [question.strip()] if (question or "").strip() else []
+    if mode == "owner":
+        kw = (search_keyword or "").strip()
+        if kw:
+            blocks.append(f"📍 네이버에서 '{kw}' 검색하면 위치·영업시간·메뉴를 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+    elif link:
+        what = "숙소 상세 정보·예약" if mode == "travel" else "제품 상세 정보·구매"
+        blocks.append(f"🔗 {what} 링크: {link}" + (f"\n{disclosure_full.strip()}" if (disclosure_full or "").strip() else ""))
+    tags = " ".join(t if t.startswith("#") else "#" + t for t in (hashtags or [])[:COMMENT_TAGS])
+    if tags:
+        blocks.append(tags)
+    return "\n\n".join(blocks).strip()

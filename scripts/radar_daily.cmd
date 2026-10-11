@@ -9,3 +9,5 @@ echo ==== %date% %time% radar collect ==== >> "outputs\radar\radar_daily.log"
 python -m core.radar.run --vertical all --hooks 5 --budget 4000 >> "outputs\radar\radar_daily.log" 2>&1
 echo ==== %date% %time% trend digest ==== >> "outputs\radar\radar_daily.log"
 python -m core.radar.trends --vertical all >> "outputs\radar\radar_daily.log" 2>&1
+echo ==== %date% %time% pending first comments ==== >> "outputs\radar\radar_daily.log"
+python scripts\post_pending_comments.py >> "outputs\radar\radar_daily.log" 2>&1

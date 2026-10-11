@@ -52,6 +52,9 @@ def main(argv=None) -> int:
             print(f"  OAuth 클라이언트 JSON 위치: {client_secrets_path()}")
         return 1
     print(f"[연결 완료] {CHANNEL_LABEL[mode]} → 채널 '{ch['title']}' (id {ch['id']}), 토큰: {ch['saved_to']}")
+    if not ch.get("comment_scope", True):
+        print("[주의] 동의 화면에서 '댓글 관리(youtube.force-ssl)' 권한이 빠졌어요 → 업로드는 되지만 첫 댓글 자동 등록이 안 돼요. "
+              "다시 실행해 모든 권한을 허용해 주세요.")
     if not expected:
         print(f"[주의] .env에 YOUTUBE_CHANNEL_{mode.upper()}={ch['title']} 를 적어야 업로드할 수 있어요 (채널 확인 안전 장치).")
     return 0

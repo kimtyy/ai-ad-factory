@@ -12,8 +12,12 @@ core/youtube_upload.py - 완성 쇼츠를 제작 모드별 유튜브 채널에 �
   (또는 .env의 YOUTUBE_CLIENT_SECRETS 경로). secrets/는 git 제외
 - 안전 장치: 업로드 직전 API로 실제 채널명을 확인해 그 모드의 기대 채널명과 다르면 중단.
   기대 채널명이 비어 있으면 비교할 기준이 없으므로 업로드하지 않음
-- 업로드 순서: videos.insert(재개 가능 업로드) → thumbnails.set(썸네일) → commentThreads.insert(첫 댓글)
-  썸네일·댓글이 실패해도 영상 업로드는 성공으로 두고 경고만 돌려줌
+- 업로드 순서: videos.insert(재개 가능 업로드, selfDeclaredMadeForKids=False) → videos.list(status)로 아동용 아님·댓글 가능 확인
+  → thumbnails.set(썸네일) → commentThreads.insert(첫 댓글, 채널 본인 계정). 첫 댓글은 youtube.force-ssl 권한 필요
+  썸네일·댓글이 실패해도 영상 업로드는 성공으로 두고 원인별 경고만 돌려줌
+- 비공개 영상에는 댓글을 달 수 없음 (2026-10-11 실측: 처리 완료·아동용 아님·force-ssl 권한이어도 403 forbidden)
+  → 비공개 업로드의 첫 댓글은 대기열(outputs/youtube/pending_comments.json)에 두고, 공개·일부 공개로 바뀌면
+    post_pending_comments()가 등록 (완료 화면 버튼 · `python scripts/post_pending_comments.py` · 레이더 일일 작업)
 
 API 제약 (2026-10 확인):
 - 댓글 '고정(핀)'은 API에 없음 → 댓글은 자동으로 달고, 고정은 YouTube 앱·스튜디오에서 한 번 눌러야 함
@@ -23,11 +27,18 @@ API 제약 (2026-10 확인):
 """
 import logging
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("ad_factory.youtube_upload")
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.force-ssl"]
+UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"     # commentThreads.insert (첫 댓글)
+SCOPES = [UPLOAD_SCOPE, COMMENT_SCOPE]
+COMMENT_MAX = 9000
+COMMENT_RETRY_WAIT = 3.0                  # 업로드 직후 영상이 아직 안 잡혀 404/5xx면 한 번 더
+PENDING_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "youtube",
+                            "pending_comments.json")    # 비공개라 못 단 첫 댓글 (공개 전환 후 등록)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRETS_DIR = os.path.join(ROOT, "secrets")
 THUMB_MAX_BYTES = 2 * 1024 * 1024        # thumbnails.set 한도 2MB
@@ -76,6 +87,23 @@ def is_authorized(mode: str) -> bool:
     return os.path.exists(token_path(mode))
 
 
+def granted_scopes(mode: str) -> Optional[List[str]]:
+    """그 모드 토큰에 저장된 권한 목록 (토큰이 없거나 기록이 없으면 None = 알 수 없음)"""
+    import json
+    try:
+        with open(token_path(mode), encoding="utf-8") as f:
+            scopes = json.load(f).get("scopes")
+    except (OSError, ValueError):
+        return None
+    return scopes.split() if isinstance(scopes, str) else scopes
+
+
+def has_comment_scope(mode: str) -> bool:
+    """첫 댓글 권한(youtube.force-ssl)이 토큰에 있는지. 기록이 없으면 일단 시도 (API가 거절하면 원인 안내)"""
+    scopes = granted_scopes(mode)
+    return scopes is None or COMMENT_SCOPE in scopes
+
+
 def load_credentials(mode: str):
     """그 모드의 토큰 → 자격 증명 (만료되면 갱신해 다시 저장). 없으면 YouTubeUploadError"""
     from google.auth.transport.requests import Request
@@ -117,7 +145,10 @@ def authorize_interactive(mode: str) -> Dict[str, str]:
     path = token_path(key)
     with open(path, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
-    return {**ch, "expected": expected, "saved_to": path}
+    # 동의 화면에서 일부 권한을 끄고 허용할 수 있음 → 댓글 권한이 빠졌으면 알려 줌 (업로드는 가능)
+    granted = getattr(creds, "granted_scopes", None) or getattr(creds, "scopes", None)
+    comment_ok = granted is None or COMMENT_SCOPE in granted
+    return {**ch, "expected": expected, "saved_to": path, "comment_scope": comment_ok}
 
 
 # 테스트에서 가짜 서비스로 바꿔 끼우는 지점: _service_factory(channel_key) → service
@@ -157,6 +188,32 @@ def thumbnail_for_upload(thumb_png: str) -> str:
     return out
 
 
+def _http_reason(e) -> str:
+    """HttpError 본문의 errors[0].reason (commentsDisabled·insufficientPermissions·videoNotFound 등)"""
+    import json
+    try:
+        err = json.loads((getattr(e, "content", b"") or b"{}").decode("utf-8", "replace")).get("error") or {}
+        return str(((err.get("errors") or [{}])[0]).get("reason") or "")
+    except (ValueError, AttributeError):
+        return ""
+
+
+COMMENT_FAIL_KO = {
+    "commentsDisabled": "이 영상은 댓글이 꺼져 있어요 (아동용 지정 또는 채널 기본 댓글 설정). "
+                        "스튜디오 > 설정 > 업로드 기본설정 > 고급 설정을 확인해 주세요.",
+    "insufficientPermissions": "댓글 권한(youtube.force-ssl)이 없는 연결이에요. PC에서 `{cmd}`로 다시 연결해 주세요.",
+    "forbidden": "유튜브가 댓글 작성을 거절했어요 (채널 댓글 권한·커뮤니티 제한 확인).",
+    "videoNotFound": "업로드 직후라 영상이 아직 처리 중이에요. 잠시 뒤 스튜디오에서 댓글을 달아 주세요.",
+}
+
+
+def made_for_kids_status(service, vid: str) -> Dict[str, Any]:
+    """업로드된 영상의 아동용 여부 확인 (madeForKids=True면 댓글이 막힘) → {made_for_kids, self_declared}"""
+    items = service.videos().list(part="status", id=vid).execute().get("items") or []
+    st = (items[0].get("status") if items else None) or {}
+    return {"made_for_kids": st.get("madeForKids"), "self_declared": st.get("selfDeclaredMadeForKids")}
+
+
 def build_description(hook: str, link: str = "", disclosure: str = "", tags: Optional[List[str]] = None) -> str:
     parts = [hook.strip()] if hook and hook.strip() else []
     if link:
@@ -171,10 +228,12 @@ def build_description(hook: str, link: str = "", disclosure: str = "", tags: Opt
 def upload_short(video_path: str, title: str, description: str, *, mode: str, thumb_path: Optional[str] = None,
                  comment: str = "", privacy: str = "private", tags: Optional[List[str]] = None,
                  category_id: str = CATEGORY_TRAVEL,
-                 progress: Optional[Callable[[float], None]] = None) -> Dict[str, Any]:
+                 progress: Optional[Callable[[float], None]] = None,
+                 sleep: Optional[Callable[[float], None]] = None) -> Dict[str, Any]:
     """
     mode(travel/owner/commerce 또는 travel/store/shopping)의 토큰으로 업로드
-    → {video_id, url, studio_url, channel, channel_key, privacy, thumbnail_ok, comment_ok, comment_id, warnings}
+    → {video_id, url, studio_url, channel, channel_key, privacy, made_for_kids, thumbnail_ok, comment_ok, comment_id,
+       comment_url, warnings}
     업로드 직전 API로 확인한 채널명이 그 모드의 기대 채널명과 다르면(또는 기대 채널명이 비어 있으면) 중단
     """
     key = channel_key(mode)
@@ -219,7 +278,7 @@ def upload_short(video_path: str, title: str, description: str, *, mode: str, th
     out = {"video_id": vid, "url": f"https://youtube.com/shorts/{vid}", "studio_url": f"https://studio.youtube.com/video/{vid}/edit",
            "comments_url": f"https://studio.youtube.com/video/{vid}/comments", "channel": channel["title"], "channel_key": key,
            "privacy": (resp.get("status") or {}).get("privacyStatus", privacy), "thumbnail_ok": False,
-           "comment_ok": False, "comment_id": "", "warnings": []}
+           "comment_ok": False, "comment_id": "", "comment_url": "", "made_for_kids": None, "warnings": []}
     logger.info(f"유튜브 업로드 완료: {out['url']} ({channel['title']}, {out['privacy']})")
     if privacy != "private" and out["privacy"] == "private":
         out["warnings"].append("API 프로젝트가 아직 Google 감사(audit)를 받지 않아 비공개로 올라갔어요. 스튜디오에서 공개로 바꿔 주세요.")
@@ -232,11 +291,120 @@ def upload_short(video_path: str, title: str, description: str, *, mode: str, th
             out["warnings"].append("썸네일 등록이 거절됐어요 (채널 인증·쇼츠 맞춤 썸네일 권한 필요). "
                                    f"영상 첫 화면이 썸네일이라 피드에는 그대로 보여요. (HTTP {getattr(e.resp, 'status', '?')})")
 
-    if comment and comment.strip():
-        try:
-            c = service.commentThreads().insert(part="snippet", body={"snippet": {
-                "videoId": vid, "topLevelComment": {"snippet": {"textOriginal": comment.strip()[:9000]}}}}).execute()
-            out["comment_ok"], out["comment_id"] = True, c.get("id", "")
-        except HttpError as e:
-            out["warnings"].append(f"첫 댓글 등록 실패 (HTTP {getattr(e.resp, 'status', '?')}). 스튜디오에서 직접 달아 주세요.")
+    # 아동용 아님(댓글 열림) 확인: 요청에 selfDeclaredMadeForKids=False를 보냈어도 채널 기본값·유튜브 판정으로 바뀔 수 있음
+    comments_open = True
+    try:
+        kids = made_for_kids_status(service, vid)
+        out["made_for_kids"] = kids["made_for_kids"]
+        if kids["made_for_kids"]:
+            comments_open = False
+            out["warnings"].append("유튜브가 이 영상을 '아동용'으로 지정해 댓글이 막혔어요. 스튜디오 > 영상 세부정보 > 시청자층에서 "
+                                   "'아동용이 아님'으로 바꾼 뒤 댓글을 달아 주세요.")
+    except Exception as e:      # 확인 실패가 이미 끝난 업로드를 실패로 만들지 않게
+        logger.warning(f"아동용 여부 확인 실패 ({e}) → 댓글은 그대로 진행")
+
+    out["comment_pending"] = False
+    if comment and comment.strip() and comments_open:
+        text = comment.strip()[:COMMENT_MAX]
+        if not has_comment_scope(key):
+            out["warnings"].append(COMMENT_FAIL_KO["insufficientPermissions"].format(cmd=auth_command(key)))
+        elif out["privacy"] == "private":
+            # 비공개 영상엔 댓글 불가 → 대기열에 두고 공개·일부 공개로 바뀌면 등록 (API 호출로 쿼터 낭비 안 함)
+            queue_pending_comment(key, vid, text)
+            out["comment_pending"] = True
+            logger.info(f"첫 댓글 대기: {vid} (비공개 → 공개·일부 공개 전환 후 등록)")
+        else:
+            _post_first_comment(service, vid, text, key, out, sleep or time.sleep)
     return out
+
+
+def _load_pending() -> List[Dict[str, Any]]:
+    import json
+    try:
+        with open(PENDING_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _save_pending(items: List[Dict[str, Any]]) -> None:
+    import json
+    os.makedirs(os.path.dirname(PENDING_PATH), exist_ok=True)
+    tmp = PENDING_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, PENDING_PATH)
+
+
+def queue_pending_comment(mode: str, vid: str, text: str) -> None:
+    import datetime
+    items = [p for p in _load_pending() if p.get("video_id") != vid]
+    items.append({"video_id": vid, "channel_key": channel_key(mode), "text": text,
+                  "queued_at": datetime.datetime.now().isoformat(timespec="seconds")})
+    _save_pending(items)
+
+
+def pending_comment(vid: str) -> Optional[Dict[str, Any]]:
+    return next((p for p in _load_pending() if p.get("video_id") == vid), None)
+
+
+def post_pending_comments(only_video: Optional[str] = None, sleep: Optional[Callable[[float], None]] = None) -> List[Dict[str, Any]]:
+    """
+    대기 중인 첫 댓글 → 영상이 공개·일부 공개면 등록하고 대기열에서 뺌. 아직 비공개면 그대로, 삭제된 영상이면 버림
+    → [{video_id, state: posted|waiting|kids|gone|failed, comment_url, warning}]
+    """
+    from googleapiclient.errors import HttpError
+    results, keep, services = [], [], {}
+    for p in _load_pending():
+        vid, key = p.get("video_id", ""), p.get("channel_key", "")
+        if only_video and vid != only_video:
+            keep.append(p)
+            continue
+        r = {"video_id": vid, "state": "waiting", "comment_url": "", "warning": ""}
+        try:
+            svc = services.get(key) or services.setdefault(key, build_service(mode=key))
+            items = svc.videos().list(part="status", id=vid).execute().get("items") or []
+            status = (items[0].get("status") if items else None) or {}
+            if not items:
+                r["state"] = "gone"
+            elif status.get("privacyStatus") == "private":
+                keep.append(p)
+            elif status.get("madeForKids"):
+                r["state"], r["warning"] = "kids", "아동용으로 지정돼 댓글이 막혀 있어요 (스튜디오 > 시청자층 변경)"
+                keep.append(p)
+            else:
+                out = {"warnings": []}
+                _post_first_comment(svc, vid, p.get("text", ""), key, out, sleep or time.sleep)
+                if out.get("comment_ok"):
+                    r["state"], r["comment_url"] = "posted", out.get("comment_url", "")
+                else:
+                    r["state"], r["warning"] = "failed", " ".join(out["warnings"])
+                    keep.append(p)
+        except (HttpError, YouTubeUploadError) as e:
+            r["state"], r["warning"] = "failed", str(e)[:200]
+            keep.append(p)
+        results.append(r)
+    _save_pending(keep)
+    return results
+
+
+def _post_first_comment(service, vid: str, text: str, key: str, out: Dict[str, Any], sleep: Callable[[float], None]) -> None:
+    """채널 본인 계정으로 첫 댓글. 업로드 직후 404/5xx면 한 번 더 시도, 실패하면 원인별 안내"""
+    from googleapiclient.errors import HttpError
+    body = {"snippet": {"videoId": vid, "topLevelComment": {"snippet": {"textOriginal": text}}}}
+    for attempt in (1, 2):
+        try:
+            c = service.commentThreads().insert(part="snippet", body=body).execute()
+            out["comment_ok"], out["comment_id"] = True, c.get("id", "")
+            out["comment_url"] = f"https://www.youtube.com/watch?v={vid}&lc={out['comment_id']}" if out["comment_id"] else ""
+            logger.info(f"첫 댓글 등록: {out['comment_id']} ({vid})")
+            return
+        except HttpError as e:
+            code, reason = int(getattr(e.resp, "status", 0) or 0), _http_reason(e)
+            if attempt == 1 and (code == 404 or code >= 500) and reason != "commentsDisabled":
+                sleep(COMMENT_RETRY_WAIT)
+                continue
+            msg = COMMENT_FAIL_KO.get(reason, "").format(cmd=auth_command(key)) or "스튜디오에서 직접 달아 주세요."
+            out["warnings"].append(f"첫 댓글 등록 실패 (HTTP {code or '?'}{', ' + reason if reason else ''}). {msg}")
+            return

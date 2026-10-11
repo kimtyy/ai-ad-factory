@@ -161,8 +161,11 @@ def http_err(code):
 
 
 class Fake:
-    def __init__(self, channel="여행을 떠나자", privacy_back=None, thumb_err=None, comment_err=None):
+    def __init__(self, channel="여행을 떠나자", privacy_back=None, thumb_err=None, comment_err=None, kids=False, comment_errs=None,
+                 list_privacy="public", gone=False):
         self.channel, self.privacy_back, self.thumb_err, self.comment_err = channel, privacy_back, thumb_err, comment_err
+        self.kids, self.comment_errs = kids, comment_errs      # comment_errs: 호출마다 꺼낼 오류 목록 (None이면 성공)
+        self.list_privacy, self.gone = list_privacy, gone      # videos.list가 돌려줄 현재 공개 범위 / 삭제된 영상
 
     def channels(self):
         return type("X", (), {"list": lambda s, **k: Req("channels", {"items": [{"id": "UC1", "snippet": {"title": self.channel}}]})})()
@@ -172,7 +175,12 @@ class Fake:
             calls.append(("insert", k))
             pv = self.privacy_back or k["body"]["status"]["privacyStatus"]
             return Req("insert", {"id": "VID123", "status": {"privacyStatus": pv}}, chunks=[0.5])
-        return type("X", (), {"insert": insert})()
+
+        def list_(s, **k):
+            calls.append(("vlist", k))
+            return Req("vlist", {"items": [] if self.gone else [{"id": k.get("id"), "status": {
+                "madeForKids": self.kids, "selfDeclaredMadeForKids": False, "privacyStatus": self.list_privacy}}]})
+        return type("X", (), {"insert": insert, "list": list_})()
 
     def thumbnails(self):
         def set_(s, **k):
@@ -183,7 +191,8 @@ class Fake:
     def commentThreads(self):
         def insert(s, **k):
             calls.append(("comment", k))
-            return Req("comment", {"id": "C1"}, err=self.comment_err)
+            err = self.comment_errs.pop(0) if self.comment_errs else self.comment_err
+            return Req("comment", {"id": "C1"}, err=err)
         return type("X", (), {"insert": insert})()
 
 
@@ -191,8 +200,9 @@ class Fake:
 CH = {"YOUTUBE_CHANNEL_TRAVEL": "여행을 떠나자", "YOUTUBE_CHANNEL_STORE": "샵스토리", "YOUTUBE_CHANNEL_SHOPPING": ""}
 _saved_env = {k: os.environ.get(k) for k in CH}
 os.environ.update(CH)
-_secrets = yu.SECRETS_DIR
+_secrets, _pending = yu.SECRETS_DIR, yu.PENDING_PATH
 yu.SECRETS_DIR = os.path.join(work, "secrets")
+yu.PENDING_PATH = os.path.join(work, "youtube", "pending_comments.json")
 CHANNEL_OF = {"travel": "여행을 떠나자", "store": "샵스토리", "shopping": "쇼핑 전용"}
 seen_keys = []
 
@@ -253,14 +263,120 @@ except yu.YouTubeUploadError as e:
 
 yu._service_factory = factory(privacy_back="private", thumb_err=http_err(403), comment_err=http_err(403))
 res2 = yu.upload_short(intro, "t", "d", mode="travel", thumb_path=thumb, comment="링크", privacy="public")
-check(res2["video_id"] == "VID123" and not res2["thumbnail_ok"] and not res2["comment_ok"] and len(res2["warnings"]) == 3
+check(res2["video_id"] == "VID123" and not res2["thumbnail_ok"] and not res2["comment_ok"] and res2["comment_pending"]
+      and len(res2["warnings"]) == 2
       and any("감사" in w for w in res2["warnings"]) and any("썸네일" in w for w in res2["warnings"]),
-      "썸네일·댓글이 거절돼도 영상 업로드는 성공 + 경고 (미감사 프로젝트 비공개 잠김 안내 포함)")
+      "썸네일이 거절돼도 영상 업로드는 성공 + 경고 (미감사 프로젝트 비공개 잠김 → 첫 댓글은 대기열)")
+os.remove(yu.PENDING_PATH)
 try:
     yu.upload_short(intro, "", "d", mode="travel")
     check(False, "빈 제목")
 except yu.YouTubeUploadError:
     check(True, "빈 제목 → 업로드 안 함")
+
+# ---------------------------------------------------------------- 5. 첫 댓글 자동 작성 (AI 질문 패키지 + 아동용 아님 확인 + 권한)
+from urllib.parse import unquote
+from core.shorts_meta import COMMENT_QUESTIONS, build_first_comment, naver_map_link
+
+# AI 참여 질문: 규칙을 지키면 사용, 사실 주장·물음표 없음은 버리고 템플릿 질문
+gg.Client = lambda api_key=None: type("C", (), {"models": GemModels()})()
+gem_reply = {"title": "가평에 이런 맥주얼음 맥주가 숨겨져 있었다니?!", "thumb_main": "이게 숨어 있었다고?", "thumb_sub": "맥주얼음 맥주",
+             "accent": "🔥", "hashtags": ["#가평맛집", "#맥주집", "#먹태"], "comment_question": "여기 가면 먹태 vs 반건오징어, 뭐부터? 👇"}
+cp_q = make_shorts_copy("owner", hook="h", usp="맥주얼음 맥주, 바삭한 먹태", product_name="설맥 가평현리점", api_key="fake", seed=1)
+gem_reply = dict(gem_reply, comment_question="가평 1위 맥주집, 오늘 품절 전에 가세요")
+cp_qbad = make_shorts_copy("owner", hook="h", usp="맥주얼음 맥주", product_name="설맥 가평현리점", api_key="fake", seed=1)
+gg.Client = _orig_client
+check(cp_q["comment_question"] == "여기 가면 먹태 vs 반건오징어, 뭐부터? 👇", "AI 참여 유도 질문을 첫 댓글 질문으로 사용")
+check(cp_qbad["comment_question"] in [q.format(kw=sm.pick_keyword("owner", "맥주얼음 맥주", "설맥 가평현리점")) for q in COMMENT_QUESTIONS["owner"]]
+      and any(r.startswith("comment_question") for r in cp_qbad["rejected"]),
+      f"근거 없는 '1위·품절' 질문은 버리고 템플릿 질문 {cp_qbad['comment_question']}")
+
+do2 = default_texts("owner", cp_q, "", "", "", "설맥 가평현리점", "설맥 가평현리점")
+blocks = do2["comment"].split("\n\n")
+check(blocks[0] == cp_q["comment_question"] and "네이버에서 '설맥 가평현리점' 검색" in blocks[1]
+      and "🗺️ 네이버 지도: https://map.naver.com/p/search/" in blocks[1]
+      and unquote(naver_map_link("설맥 가평현리점").rsplit("/", 1)[1]) == "설맥 가평현리점"
+      and blocks[2] == " ".join(cp_q["hashtags"][:3]) and len(blocks) == 3,
+      "사장님 첫 댓글 = 참여 질문 → 네이버 검색 안내 + 지도 링크 → 핵심 해시태그 3개")
+ct = build_first_comment("travel", "누구랑 가고 싶어요? 👇", ["#a", "#b"], link="https://www.agoda.com/x?cid=1", disclosure_full="수수료 고지")
+check(ct.startswith("누구랑") and "cid=1" in ct and "수수료 고지" in ct and ct.endswith("#a #b"),
+      "숙소·쇼핑 첫 댓글 = 참여 질문 → 제휴 링크 + 고지 전문 → 해시태그")
+
+# 업로드: selfDeclaredMadeForKids=False 전송 → videos.list로 아동용 아님 확인 → 채널 계정으로 첫 댓글 (비공개 업로드)
+calls.clear()
+yu._service_factory = factory(channel="샵스토리")
+res3 = yu.upload_short(intro, "가평 맥주집", "d", mode="owner", comment=do2["comment"], privacy="unlisted", sleep=lambda s: None)
+order = [c[0] for c in calls]
+ins3 = [c for c in calls if c[0] == "insert"][0][1]
+cm3 = [c for c in calls if c[0] == "comment"][0][1]
+check(ins3["body"]["status"] == {"privacyStatus": "unlisted", "selfDeclaredMadeForKids": False}
+      and order.index("insert") < order.index("vlist") < order.index("comment"),
+      f"madeForKids=false 지정 업로드 → 업로드 후 시청자층 확인 → 첫 댓글 순서 {order}")
+check(res3["comment_ok"] and res3["made_for_kids"] is False and cm3["body"]["snippet"]["videoId"] == "VID123"
+      and cm3["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"] == do2["comment"]
+      and res3["comment_url"] == "https://www.youtube.com/watch?v=VID123&lc=C1" and not res3["warnings"],
+      "반환된 video_id로 commentThreads.insert → 댓글 ID·바로가기")
+
+calls.clear()
+yu._service_factory = factory(channel="샵스토리", kids=True)
+res4 = yu.upload_short(intro, "t", "d", mode="owner", comment="질문", privacy="unlisted", sleep=lambda s: None)
+check(not res4["comment_ok"] and res4["made_for_kids"] is True and not [c for c in calls if c[0] == "comment"]
+      and any("아동용" in w for w in res4["warnings"]), "유튜브가 아동용으로 판정하면 댓글 막힘 → 시도 안 하고 시청자층 변경 안내")
+
+
+def http_err_reason(code, reason):
+    return HttpError(httplib2.Response({"status": code}),
+                     json.dumps({"error": {"errors": [{"reason": reason}]}}).encode())
+
+
+waits = []
+calls.clear()
+yu._service_factory = factory(channel="샵스토리", comment_errs=[http_err_reason(404, "videoNotFound")])
+res5 = yu.upload_short(intro, "t", "d", mode="owner", comment="질문", privacy="unlisted", sleep=waits.append)
+check(res5["comment_ok"] and len([c for c in calls if c[0] == "comment"]) == 2 and waits == [yu.COMMENT_RETRY_WAIT],
+      "업로드 직후 영상이 아직 안 잡혀 404 → 3초 뒤 한 번 더 → 등록")
+yu._service_factory = factory(channel="샵스토리", comment_errs=[http_err_reason(403, "commentsDisabled")])
+res6 = yu.upload_short(intro, "t", "d", mode="owner", comment="질문", privacy="unlisted", sleep=waits.append)
+yu._service_factory = factory(channel="샵스토리", comment_errs=[http_err_reason(403, "insufficientPermissions")])
+res7 = yu.upload_short(intro, "t", "d", mode="owner", comment="질문", privacy="unlisted", sleep=waits.append)
+check(not res6["comment_ok"] and "commentsDisabled" in res6["warnings"][0] and "댓글이 꺼져" in res6["warnings"][0]
+      and "--mode store" in res7["warnings"][0] and "force-ssl" in res7["warnings"][0] and len(waits) == 1,
+      "댓글 실패 원인별 안내 (댓글 꺼짐 / 권한 없음 → 재연결 명령), 재시도 없음")
+
+os.makedirs(yu.SECRETS_DIR, exist_ok=True)
+with open(yu.token_path("store"), "w", encoding="utf-8") as f:
+    json.dump({"scopes": [yu.UPLOAD_SCOPE]}, f)
+calls.clear()
+res8 = yu.upload_short(intro, "t", "d", mode="owner", comment="질문", privacy="unlisted", sleep=waits.append)
+check(not yu.has_comment_scope("owner") and res8["video_id"] == "VID123" and not [c for c in calls if c[0] == "comment"]
+      and "force-ssl" in res8["warnings"][0], "토큰에 댓글 권한이 없으면 업로드만 하고 재연결 안내 (댓글 호출 안 함)")
+with open(yu.token_path("store"), "w", encoding="utf-8") as f:
+    json.dump({"scopes": yu.SCOPES}, f)
+check(yu.has_comment_scope("owner") and yu.COMMENT_SCOPE == "https://www.googleapis.com/auth/youtube.force-ssl"
+      and yu.COMMENT_SCOPE in yu.SCOPES, "OAuth 권한에 youtube.force-ssl 포함 (첫 댓글)")
+os.remove(yu.token_path("store"))
+
+# 비공개 업로드: 유튜브가 비공개 영상 댓글을 거절(실측 403 forbidden) → 대기열 → 공개·일부 공개 전환 후 등록
+calls.clear()
+yu._service_factory = factory(channel="샵스토리")
+res9 = yu.upload_short(intro, "가평 맥주집", "d", mode="owner", comment=do2["comment"], privacy="private", sleep=lambda s: None)
+pend = yu.pending_comment("VID123")
+check(res9["comment_pending"] and not res9["comment_ok"] and not [c for c in calls if c[0] == "comment"] and not res9["warnings"]
+      and pend and pend["text"] == do2["comment"] and pend["channel_key"] == "store",
+      "비공개 업로드 → 댓글 API를 부르지 않고 대기열에 저장 (채널·문구 보존)")
+yu._service_factory = factory(channel="샵스토리", list_privacy="private")
+r_wait = yu.post_pending_comments()
+check([r["state"] for r in r_wait] == ["waiting"] and yu.pending_comment("VID123"), "아직 비공개면 대기 유지")
+calls.clear()
+yu._service_factory = factory(channel="샵스토리", list_privacy="unlisted")
+r_post = yu.post_pending_comments(sleep=lambda s: None)
+cm9 = [c for c in calls if c[0] == "comment"][0][1]
+check(r_post[0]["state"] == "posted" and r_post[0]["comment_url"].endswith("lc=C1") and not yu.pending_comment("VID123")
+      and cm9["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"] == do2["comment"],
+      "일부 공개·공개로 바뀌면 첫 댓글 등록 + 대기열에서 제거")
+yu.queue_pending_comment("owner", "GONE1", "x")
+yu._service_factory = factory(channel="샵스토리", gone=True)
+check([r["state"] for r in yu.post_pending_comments()] == ["gone"] and not yu.pending_comment("GONE1"), "삭제된 영상은 대기열에서 버림")
 
 # 인증: 고른 채널이 기대 채널과 다르면 토큰을 저장하지 않음 (브라우저 OAuth는 가짜)
 import google_auth_oauthlib.flow as gflow
@@ -311,7 +427,7 @@ check(rc_ok == 0 and rc_bad == 1, "auth 스크립트 --mode: 일치하면 0, 다
 gflow.InstalledAppFlow = _orig_flow
 os.environ.pop("YOUTUBE_CLIENT_SECRETS", None)
 yu._service_factory = None
-yu.SECRETS_DIR = _secrets
+yu.SECRETS_DIR, yu.PENDING_PATH = _secrets, _pending
 for k, v in _saved_env.items():
     if v is None:
         os.environ.pop(k, None)

@@ -142,17 +142,21 @@ try:
         def commentThreads(self): return type("X", (), {"insert": lambda s, **k: (sent.update(comment=k), _R({"id": "C"}))[1]})()
 
     yu._service_factory = lambda key: (sent.update(key=key), _Svc())[1]
+    _pending = yu.PENDING_PATH
+    yu.PENDING_PATH = os.path.join(yu.SECRETS_DIR, "pending_comments.json")
     at.run()
     [b for b in at.button if "유튜브 쇼츠 업로드" in b.label][0].click().run()
-    yu._service_factory, yu.SECRETS_DIR = None, _secrets
+    queued = yu.pending_comment("V9") or {}
+    yu._service_factory, yu.SECRETS_DIR, yu.PENDING_PATH = None, _secrets, _pending
     os.environ.pop("YOUTUBE_CHANNEL_TRAVEL", None)
     body = sent.get("insert", {}).get("body", {})
     check(not at.exception and any("V9" in (s.value or "") for s in at.success) and sent.get("key") == "travel"
           and "첫 번째 댓글" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
           and body["snippet"]["title"].endswith("#Shorts")
           and body["status"]["privacyStatus"] == "private" and "thumb" in sent
-          and "cid=1234567" in sent["comment"]["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"],
-          "원클릭 업로드: 설명란(제목·제휴 고지·첫 댓글 안내)·썸네일·첫 댓글(아고다 링크), 기본 비공개, 핀 고정 안내")
+          and "comment" not in sent and "cid=1234567" in queued.get("text", "")
+          and any("첫 댓글 대기 중" in (i.value or "") for i in at.info),
+          "원클릭 업로드: 설명란(제목·제휴 고지·첫 댓글 안내)·썸네일, 기본 비공개 → 첫 댓글(아고다 링크)은 공개 전환 대기열 + 안내")
 finally:
     for wd in set(created):
         shutil.rmtree(wd, ignore_errors=True)

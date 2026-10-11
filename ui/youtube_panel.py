@@ -4,7 +4,8 @@ ui/youtube_panel.py - 렌더 완료 화면: 썸네일 + 유튜브 쇼츠 원클�
 제목·설명·댓글은 모드별로 미리 채워 두고 고칠 수 있게 함:
 - 숙소 제휴(아고다·트립닷컴): 설명·첫 댓글에 제휴 링크 + 공정위 추천·보증 고지
 - 쇼핑 제휴(쿠팡): 쿠팡 파트너스 고지 + 링크
-- 사장님: 네이버 검색 안내
+- 사장님: 네이버 검색 안내 + 네이버 지도 링크
+첫 댓글 = AI 참여 유도 질문 + 위 안내/링크 + 핵심 해시태그 (core.shorts_meta.build_first_comment), 업로드 직후 자동 등록
 """
 import hashlib
 import os
@@ -13,7 +14,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from core import youtube_upload as yu
-from core.shorts_meta import build_shorts_description, make_shorts_copy
+from core.shorts_meta import build_first_comment, build_shorts_description, make_shorts_copy
 
 TAGS = {   # 업로드 메타데이터 tags (검색용, 화면에 안 보임)
     "travel": ["숙소추천", "호텔추천", "여행", "국내여행", "여행을떠나자"],
@@ -31,11 +32,9 @@ def default_texts(mode: str, copy: Optional[Dict[str, Any]], link: str, disclosu
     copy = copy or make_shorts_copy(mode, hook=hook, product_name=business_name, mock=True)
     title = copy["title"]
     desc = build_shorts_description(mode, title, copy["hashtags"], disclosure_short)
-    if mode == "owner":
-        comment = f"📍 네이버에서 '{search_kw}' 검색해 보세요!" if search_kw else ""
-    else:
-        comment = (f"🔗 {'숙소 상세 정보·예약' if mode == 'travel' else '제품 상세 정보·구매'} 링크: {link}\n{disclosure_full}".strip()
-                   if link else "")
+    comment = build_first_comment(mode, copy.get("comment_question", ""), copy.get("hashtags"),
+                                  search_keyword=search_kw or (business_name if mode == "owner" else ""),
+                                  link=link, disclosure_full=disclosure_full)
     return {"title": title[:yu.TITLE_MAX], "desc": desc, "comment": comment}
 
 
@@ -83,7 +82,10 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
     d = default_texts(mode, copy, link, disclosure, disclosure_short, business_name, search_kw, hook)
     title = st.text_input("제목 (#Shorts 자동 추가)", value=d["title"], max_chars=yu.TITLE_MAX, key=f"yt_title_{tag}")
     desc = st.text_area("설명란", value=d["desc"], height=170, key=f"yt_desc_{tag}")
-    comment = st.text_area("첫 댓글 (업로드 직후 자동 등록)", value=d["comment"], height=90, key=f"yt_comment_{tag}")
+    comment = st.text_area("첫 댓글 (업로드 직후 채널 계정으로 자동 등록 · 참여 질문 + 안내·링크 + 해시태그)", value=d["comment"],
+                           height=170, key=f"yt_comment_{tag}")
+    if comment.strip() and not yu.has_comment_scope(key):
+        st.warning(f"이 채널 연결에는 댓글 권한이 없어요 → PC에서 `{yu.auth_command(key)}`로 다시 연결해야 첫 댓글이 자동 등록돼요.")
     privacy = st.radio("공개 범위", list(yu.PRIVACY_KO), index=2, format_func=yu.PRIVACY_KO.get, horizontal=True,
                        key=f"yt_privacy_{tag}", help="처음에는 비공개로 올려 확인한 뒤 스튜디오에서 공개로 바꾸는 것을 권장해요.")
     if mode in ("travel", "commerce") and link and link not in comment:
@@ -110,8 +112,22 @@ def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, 
     res: Optional[Dict[str, Any]] = st.session_state.get(f"yt_result_{tag}")
     if res:
         st.success(f"✅ '{res['channel']}' 채널에 업로드됨 ({yu.PRIVACY_KO.get(res['privacy'], res['privacy'])}): {res['url']}")
-        st.markdown(f"- 썸네일: {'등록됨' if res['thumbnail_ok'] else '미등록'} · 첫 댓글: {'등록됨' if res['comment_ok'] else '없음'}\n"
+        kids = res.get("made_for_kids")
+        st.markdown(f"- 썸네일: {'등록됨' if res['thumbnail_ok'] else '미등록'} · 첫 댓글: "
+                    f"{'[등록됨](' + res['comment_url'] + ')' if res['comment_ok'] and res.get('comment_url') else '등록됨' if res['comment_ok'] else '⏳ 공개 전환 대기' if res.get('comment_pending') else '없음'}"
+                    f" · 시청자층: {'아동용 아님 (댓글 열림)' if kids is False else '⚠️ 아동용 (댓글 막힘)' if kids else '확인 못 함'}\n"
                     f"- 📌 **댓글 고정은 API로 할 수 없어요** → [스튜디오 댓글]({res['comments_url']})에서 내 댓글 ⋮ → '고정' 한 번\n"
                     f"- [스튜디오에서 열기]({res['studio_url']})")
         for w in res["warnings"]:
             st.warning(w)
+        if res.get("comment_pending") and yu.pending_comment(res["video_id"]):
+            st.info("⏳ **첫 댓글 대기 중** - 유튜브는 비공개 영상에 댓글을 받지 않아요. 스튜디오에서 공개(또는 일부 공개)로 바꾼 뒤 "
+                    "아래 버튼을 누르면 바로 등록돼요 (매일 아침 레이더 작업에서도 자동 확인).")
+            if st.button("💬 공개로 바꿨어요 → 첫 댓글 등록", key=f"yt_pending_{tag}", use_container_width=True):
+                r = (yu.post_pending_comments(only_video=res["video_id"]) or [{"state": "gone"}])[0]
+                if r["state"] == "posted":
+                    st.success(f"첫 댓글 등록 완료: {r['comment_url']}")
+                elif r["state"] == "waiting":
+                    st.warning("아직 비공개예요. 스튜디오에서 공개 범위를 바꾼 뒤 다시 눌러 주세요.")
+                else:
+                    st.warning(r.get("warning") or "영상을 찾을 수 없어 대기열에서 뺐어요.")
