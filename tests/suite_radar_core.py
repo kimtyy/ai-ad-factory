@@ -284,8 +284,8 @@ tmpdb = os.path.join(tempfile.mkdtemp(), "cli.db")
 code = radar_main(["--vertical", "all", "--dry-run", "--db", tmpdb, "--top", "3"])
 c2 = store.connect(tmpdb)
 runs = c2.execute("SELECT vertical, mode, quota_used, outliers FROM runs ORDER BY run_id").fetchall()
-check(code == 0 and [r["vertical"] for r in runs] == ["stay", "food", "viral"] and all(r["mode"] == "dry-run" for r in runs),
-      f"CLI --vertical all --dry-run: 종료코드 0, 실행 3건 기록 {[dict(r) for r in runs]}")
+check(code == 0 and [r["vertical"] for r in runs] == ["stay", "food", "viral", "book"] and all(r["mode"] == "dry-run" for r in runs),
+      f"CLI --vertical all --dry-run: 종료코드 0, 실행 4건 기록 (도서 포함) {[dict(r) for r in runs]}")
 vrows = store.recent_outliers(c2, "viral", 30, 0.0, 100)
 vhooks = c2.execute("SELECT pattern_template FROM hooks WHERE vertical='viral'").fetchall()
 check(vrows and min(r["outlier_ratio"] for r in vrows) >= 15 and vhooks
@@ -306,4 +306,25 @@ if not live_skip("Gemini: 공개 YouTube URL 0~3초 구간 분석"):
         check(h["relevant"] is False, f"Gemini 적합성 판정: 동물원 영상은 숙소 콘텐츠 아님 → relevant=False ({h['content_type']})")
     except Exception as e:
         check(False, f"Gemini 실호출 실패: {e}")
+
+# 도서/책방 레이더 + 전체 구조·호흡 분석 (나레이션 원문은 통계로만 쓰고 저장 안 함)
+from core.radar.keywords import VERTICAL_KEYWORDS, VERTICAL_LABELS  # noqa: E402
+from core.radar.scoring import filters_for  # noqa: E402
+from core.radar.structure import narration_stats, normalize  # noqa: E402
+check(VERTICAL_KEYWORDS["book"] == ["도서 추천", "인생 책", "시골책방", "책 속 문장"] and "도서" in VERTICAL_LABELS["book"]
+      and "24" not in filters_for("book").excluded_categories and "23" in filters_for("book").excluded_categories,
+      "도서 업종 키워드 4개 + 책 추천이 많은 엔터테인먼트(24) 카테고리는 허용")
+st = narration_stats("이런 날 있죠?\n책 한 권이면 충분해요.\n오늘은 이 책입니다.", 10.0)
+check(st["sentences"] == 3 and st["question_ratio"] == 0.33 and st["formal_ratio"] == 0.33 and st["chars_per_sec"] > 2,
+      f"말 속도·문장 수·어미 분포 통계 {st}")
+nz = normalize({"relevant": True, "duration_sec": 40, "narration": "원문 대사입니다. 두 번째 문장이에요.",
+                "segments": [{"start": 0, "end": 3, "role": "hook", "summary": "고민 제시"}, {"start": 3, "end": 35, "role": "zzz"}],
+                "quote": {"present": True, "read_aloud": True, "shown_as_text_card": True, "seconds": 20}}, source="t")
+check("narration" not in nz and "원문 대사" not in str(nz) and nz["segments"][1]["role"] == "other" and nz["quote"]["card"]
+      and nz["sentences"] == 2, "구조 정규화: 나레이션 원문은 저장 안 함, 모르는 구간 역할은 기타")
+db2 = os.path.join(tmp(), "s.db")
+conn2 = store.connect(db2)
+store.save_structure(conn2, "VID1", "book", nz)
+check(store.has_structure(conn2, "VID1", "book") and not store.has_structure(conn2, "VID1", "stay"), "구조 분석 저장 (업종별)")
+conn2.close()
 finish(fails)

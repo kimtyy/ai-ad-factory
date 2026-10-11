@@ -25,7 +25,9 @@ CLIP_CATEGORIES = ("1", "10", "20", "23", "24")
 
 # 업종별 필터 기본값. viral은 원본 소재를 지우고 구조만 쓰므로 클립성 카테고리도 허용하되
 # 음악(10)은 노래·안무로 터져 추상화할 훅이 없어 제외. 배수는 15배 이상만 (사용자가 더 낮게 줘도 하한 유지)
-VERTICAL_FILTER_DEFAULTS = {"viral": {"min_ratio": 15.0, "excluded_categories": ("10",)}}
+# 도서: 책 추천 숏폼이 '엔터테인먼트(24)'로 분류되는 경우가 많아 24는 허용 (방송·애니 클립은 Gemini 적합성 판정이 거름)
+VERTICAL_FILTER_DEFAULTS = {"viral": {"min_ratio": 15.0, "excluded_categories": ("10",)},
+                            "book": {"excluded_categories": ("1", "10", "20", "23")}}
 
 
 def min_ratio_for(vertical: str, requested: float) -> float:

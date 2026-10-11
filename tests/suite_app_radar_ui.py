@@ -79,7 +79,7 @@ try:
     at.selectbox(key="radar_vertical").select("all").run()
     check("Viral은 최소 배수 15배" in all_text(at), "전체 실행 시 Viral 15배 하한 안내")
     [b for b in at.button if "레이더 실행" in b.label][0].click().run()
-    check(not at.exception and sum("[DRY-RUN]" in s.value for s in at.success) == 3, "전체 실행 → stay·food·viral 3개 결과")
+    check(not at.exception and sum("[DRY-RUN]" in s.value for s in at.success) == 4, "전체 실행 → stay·food·viral·book 4개 결과")
     at.segmented_control(key="radar_view_vertical").set_value("viral").run()
     txt = all_text(at)
     check(not at.exception and "전체 떡상 랭킹 Top" in txt and "🥇" in txt and "🥈" in txt and "🦴" in txt and "#4" in txt,

@@ -11,9 +11,12 @@ VERTICAL_KEYWORDS: Dict[str, List[str]] = {
     # 업종 무관 바이럴 트리거 키워드: 알고리즘을 터뜨린 구조만 범용 스켈레톤으로 추출 (mostPopular 차트는
     # 사전 측정 결과 Shorts 5.5%·비음악 Shorts 최고 1.6배라 제외)
     "viral": ["꿀팁", "비밀", "이유", "방법", "절대"],
+    # 시골책방(도서 큐레이션): 책 추천·책 속 문장 낭독·책방 숏폼
+    "book": ["도서 추천", "인생 책", "시골책방", "책 속 문장"],
 }
 
-VERTICAL_LABELS: Dict[str, str] = {"stay": "🏨 숙소/여행", "food": "🍽 맛집/카페", "viral": "🔥 전체 떡상 랭킹 (Viral)"}
+VERTICAL_LABELS: Dict[str, str] = {"stay": "🏨 숙소/여행", "food": "🍽 맛집/카페", "viral": "🔥 전체 떡상 랭킹 (Viral)",
+                                   "book": "📚 도서/책방"}
 
 # 영상 기획(씬 1 힌트)에 직접 연결되는 업종. viral은 이 업종들의 패턴이 부족할 때 보조 힌트로만 쓰임
 PLANNER_VERTICALS = ("stay", "food")

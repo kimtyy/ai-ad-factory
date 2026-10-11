@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
   subscribers INTEGER, outlier_ratio REAL, velocity_per_day REAL, passed INTEGER, reject_reason TEXT, keyword TEXT,
   PRIMARY KEY (video_id, run_id));
 """ + HOOKS_DDL + """;
+CREATE TABLE IF NOT EXISTS structures (
+  video_id TEXT, vertical TEXT, analyzed_at TEXT, source TEXT, relevant INTEGER, data TEXT,
+  PRIMARY KEY (video_id, vertical));
 CREATE INDEX IF NOT EXISTS idx_snap_ratio ON snapshots(outlier_ratio);
 CREATE INDEX IF NOT EXISTS idx_videos_vertical ON videos(vertical);
 CREATE INDEX IF NOT EXISTS idx_runs_vertical ON runs(vertical);
@@ -194,6 +197,40 @@ def recent_outliers(conn, vertical: Optional[str] = None, days: int = 14, min_ra
     q += " ORDER BY s.outlier_ratio DESC, s.velocity_per_day DESC LIMIT ?"
     args.append(limit)
     return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+
+def has_structure(conn, video_id: str, vertical: str) -> bool:
+    return conn.execute("SELECT 1 FROM structures WHERE video_id=? AND vertical=?", (video_id, vertical)).fetchone() is not None
+
+
+def save_structure(conn, video_id: str, vertical: str, data: Dict[str, Any]):
+    """전체 구조·호흡 분석 결과 (core/radar/structure.py, 나레이션 원문 없이 통계·구간만)"""
+    import json
+    conn.execute("INSERT OR REPLACE INTO structures VALUES (?,?,?,?,?,?)",
+                 (video_id, vertical, _now(), data.get("source", ""), 1 if data.get("relevant") else 0,
+                  json.dumps(data, ensure_ascii=False)))
+    conn.commit()
+
+
+def structures_for(conn, vertical: str, relevant_only: bool = True) -> List[Dict[str, Any]]:
+    """구조 분석 + 영상 메타 + 최신 스냅샷(배수·조회수) + 후킹 → 리포트용"""
+    import json
+    rows = conn.execute(
+        """SELECT s.video_id, s.data, v.title, v.duration_sec, v.url, v.published_at, v.keyword, c.title,
+                  (SELECT outlier_ratio FROM snapshots sn WHERE sn.video_id=s.video_id ORDER BY run_id DESC LIMIT 1),
+                  (SELECT views FROM snapshots sn WHERE sn.video_id=s.video_id ORDER BY run_id DESC LIMIT 1),
+                  h.hook_type, h.pattern_template, h.spoken_line, h.on_screen_text, h.why_it_works
+           FROM structures s JOIN videos v ON v.video_id=s.video_id LEFT JOIN channels c ON c.channel_id=v.channel_id
+           LEFT JOIN hooks h ON h.video_id=s.video_id AND h.vertical=s.vertical
+           WHERE s.vertical=?""" + (" AND s.relevant=1" if relevant_only else ""), (vertical,)).fetchall()
+    out = []
+    for r in rows:
+        d = json.loads(r[1])
+        d.update({"video_id": r[0], "title": r[2], "meta_duration": r[3], "url": r[4], "published_at": r[5], "keyword": r[6],
+                  "channel": r[7], "outlier_ratio": r[8], "views": r[9], "hook_type": r[10], "hook_template": r[11],
+                  "hook_spoken": r[12], "hook_text": r[13], "hook_why": r[14]})
+        out.append(d)
+    return sorted(out, key=lambda d: -(d.get("outlier_ratio") or 0))
 
 
 def hook_type_summary(conn, vertical: Optional[str] = None) -> List[Dict[str, Any]]:

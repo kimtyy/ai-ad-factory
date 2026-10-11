@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-subs", type=int, default=300)
     p.add_argument("--min-views", type=int, default=30_000)
     p.add_argument("--hooks", type=int, default=5, help="후킹 구조를 추출할 상위 영상 수 (Gemini 호출 수)")
+    p.add_argument("--structure", type=int, default=0,
+                   help="후킹이 업종에 맞는 상위 영상 중 전체 구조·호흡까지 분석할 수 (Gemini 영상 전체 호출, 기본 0)")
     p.add_argument("--budget", type=int, default=3000, help="이번 실행의 YouTube 쿼터 예산 (units)")
     p.add_argument("--dry-run", action="store_true", help="API 호출 없이 가짜 데이터로 전체 흐름 검증")
     p.add_argument("--db", type=str, default=None, help="SQLite 경로 (기본: outputs/radar/radar.db, dry-run은 radar_dryrun.db)")
@@ -48,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pages: int = 1, min_ratio: float = 5.0,
             min_subs: int = 300, min_views: int = 30_000, hooks: int = 5, budget: int = 3000,
-            dry_run: bool = False, db_path=None):
+            dry_run: bool = False, db_path=None, structure: int = 0):
     """
     레이더 1회 실행 (CLI·Streamlit 공용). 반환: {"mode", "db_path", "notice", "verticals": [요약...]}
     YOUTUBE_API_KEY가 없으면 자동으로 dry-run(가짜 데이터, 별도 DB)으로 전환합니다.
@@ -92,6 +94,23 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
                         hooked += 1
                     else:
                         irrelevant += 1
+            # 전체 구조·호흡 분석: 후킹 판정에서 업종에 맞다고 나온 상위 영상만 (부적합 클립에 Gemini 호출 낭비 안 함)
+            structured = 0
+            if structure:
+                from core.radar.structure import try_extract_structure
+                for rec in top:
+                    if structured >= structure:
+                        break
+                    if store.has_structure(conn, rec.video_id, v):
+                        structured += 1
+                        continue
+                    hk = conn.execute("SELECT relevant FROM hooks WHERE video_id=? AND vertical=?", (rec.video_id, v)).fetchone()
+                    if not hk or not hk[0]:
+                        continue
+                    st = try_extract_structure(rec.video_id, gemini_key, v, rec.duration_sec, dry_run)
+                    if st:
+                        store.save_structure(conn, rec.video_id, v, st)
+                        structured += 1 if st.get("relevant") else 0
             used = client.used_units - units_before
             rejects = {}
             for r in records:
@@ -104,6 +123,7 @@ def execute(vertical: str = "stay", days: int = DEFAULT_DAYS, keywords=None, pag
                 "vertical": v, "min_ratio": filters.min_ratio, "keywords": kws, "searched_keywords": stats["searched_keywords"],
                 "search_calls": stats["search_calls"], "candidates": len(records), "outliers": len(top),
                 "quota_used": used, "hooks_extracted": hooked, "hooks_irrelevant": irrelevant, "rejects": rejects,
+                "structures": structured,
                 "budget_stopped": bool(stats.get("budget_stopped")), "seconds": round(time.time() - t0, 1),
             })
     finally:
@@ -118,7 +138,7 @@ def _irrelevant_label(vertical: str) -> str:
 def run(args) -> int:
     res = execute(vertical=args.vertical, days=args.days, keywords=args.keywords, pages=args.pages,
                   min_ratio=args.min_ratio, min_subs=args.min_subs, min_views=args.min_views, hooks=args.hooks,
-                  budget=args.budget, dry_run=args.dry_run, db_path=args.db)
+                  budget=args.budget, dry_run=args.dry_run, db_path=args.db, structure=args.structure)
     if res["notice"]:
         print(f"⚠️  {res['notice']} 실 수집은 키 설정 후 다시 실행하세요.")
     print(f"📡 쇼츠 레이더 [{res['mode'].upper()}] 최근 {args.days}일 · 배수 ≥ {args.min_ratio}x · "

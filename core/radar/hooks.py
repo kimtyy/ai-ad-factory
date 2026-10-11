@@ -31,6 +31,8 @@ RELEVANCE_CRITERIA = {
             "showing the actual place. Pet-friendly stays (e.g. a dog-friendly pension or pool villa) ARE relevant when the "
             "video clearly reviews or tours the accommodation space itself, even if a pet appears",
     "food": "a real restaurant/cafe/food content: actual food or venue review, mukbang at a real place, or cafe/restaurant vlog",
+    "book": "a real book or bookstore content: book recommendation or review, reading a passage/quote from a book, "
+            "bookstore visit or tour, or a reading vlog showing actual books",
 }
 
 HOOK_PROMPT = """
