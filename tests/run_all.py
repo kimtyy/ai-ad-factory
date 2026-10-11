@@ -31,6 +31,7 @@ SUITES = [
     ("suite_render_visuals.py", "중앙 자막·씬 1 후킹 시간차·TTS 무음 제거·잘림 재시도 + Ken Burns", False),
     ("suite_radar_core.py", "쇼츠 레이더 수집·점수·쿼터·저장·CLI", False),
     ("suite_radar_hints.py", "레이더 후킹 패턴 → 씬 1 힌트 주입", False),
+    ("suite_radar_meta.py", "떡상 레이더 → 업로드 메타데이터 자동 주입 (트렌드 다이제스트·필수 맥락·레이더 태그·표시) + 첫 0.5초 커버", False),
     ("suite_bgm.py", "자체 음원 BGM: 나레이션 32% 덕킹·드롭 구간 시작·페이드·반복·음량 보정·영상 무손실·실패 처리·스위치·완료 표시", False),
     ("suite_youtube_upload.py", "썸네일 자동 생성(영상 첫 0.3초) + 유튜브 쇼츠 업로드(썸네일·첫 댓글·채널 확인)", False),
     ("suite_app_owner_hybrid.py", "사장님 하이브리드: 영상 소스 관리·네이버 지역 검색 API·사진 기반 매장 특징·기획 연동", False),

@@ -55,6 +55,7 @@ from ui.copy_button import copy_button
 from ui.youtube_panel import render_youtube_panel
 from core.render import bgm as bgm_mod
 from core.shorts_meta import make_shorts_copy
+from core.radar.trends import digest_for
 from core.planners import (BUSINESS_TYPES, COUPANG_DISCLOSURE, COUPANG_DISCLOSURE_FULL, DEFAULT_BUSINESS_TYPE,
                            analyze_product_photo, plan_commerce_storyboard, plan_owner_storyboard, suggest_store_points)
 from core.render.commerce_layout import SHOT_LABELS, assign_shots
@@ -1296,8 +1297,13 @@ if render_btn:
                     first_frame = _v1.get_frame(0)
                 hook_text = (scenes[0].get("hook_title") or "").strip() if scenes else ""
                 # 업로드 제목·썸네일 카피 (손실 회피·호기심형, 근거 없는 사실 주장은 USP에 있을 때만)
-                shorts_copy = make_shorts_copy(pipeline_mode, hook=hook_text, usp=usp_desc, product_name=product_name,
-                                               api_key=api_key, mock=mock_mode)
+                # 떡상 레이더 다이제스트(주기 수집 → DB 캐시)를 업로드 카피 생성의 필수 맥락으로 자동 주입
+                radar_trend = digest_for(pipeline_mode, business_type)
+                _usp_items = [s.strip() for s in re.split(r"[,/·\n]", usp_desc or "") if s.strip()]
+                shorts_copy = make_shorts_copy(
+                    pipeline_mode, hook=hook_text, usp=usp_desc, product_name=product_name, api_key=api_key, mock=mock_mode,
+                    trend=radar_trend, signature=_usp_items[0] if _usp_items else "",
+                    region=region_of(st.session_state.get("owner_address", "")) if is_owner_mode else "")
                 st.session_state.shorts_copy = shorts_copy
                 thumb_path = compositor.render_thumbnail(first_frame, shorts_copy["thumb_main"],
                                                          os.path.join(current_job().final_dir, "final_thumb.png"),

@@ -346,7 +346,8 @@ _prog = []
 _t = _time.time()
 _paths = _pg.generate_voices(_scs, force=True, on_done=lambda d, n: _prog.append((d, n)))
 _el = _time.time() - _t
-check(_peak[0] == _agm.TTS_WORKERS and _el < 7 * 0.4 * 0.6,
+# 동시 실행의 증거는 최대 동시 수. 시간은 ffmpeg 후처리(무음 제거·후킹 결합)가 PC 부하에 따라 늘어 여유 있게 '순차보다 빠름'만 확인
+check(_peak[0] == _agm.TTS_WORKERS and _el < 7 * 0.4,
       f"씬 음성 동시 생성: 최대 {_peak[0]}개 동시 (설정 {_agm.TTS_WORKERS}), 7씬 {_el:.1f}초 (순차면 3초 이상)")
 check([os.path.basename(p) for p in _paths] == [f"scene_{i:02d}.mp3" for i in range(1, 8)] and all(os.path.exists(p) for p in _paths)
       and _scs[0].get("hook_sec") and not any(s.get("hook_sec") for s in _scs[1:]) and _prog[-1] == (7, 7),

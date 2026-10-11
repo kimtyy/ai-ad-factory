@@ -122,16 +122,80 @@ def _template_copy(mode: str, usp: str, product_name: str, hook: str, seed: Opti
             "accent": accent, "source": "template"}
 
 
+RADAR_PATTERNS_IN_PROMPT = 6
+RADAR_TAGS_IN_PROMPT = 15
+RADAR_TAGS_MIN = 2              # 업로드 해시태그 중 레이더 태그 풀에서 최소 몇 개
+
+
+def trend_tag_pool(trend: Optional[Dict[str, Any]]) -> List[str]:
+    """레이더 해시태그 풀. 업종 무관(viral) 데이터의 태그는 드라마·연예인 등 다른 분야 주제라 쓰지 않음 (제목 구조만 참고)"""
+    if not trend or trend.get("vertical") == "viral":
+        return []
+    return [t["tag"] for t in trend.get("hashtag_pool") or []]
+
+
+def radar_block(trend: Optional[Dict[str, Any]]) -> str:
+    """레이더 다이제스트 → 카피 프롬프트의 필수 맥락 블록 (패턴은 구조만, 원문 제목 없음)"""
+    if not trend:
+        return ""
+    pats = (trend.get("title_patterns") or [])[:RADAR_PATTERNS_IN_PROMPT]
+    hooks = (trend.get("first3s_hooks") or [])[:3]
+    words = [w["word"] for w in (trend.get("emotion_words") or [])[:10]]
+    tags = trend_tag_pool(trend)[:RADAR_TAGS_IN_PROMPT]
+    lines = [f"[떡상 레이더 최신 데이터 - 필수 반영] {str(trend.get('built_at', ''))[:10]} 기준, 최근 {trend.get('days', 30)}일 "
+             f"떡상 쇼츠 {trend.get('n_outliers', 0)}개(최고 {trend.get('top_ratio', 0)}배) 분석"]
+    for i, pt in enumerate(pats, 1):
+        lines.append(f"  제목 패턴 {i}. \"{pt['template']}\" ({pt.get('ratio', 0)}배) - {pt.get('why', '')}")
+    for h in hooks:
+        lines.append(f"  첫 3초 훅 구조: \"{h['template']}\" ({h.get('ratio', 0)}배)")
+    if words:
+        lines.append("  떡상 제목 감정·호기심 단어: " + ", ".join(words))
+    if tags:
+        lines.append("  떡상 해시태그 풀(배수 가중 순): " + " ".join(tags))
+    if trend.get("vertical") == "viral":
+        lines.append("  (이 업종 데이터가 부족해 업종 무관 떡상 영상의 '문장 구조'만 참고합니다. 소재·주제는 가져오지 마세요)")
+    lines.append("[결합 규칙] title은 '지역·매장 특성 + 시그니처(사실 근거의 대표 메뉴·특징) + 위 제목 패턴 중 하나의 구조'를 "
+                 "새 문장으로 합치세요. 패턴의 {장소}/{특징} 같은 자리에는 이번 가게의 사실만 넣고, 패턴에 없는 사실을 지어내지 마세요. "
+                 "고른 제목 패턴 번호를 pattern_used(정수, 맞는 게 없으면 0)에 적으세요. "
+                 f"hashtags는 해시태그 풀에서 이번 영상에 맞는 것 {RADAR_TAGS_MIN}~4개 + 가게·메뉴·지역 고유 태그 2~3개.")
+    return "\n".join(lines)
+
+
+def _radar_tags(trend: Optional[Dict[str, Any]], mode: str, usp: str, product_name: str, n: int) -> List[str]:
+    """레이더 태그 풀에서 이번 영상과 같은 갈래(USP·업종 키워드와 겹치거나 상위 일반 태그) n개"""
+    if not trend:
+        return []
+    pool = trend_tag_pool(trend)
+    text = f"{usp} {product_name}"
+    related = [t for t in pool if any(w in text for w in re.findall(r"[가-힣A-Za-z]{2,}", t[1:]))]
+    return list(dict.fromkeys(related + pool))[:n]
+
+
+def radar_summary(trend: Optional[Dict[str, Any]], pattern: Optional[Dict[str, Any]], used_tags: List[str]) -> Optional[Dict[str, Any]]:
+    if not trend:
+        return None
+    return {"vertical": trend.get("vertical"), "built_at": trend.get("built_at"), "age_days": trend.get("age_days"),
+            "stale": trend.get("stale"), "fallback_from": trend.get("fallback_from"), "n_outliers": trend.get("n_outliers"),
+            "top_ratio": trend.get("top_ratio"), "pattern": pattern, "tags": used_tags}
+
+
 def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str = "", api_key: Optional[str] = None,
-                     mock: bool = False, seed: Optional[int] = None) -> Dict[str, Any]:
+                     mock: bool = False, seed: Optional[int] = None, trend: Optional[Dict[str, Any]] = None,
+                     region: str = "", signature: str = "") -> Dict[str, Any]:
     """
-    → {title('… #Shorts'), thumb_main, thumb_sub, accent, hashtags[5~7], source('gemini'|'template'), rejected[]}
+    → {title('… #Shorts'), thumb_main, thumb_sub, accent, hashtags[5~7], source('gemini'|'template'), rejected[], radar}
+    trend: 떡상 레이더 다이제스트(core/radar/trends.py) → 프롬프트 필수 맥락 (제목 패턴·감정어·해시태그 풀)
+    region·signature: 지역(예: 경기 가평군)·시그니처(대표 메뉴·특징, 사실). 제목 = 지역/매장 특성 + 시그니처 + 레이더 패턴
     숙소 모드는 상품명(숙소명)을 제목·썸네일에 넣지 않음 (대본에서 숨기는 원칙과 같음: 댓글 링크로 유도)
     """
     mode = mode if mode in TITLE_TEMPLATES else "travel"
+    signature = (signature or pick_keyword(mode, usp, product_name)).strip()
     base = _template_copy(mode, usp, product_name, hook, seed)
-    base["hashtags"] = hashtags_for(mode, usp, product_name)
+    radar_tags = _radar_tags(trend, mode, usp, product_name, RADAR_TAGS_MIN + 1)
+    base["hashtags"] = hashtags_for(mode, usp, product_name, extra=radar_tags)
     base["rejected"] = []
+    chosen = None   # 레이더 제목 패턴은 Gemini가 사실로 새 문장을 쓸 때만 사용 (자리표시자 기계적 치환은 어색한 문장이 됨)
+    base["radar"] = radar_summary(trend, chosen, [t for t in base["hashtags"] if t in radar_tags])
     if mock or not api_key:
         return base
     name_rule = ("숙소 이름은 쓰지 마세요 (궁금증으로 댓글 링크를 누르게)" if mode == "travel"
@@ -140,6 +204,8 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
 유튜브 쇼츠 업로드용 카피를 만드세요. 모드: {dict(travel='숙소 소개', commerce='제품 리뷰', owner='동네 가게 소개')[mode]}
 영상 첫 문장(후킹): {hook or '(없음)'}
 사실 근거(USP, 여기 있는 사실만 쓸 수 있음): {usp or '(없음)'}
+지역: {region or '(없음)'} / 시그니처(대표 메뉴·특징): {signature or '(없음)'}{(' / 가게 이름: ' + product_name) if mode == 'owner' and product_name else ''}
+{radar_block(trend)}
 
 1) title: 손실 회피·극단적 호기심형 한 줄 ({TITLE_BODY_MAX}자 이내, '#Shorts'는 쓰지 마세요). 단순 설명형 금지.
    예: "여길 안 간다고? 국내 끝판왕 풀빌라 ㄷㄷ", "모르면 무조건 손해! 인생 숙소", "이 가격에 이 뷰가 나온다고?"
@@ -149,7 +215,7 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
 5) hashtags: 핵심 키워드 해시태그 5~7개 (#숙소추천 #감성숙소 #풀빌라 처럼, 띄어쓰기 없이)
 규칙: 예약 폭주·품절·완판·마감 임박·1위·최저가·할인율·인원·시간 같은 사실 주장은 USP에 적힌 것만. 없으면 쓰지 마세요.
 '끝판왕', '인생 숙소', 'ㄷㄷ', '미쳤다' 같은 감탄은 괜찮아요. {name_rule}
-JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "accent": "...", "hashtags": ["#...", "..."]}}
+JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "accent": "...", "hashtags": ["#...", "..."], "pattern_used": 0}}
 """
     try:
         from google import genai
@@ -175,13 +241,32 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
             continue
         out[field] = ensure_shorts(val) if field == "title" else val[:limit]
     out["accent"] = _clean_accent(raw.get("accent")) or base["accent"]
+    if out["accent"] in ("?!", "ㄷㄷ") and re.search(r"[?!ㄷ]$", out["thumb_main"]):
+        out["accent"] = "😱" if out["thumb_main"].endswith("?") else "🔥"     # '모른다고??!'처럼 부호가 겹치지 않게
     tags = [t for t in (raw.get("hashtags") or []) if isinstance(t, str) and not find_hype_claim(t, usp)]
+    if mode == "travel" and product_name:
+        tags = [t for t in tags if _norm_tag(product_name) not in _norm_tag(t)]
+    pool = set(trend_tag_pool(trend))
+    from_pool = [("#" + t.lstrip("#")) for t in tags if ("#" + t.lstrip("#")) in pool]
+    if pool and len(from_pool) < RADAR_TAGS_MIN:           # 레이더 태그가 부족하면 풀 상위에서 보충
+        tags = list(dict.fromkeys(tags + [t for t in radar_tags if t not in tags]))[:HASHTAG_MAX]
     out["hashtags"] = hashtags_for(mode, usp, product_name, extra=tags)
+    pats = (trend or {}).get("title_patterns") or []
+    try:
+        k = int(raw.get("pattern_used") or 0)
+    except (TypeError, ValueError):
+        k = 0
+    chosen_g = pats[k - 1] if 1 <= k <= min(len(pats), RADAR_PATTERNS_IN_PROMPT) and "title" not in " ".join(out["rejected"]) else chosen
+    out["radar"] = radar_summary(trend, chosen_g, [t for t in out["hashtags"] if t in pool])
     if out["rejected"]:
         logger.info(f"[쇼츠 카피 검증] 근거 없는 주장·규칙 위반 → 템플릿 유지: {out['rejected']}")
     if all(r.split(":")[0] in ("title", "thumb_main", "thumb_sub") for r in out["rejected"]) and len(out["rejected"]) == 3:
         out["source"] = "template"
     return out
+
+
+def _norm_tag(s: str) -> str:
+    return re.sub(r"[\s#'’]+", "", (s or "").lower())
 
 
 def build_shorts_description(mode: str, title: str, hashtags: List[str], disclosure_short: str = "") -> str:

@@ -42,7 +42,20 @@ def default_texts(mode: str, copy: Optional[Dict[str, Any]], link: str, disclosu
 def render_youtube_panel(video_path: str, thumb_path: Optional[str], mode: str, hook: str, link: str,
                          disclosure: str, business_name: str = "", search_kw: str = "",
                          copy: Optional[Dict[str, Any]] = None, disclosure_short: str = "") -> None:
-    st.markdown("#### 🖼️ 썸네일 (영상 첫 0.3초에도 들어감)")
+    radar = (copy or {}).get("radar")
+    if radar:
+        pt = radar.get("pattern")
+        when = str(radar.get("built_at") or "")[:10]
+        msg = (f"🔥 떡상 레이더 반영 ({when} 기준 · 최근 떡상 {radar.get('n_outliers', 0)}개 분석, 최고 {radar.get('top_ratio', 0)}배)"
+               + (f"\n\n- 제목 구조: \"{pt['template']}\" ({pt.get('ratio', 0)}배 영상 패턴)" if pt else "\n\n- 제목 구조: 사실에 맞는 패턴이 없어 기본 훅 사용")
+               + (f"\n- 레이더 해시태그: {' '.join(radar.get('tags') or [])}" if radar.get("tags") else ""))
+        if radar.get("fallback_from"):
+            msg += "\n- 이 업종 데이터가 아직 없어 업종 무관(전체 떡상) 패턴을 사용했어요"
+        (st.warning if radar.get("stale") else st.info)(msg + (f"\n- ⚠️ 데이터가 {radar.get('age_days')}일 전 것이에요 (자동 수집 확인)"
+                                                               if radar.get("stale") else ""))
+    elif copy is not None:
+        st.warning("🔥 떡상 레이더 데이터가 없어 기본 카피로 만들었어요. 레이더 자동 수집(scripts/install_radar_schedule.ps1)을 확인해 주세요.")
+    st.markdown("#### 🖼️ 썸네일 (영상 첫 0.5초에도 들어감)")
     if thumb_path and os.path.exists(thumb_path):
         c1, c2 = st.columns([1, 1.4])
         with c1:
