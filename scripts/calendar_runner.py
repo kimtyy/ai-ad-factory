@@ -72,6 +72,10 @@ def main(argv=None) -> int:
             print(f"{r['status'].upper()}  {r['title']}  {r.get('final') or r.get('error', '')}")
         if rep.skipped:
             print(rep.skipped)
+        # 매 주기 한 줄 요약을 로그에 (작업 스케줄러로 돌 땐 화면 출력이 안 보임)
+        logging.getLogger("ad_factory.calendar_runner").info(
+            "실행 요약: " + (", ".join(f"{r['status']} {r['title']}" for r in rep.processed) or rep.skipped or "처리 없음")
+            + (f" · 대기 첫 댓글 {len(rep.pending_comments)}건 확인" if rep.pending_comments else ""))
         return 1 if any(r["status"] == "failed" for r in rep.processed) else 0
     except cs.CalendarError as e:
         print(f"[캘린더] {e}")
