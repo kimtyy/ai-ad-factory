@@ -115,8 +115,7 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
         common["bgm_path"] = bgm_mod.pick_track(track) if track else None
     if mode == "travel":
         raise SpecError("숙소 모드는 크롤링·사진 매칭이 필요해 캘린더 자동 제작을 지원하지 않아요 (대시보드에서 만들어 주세요).")
-    if not media and not mock:
-        need.append(f"사진폴더: inbox/{folder} 에 사진이 없어요 (설명란 '사진폴더: 폴더이름', 파일 이름 순서 = 씬 순서)")
+    notes: List[str] = []
     if mode == "owner":
         name = f.get("상호") or keyword
         spec = pipeline.JobSpec(mode="owner", name=name, usp=f.get("특징", ""), search_keyword=f.get("검색어", name),
@@ -127,14 +126,32 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
         spec.brand = BrandOverlay(business_name=name, end_card=EndCard(search_keyword=spec.search_keyword,
                                                                       sub_text=region_of(spec.address)))
     elif mode == "book":
-        for k in ("책",):
-            if not f.get(k):
-                need.append(f"{k}: 책 제목")
-        tpl = {"우화": "fable", "기본": "basic"}.get(f.get("템플릿", "기본"), "basic")
+        query = f.get("ISBN") or f.get("책") or ""
+        if not query:
+            need.append("책: 책 제목 (또는 ISBN: 13자리)")
+        # 원문이 있으면 우화, 없으면 기본 큐레이션 (원문은 AI가 만들지 않음 - 직접 입력만)
+        tpl = {"우화": "fable", "기본": "basic"}.get(f.get("템플릿", ""), "fable" if f.get("문장") else "basic")
         if tpl == "fable" and not f.get("문장"):
-            need.append("문장: 우화 템플릿은 책 속 원문이 꼭 필요해요")
-        spec = pipeline.JobSpec(mode="book", name=f.get("책방") or "시골책방", usp=f.get("소개", ""), book_title=f.get("책", ""),
-                                book_author=f.get("저자", ""), book_quote=f.get("문장", ""), book_link=f.get("링크", ""),
+            tpl = "basic"
+            notes.append("우화 템플릿은 책 속 원문('문장:')이 필요해 기본 큐레이션으로 만들었어요")
+        title, author, intro, link = f.get("책", ""), f.get("저자", ""), f.get("소개", ""), f.get("링크", "")
+        if query and f.get("자동수집", "예") not in ("아니오", "끔"):
+            # 책 정보 자동 수집: 카카오·국립중앙도서관(책소개)·쿠팡 파트너스(고화질 표지·제휴 링크). 직접 적은 값이 우선
+            from core.book_info import BookInfoError, collect_book
+            try:
+                info = collect_book(query, author=author, aladin_link=link, out_dir=os.path.join(STATE_DIR, "books"))
+                title, author = title or info.title, author or info.author
+                intro, link = intro or info.description, link or info.purchase_link
+                notes.append("📚 책 정보 자동 수집: " + info.summary() + " · 출처 " + ", ".join(info.sources))
+                notes += [f"⚠️ {w}" for w in info.warnings if "키 없음" not in w or not info.sources]
+                if info.cover_path and f.get("표지", "자동") != "직접":
+                    common["media_paths"] = [info.cover_path] + list(media)      # 1번째 = 표지, 나머지(inbox) = 책방 사진
+            except BookInfoError as e:
+                need.append(f"책 정보 자동 수집 실패: {e}")
+        if not intro:
+            notes.append("책소개가 없어 제목·사진만으로 대본을 써요 (설명란 '소개:'로 사실을 적어 주면 더 정확해요)")
+        spec = pipeline.JobSpec(mode="book", name=f.get("책방") or "시골책방", usp=intro, book_title=title,
+                                book_author=author, book_quote=f.get("문장", ""), book_link=link,
                                 book_search_kw=f.get("검색어", ""), book_template=tpl,
                                 book_photo_count=2 if f.get("책사진") == "2" else 1, **common)
     else:
@@ -160,8 +177,11 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
                 need.append("링크: 쿠팡 파트너스 링크")
             spec = pipeline.JobSpec(mode="commerce", name=f.get("상품", ""), usp=f.get("특징", ""), link=f.get("링크", ""),
                                     **common)
+    if not spec.media_paths and not mock:
+        need.append(f"사진폴더: inbox/{folder} 에 사진이 없어요 (설명란 '사진폴더: 폴더이름', 파일 이름 순서 = 씬 순서)")
     if need:
         raise SpecError("설명란에 빠진 항목: " + " / ".join(need))
+    spec.notes = notes            # 결과 블록에 함께 적을 안내 (자동 수집 출처·템플릿 전환 등)
     return spec
 
 
@@ -307,6 +327,7 @@ def process_event(service, cal_id: str, ev: Dict[str, Any], title: Dict[str, str
         lines = []
         extra = {"adf_job": job.job_id}
         if spec.mode == "book":
+            lines += getattr(spec, "notes", [])
             lines += ["📚 시골책방 채널 미연결 → 로컬 렌더 + 첫 댓글 초안 저장 (업로드 안 함)",
                       f"영상 {dur:.1f}초 · 대본 엔진 {engine} · 파일 {os.path.relpath(res.final_path, ROOT)}",
                       "", "💬 첫 댓글 초안 (outputs/youtube/comment_drafts.json):", res.comment]

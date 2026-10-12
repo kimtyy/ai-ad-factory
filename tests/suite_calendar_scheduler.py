@@ -57,11 +57,11 @@ try:
     check(False, "숙소")
 except sch.SpecError as e:
     check("대시보드" in str(e), "숙소 모드는 캘린더 자동 제작 미지원 안내")
-try:
-    sch.spec_from_event({"mode": "book", "keyword": "윤동주"}, {"책": "x", "템플릿": "우화"}, None, mock=True)
-    check(False, "우화 원문")
-except sch.SpecError as e:
-    check("원문" in str(e), "우화 템플릿인데 원문이 없으면 시작 안 함")
+bs = sch.spec_from_event({"mode": "book", "keyword": "윤동주"}, {"책": "x", "템플릿": "우화", "자동수집": "끔"}, None, mock=True)
+check(bs.book_template == "basic" and any("기본 큐레이션" in n_ for n_ in bs.notes),
+      "우화 템플릿인데 원문이 없으면 기본 큐레이션으로 자동 전환 (원문은 지어내지 않음) + 결과에 안내")
+bs2 = sch.spec_from_event({"mode": "book", "keyword": "윤동주"}, {"책": "x", "문장": "원문", "자동수집": "끔"}, None, mock=True)
+check(bs2.book_template == "fable", "템플릿을 안 적어도 원문이 있으면 우화")
 check(sch._photos("../../") == [] and sch._photos("") == [], "사진폴더는 inbox 밖으로 못 나감")
 
 
@@ -107,7 +107,7 @@ class Cal:
         return E()
 
 
-book_desc = ("책: 하늘과 바람과 별과 시\n저자: 윤동주\n소개: 윤동주 유고 시집\n문장: 죽는 날까지 하늘을 우러러 한 점 부끄럼이 없기를,\n"
+book_desc = ("자동수집: 끔\n책: 하늘과 바람과 별과 시\n저자: 윤동주\n소개: 윤동주 유고 시집\n문장: 죽는 날까지 하늘을 우러러 한 점 부끄럼이 없기를,\n"
              "링크: https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=1\n사진폴더: 윤동주")
 cal = Cal([ev(1, "[쇼핑] 자취 주방템", 30, desc), ev(2, "[시골책방] 윤동주 시집", 20, book_desc), ev(3, "팀 회의", 10),
            ev(4, "[쇼핑] 미래 일정", -60, desc), ev(5, "[쇼핑] 너무 오래된 일정", 60 * 30, desc), ev(6, "[쇼핑] 빈 일정", 5, "")])

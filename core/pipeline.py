@@ -193,8 +193,9 @@ def disclosure_short(spec: JobSpec) -> Optional[str]:
         link = (spec.book_link or "").strip()
         if not link:
             return ""
-        return ("알라딘 제휴 링크 포함 · 도서 구매 시 수수료를 받을 수 있어요" if shop_link_kind(link) == "aladin"
-                else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요")
+        kind = shop_link_kind(link)
+        return ("알라딘 제휴 링크 포함 · 도서 구매 시 수수료를 받을 수 있어요" if kind == "aladin"
+                else COUPANG_DISCLOSURE if kind == "coupang" else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요")
     if spec.is_bundle:
         kinds = {shop_link_kind(it["link"]) for it in spec.bundle_items if it.get("link")}
         if kinds == {"coupang"} or not kinds:

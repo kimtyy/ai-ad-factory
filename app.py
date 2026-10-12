@@ -652,6 +652,29 @@ if is_commerce_mode:
 is_bundle = is_commerce_mode and st.session_state.commerce_layout == "bundle"
 
 
+def _book_autofill():
+    """[책 정보 자동 채우기] 콜백: 위젯이 그려지기 전에 입력칸 값을 채움 (core/book_info.py)"""
+    from core.book_info import BookInfoError, collect_book
+    ss = st.session_state
+    query = (ss.get("book_title") or "").strip()
+    try:
+        info = collect_book(query, author=(ss.get("book_author") or "").strip(), aladin_link=(ss.get("book_link") or "").strip(),
+                            out_dir=current_job().assets_dir)
+    except BookInfoError as e:
+        ss.book_autofill_msg = ("error", str(e), [])
+        return
+    ss.book_title = info.title or query
+    for key, val in (("book_author", info.author), ("book_info", info.description), ("book_link", info.purchase_link)):
+        if val and not (ss.get(key) or "").strip():
+            ss[key] = val
+    if info.cover_path and info.cover_path not in ss.uploaded_paths:
+        ss.uploaded_paths = [info.cover_path] + list(ss.uploaded_paths)
+        ss.book_photo_count = 1
+        ss.storyboard = []
+    ss.book_autofill_msg = ("ok", "책 정보를 채웠어요: " + info.summary() + " · 출처 " + ", ".join(info.sources),
+                            [w for w in info.warnings if "키 없음" not in w or not info.sources])
+
+
 def book_comment_text(copy) -> str:
     """시골책방 첫 댓글 (core/pipeline.book_comment)"""
     return pipeline.book_comment(pipeline.JobSpec(
@@ -859,6 +882,14 @@ elif is_book_mode:
         st.text_input("책 제목", key="book_title", placeholder="예: 작별하지 않는다")
     with k4:
         st.text_input("저자", key="book_author", placeholder="예: 한강")
+    st.button("📚 책 정보 자동 채우기 (카카오·국립중앙도서관·쿠팡 표지/링크)", key="book_autofill", on_click=_book_autofill,
+              help="책 제목(또는 ISBN)으로 저자·책소개·고화질 표지·구매 링크를 채워요. 이미 적은 칸은 그대로 두고, "
+                   "표지는 올린 사진 맨 앞(1번째 = 책 표지)에 넣어요.")
+    _af = st.session_state.pop("book_autofill_msg", None)
+    if _af:
+        (st.error if _af[0] == "error" else st.success)(_af[1])
+        for _w in _af[2]:
+            st.caption(f"⚠️ {_w}")
     st.text_area("책 소개 (출판사 소개·장르 등 사실만 - 대본 근거)", key="book_info", height=80,
                  placeholder="예: 장편소설. 제주 4·3을 다룬 이야기. (베스트셀러·수상 같은 말은 여기 있을 때만 대본에 들어가요)")
     if _fable:
