@@ -870,7 +870,8 @@ elif is_book_mode:
     st.session_state.setdefault("book_template", "basic")
     st.radio("시골책방 템플릿", list(BOOK_TEMPLATES), key="book_template", horizontal=True,
              format_func=lambda k: {"basic": "📖 기본 큐레이션 (한 권 · 약 30~35초)",
-                                    "fable": "🕯️ 우화·사유 스토리텔링 (고민 → 원문 낭독 → 위로 → 책 공개 · 50~75초)"}[k])
+                                    "fable": "🕯️ 우화 (원문 낭독 · 50~75초)",
+                                    "reflect": "🌙 사유 (책소개 기반 · 원문 없이 50~60초)"}[k])
     _fable = st.session_state.book_template == "fable"
     k1, k2 = st.columns([1, 1])
     with k1:

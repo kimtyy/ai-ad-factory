@@ -155,6 +155,15 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
         scenes = plan_book_storyboard(store_name=spec.name, book_title=spec.book_title, author=spec.book_author,
                                       book_info=spec.usp, quote=spec.book_quote, media_paths=spec.media_paths,
                                       book_photo_count=spec.book_photo_count, template=spec.book_template, **common)
+        # 씬별 이미지 매칭: 책방·분위기 장면에 대사와 어울리는 책방 사진(올린 사진 + 라이브러리), 없으면 흐린 표지 배경
+        from core.book_scenes import assign_visuals
+        from core.planners.book import split_book_media
+        book_photos, store_photos = split_book_media(spec.media_paths, spec.book_photo_count)
+        log = assign_visuals(scenes, cover=book_photos[0] if book_photos else None,
+                             page=book_photos[1] if len(book_photos) > 1 else None, event_photos=store_photos,
+                             api_key=spec.api_key, mock=spec.mock, out_dir=job.assets_dir)
+        if scenes and log:
+            scenes[0].setdefault("book", {})["visuals"] = log
     elif spec.is_bundle:
         scenes = plan_bundle_storyboard(theme=spec.bundle_theme, items=spec.bundle_items,
                                         media_paths=spec.media_paths, **common)
@@ -296,7 +305,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     importlib.reload(core.compositor)
     comp = core.compositor.AdCompositor(output_dir=job.final_dir)
     book = (scenes[0].get("book") or {}) if scenes else {}
-    fable = spec.mode == "book" and book.get("template") == "fable"
+    fable = spec.mode == "book" and book.get("template") in ("fable", "reflect")     # 제목 마지막 공개 → 업로드 카피에서도 숨김
     thumb, copy = None, None
     try:
         from moviepy.editor import VideoFileClip

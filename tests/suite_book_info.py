@@ -167,8 +167,8 @@ try:
     spec = sch.spec_from_event({"mode": "book", "keyword": "윤동주"}, {"책": "하늘과 바람과 별과 시"}, None, mock=True)
     bi.collect_book = _collect
     check(spec.book_author == "윤동주" and "1948년" in spec.usp and spec.book_link == "https://link.coupang.com/a/BOOK"
-          and spec.media_paths and spec.media_paths[0].endswith("book_cover_coupang.jpg") and spec.book_template == "basic",
-          "캘린더에 '책:' 한 줄 → 저자·책소개·표지(1번째 사진)·쿠팡 링크 자동, 원문 없으면 기본 큐레이션")
+          and spec.media_paths and spec.media_paths[0].endswith("book_cover_coupang.jpg") and spec.book_template == "reflect",
+          "캘린더에 '책:' 한 줄 → 저자·책소개·표지(1번째 사진)·쿠팡 링크 자동, 원문 없으면 책소개로 사유 스토리텔링")
     check(any("자동 수집" in n and "국립중앙도서관" in n and "쿠팡 파트너스" in n for n in spec.notes),
           "결과 블록에 자동 수집 출처 안내")
     from core import pipeline  # noqa: E402

@@ -129,11 +129,8 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
         query = f.get("ISBN") or f.get("책") or ""
         if not query:
             need.append("책: 책 제목 (또는 ISBN: 13자리)")
-        # 원문이 있으면 우화, 없으면 기본 큐레이션 (원문은 AI가 만들지 않음 - 직접 입력만)
-        tpl = {"우화": "fable", "기본": "basic"}.get(f.get("템플릿", ""), "fable" if f.get("문장") else "basic")
-        if tpl == "fable" and not f.get("문장"):
-            tpl = "basic"
-            notes.append("우화 템플릿은 책 속 원문('문장:')이 필요해 기본 큐레이션으로 만들었어요")
+        # 템플릿: 원문이 있으면 우화, 없으면 책소개로 사유 스토리텔링(책소개가 충분할 때), 그것도 없으면 기본 큐레이션
+        tpl_req = {"우화": "fable", "사유": "reflect", "기본": "basic"}.get(f.get("템플릿", ""), "")
         title, author, intro, link = f.get("책", ""), f.get("저자", ""), f.get("소개", ""), f.get("링크", "")
         if query and f.get("자동수집", "예") not in ("아니오", "끔"):
             # 책 정보 자동 수집: 카카오·국립중앙도서관(책소개)·쿠팡 파트너스(고화질 표지·제휴 링크). 직접 적은 값이 우선
@@ -148,6 +145,15 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
                     common["media_paths"] = [info.cover_path] + list(media)      # 1번째 = 표지, 나머지(inbox) = 책방 사진
             except BookInfoError as e:
                 need.append(f"책 정보 자동 수집 실패: {e}")
+        from core.planners.book import REFLECT_MIN_INFO
+        auto = "fable" if f.get("문장") else ("reflect" if len(intro) >= REFLECT_MIN_INFO else "basic")
+        tpl = tpl_req or auto
+        if tpl == "fable" and not f.get("문장"):
+            tpl = "reflect" if len(intro) >= REFLECT_MIN_INFO else "basic"
+            notes.append(f"우화 템플릿은 책 속 원문('문장:')이 필요해 {'사유 스토리텔링' if tpl == 'reflect' else '기본 큐레이션'}으로 만들었어요")
+        if tpl == "reflect" and len(intro) < REFLECT_MIN_INFO:
+            tpl = "basic"
+            notes.append("책소개가 짧아 사유 스토리텔링 대신 기본 큐레이션으로 만들었어요")
         if not intro:
             notes.append("책소개가 없어 제목·사진만으로 대본을 써요 (설명란 '소개:'로 사실을 적어 주면 더 정확해요)")
         spec = pipeline.JobSpec(mode="book", name=f.get("책방") or "시골책방", usp=intro, book_title=title,
@@ -328,6 +334,7 @@ def process_event(service, cal_id: str, ev: Dict[str, Any], title: Dict[str, str
         extra = {"adf_job": job.job_id}
         if spec.mode == "book":
             lines += getattr(spec, "notes", [])
+            lines += [f"🖼️ {v}" for v in ((scenes[0].get("book") or {}).get("visuals") or [])] if scenes else []
             lines += ["📚 시골책방 채널 미연결 → 로컬 렌더 + 첫 댓글 초안 저장 (업로드 안 함)",
                       f"영상 {dur:.1f}초 · 대본 엔진 {engine} · 파일 {os.path.relpath(res.final_path, ROOT)}",
                       "", "💬 첫 댓글 초안 (outputs/youtube/comment_drafts.json):", res.comment]

@@ -517,7 +517,8 @@ class AdCompositor:
         draw.text((x - bb[0], y0 + (bar_h - th) // 2 - bb[1]), text, font=font, fill=BOOK_INK + (255,))
         return layer
 
-    def render_quote_card(self, quote: str, source: str, width: int, height: int, cy: Optional[float] = None) -> Image.Image:
+    def render_quote_card(self, quote: str, source: str, width: int, height: int, cy: Optional[float] = None,
+                          header: str = "") -> Image.Image:
         """
         책 속 한 문장 인용 카드 (인용 씬에만): 종이 질감 카드 + 큰 따옴표 + 명조체 본문(최대 4줄, 넘치면 글자 축소) + 출처
         문장은 사용자가 입력한 원문 그대로 (AI가 만들지 않음)
@@ -539,7 +540,10 @@ class AdCompositor:
         line_h = int(size * 1.55)
         src_font = ImageFont.truetype(self.serif_font_path, max(14, int(size * 0.62)))
         src_h = int(src_font.size * 1.9) if source else 0
-        card_h = pad_y * 2 + len(lines) * line_h + src_h
+        # header(예: '📖 이 책이 건네는 이야기'): 책 속 문장이 아니라 큐레이터의 말 → 따옴표 대신 머리말
+        head_font = ImageFont.truetype(self.serif_font_path, max(14, int(size * 0.62))) if header else None
+        head_h = int(head_font.size * 2.0) if header else 0
+        card_h = pad_y * 2 + len(lines) * line_h + src_h + head_h
         y0 = int(height * (cy or QUOTE_CARD_CY) - card_h / 2)
         # 그림자 → 종이 카드 (모서리 둥글게)
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -548,10 +552,24 @@ class AdCompositor:
         mask = Image.new("L", (x1 - x0, card_h), 0)
         ImageDraw.Draw(mask).rounded_rectangle([0, 0, x1 - x0 - 1, card_h - 1], radius=int(width * 0.03), fill=250)
         layer.paste(self._paper_texture(x1 - x0, card_h), (x0, y0), mask)
-        # 큰 여는 따옴표 (카드 왼쪽 위, 옅은 갈색)
-        qf = ImageFont.truetype(self.serif_font_path, int(size * 2.4))
-        draw.text((x0 + int(pad_x * 0.35), y0 - int(size * 0.55)), "“", font=qf, fill=BOOK_ACCENT + (200,))
         y = y0 + pad_y
+        if header:
+            htxt = header
+            m = re.match(r"^([\U0001F000-\U0001FAFF\u2600-\u27BF]\uFE0F?)\s*", htxt)
+            em = self._emoji_image(m.group(1), int(head_font.size * 1.1)) if m else None
+            htxt = htxt[m.end():] if m else htxt
+            hb = draw.textbbox((0, 0), htxt, font=head_font)
+            hw = (hb[2] - hb[0]) + ((em.width + 10) if em else 0)
+            hx = (width - hw) // 2
+            if em:
+                layer.alpha_composite(em, (hx, y))
+                hx += em.width + 10
+            draw.text((hx - hb[0], y - hb[1] + 2), htxt, font=head_font, fill=BOOK_ACCENT + (255,))
+            y += head_h
+        else:
+            # 큰 여는 따옴표 (카드 왼쪽 위, 옅은 갈색) - 책 속 원문 인용일 때만
+            qf = ImageFont.truetype(self.serif_font_path, int(size * 2.4))
+            draw.text((x0 + int(pad_x * 0.35), y0 - int(size * 0.55)), "“", font=qf, fill=BOOK_ACCENT + (200,))
         for ln in lines:
             bb = draw.textbbox((0, 0), ln, font=font)
             draw.text(((width - (bb[2] - bb[0])) // 2 - bb[0], y + (line_h - (bb[3] - bb[1])) // 2 - bb[1]), ln,
@@ -904,7 +922,8 @@ class AdCompositor:
                                 merged.alpha_composite(watermark_cache[key])
                             if item.get("quote_card"):
                                 merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h,
-                                                                              cy=item.get("quote_cy")))
+                                                                              cy=item.get("quote_cy"),
+                                                                              header=item.get("card_header", "")))
                             if bars:
                                 key = ("bars", w, h)
                                 if key not in watermark_cache:

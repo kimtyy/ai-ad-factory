@@ -59,7 +59,8 @@ def check_quote(quote: str, max_len: int = QUOTE_MAX) -> str:
     return q
 
 
-TEMPLATES = {"basic": "기본 큐레이션", "fable": "우화·사유 스토리텔링"}
+TEMPLATES = {"basic": "기본 큐레이션", "fable": "우화·사유 스토리텔링", "reflect": "사유 스토리텔링 (책소개 기반)"}
+REFLECT_MIN_INFO = 60            # 사유 템플릿에 필요한 책소개 최소 길이 (이보다 짧으면 근거가 부족)
 
 
 def split_book_media(media_paths: List[str], book_photo_count: int = 1):
@@ -110,6 +111,8 @@ def plan_book_storyboard(
     q = check_quote(quote, book_fable.FABLE_QUOTE_MAX if template == "fable" else QUOTE_MAX)
     if template == "fable" and not q:
         raise ValueError("우화·사유 템플릿은 책 속 원문이 꼭 필요해요 (낭독이 영상의 중심이에요).")
+    if template == "reflect" and len((book_info or "").strip()) < REFLECT_MIN_INFO:
+        raise ValueError("사유 스토리텔링은 책소개(사실)가 필요해요. [책 정보 자동 채우기]로 책소개를 가져오거나 직접 적어 주세요.")
     book_photos, store_photos = split_book_media(media_paths or [], book_photo_count)
     if not mock and not book_photos:
         raise ValueError("책 사진이 없어요. 책 표지 사진을 첫 번째로 올려 주세요 (AI로 표지를 만들지 않아요).")
@@ -125,6 +128,11 @@ def plan_book_storyboard(
                                  template=template, quote=q)
         except Exception as e:
             logger.warning(f"시골책방 대본 엔진 모두 실패, 템플릿 대사로 대체: {e}")
+    if template == "reflect":
+        from core.planners.book_reflect import plan_reflect
+        scenes = plan_reflect(store_name, book_title, author, book_info, book_photos, store_photos, llm, _scene,
+                              lambda t: book_hype(t, book_info) or _claim(t, book_info))
+        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
     if template == "fable":
         scenes = book_fable.plan_fable(store_name, book_title, author, book_info, q, book_photos, store_photos, llm, _scene,
                                        lambda t: book_hype(t, book_info) or _claim(t, book_info))
@@ -216,7 +224,7 @@ def _plan_with_llm(store_name, book_title, author, book_info, book_photos, store
     from core.script_guard import STYLE_REPAIR_RULES, script_violation_finder
 
     contents: List[Any] = []
-    if template == "fable":                 # 우화: 책 사진은 안 보여 줌 (대사에 제목이 새지 않게), 책방 사진만
+    if template in ("fable", "reflect"):     # 제목 마지막 공개: 책 사진은 안 보여 줌 (대사에 제목이 새지 않게), 책방 사진만
         book_photos = []
     for label, paths in (("책 사진", book_photos[:2]), ("책방 사진", store_photos[:2])):
         for p in paths:
@@ -226,6 +234,9 @@ def _plan_with_llm(store_name, book_title, author, book_info, book_photos, store
     if template == "fable":
         from core.planners.book_fable import fable_prompt
         contents.append(fable_prompt(book_title, author, book_info, quote, store_name, COPY_TONE_RULES))
+    elif template == "reflect":
+        from core.planners.book_reflect import reflect_prompt
+        contents.append(reflect_prompt(book_title, author, book_info, store_name, COPY_TONE_RULES))
     else:
         contents.append(f"""
 [책] 「{book_title}」{(' / ' + author) if author else ''}
