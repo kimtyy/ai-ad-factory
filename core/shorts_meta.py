@@ -352,14 +352,21 @@ def _norm_tag(s: str) -> str:
     return re.sub(r"[\s#'’]+", "", (s or "").lower())
 
 
-def build_shorts_description(mode: str, title: str, hashtags: List[str], disclosure_short: str = "") -> str:
+AI_ILLUSTRATION_NOTICE = "🎨 AI 생성 일러스트 사용 (책 표지는 실물)"
+
+
+def build_shorts_description(mode: str, title: str, hashtags: List[str], disclosure_short: str = "",
+                             ai_illustration: bool = False) -> str:
     """
-    1줄: 제목 그대로(【 】로 강조 - 유튜브 설명란은 굵은 글씨 미지원) / 2줄: 제휴 고지 / 가운데: 📌 첫 댓글 안내 / 끝: 해시태그
+    1줄: 제목 그대로(【 】로 강조 - 유튜브 설명란은 굵은 글씨 미지원) / 2줄: 제휴 고지 / (AI 일러스트를 쓴 영상) AI 생성 안내 /
+    가운데: 📌 첫 댓글 안내 / 끝: 해시태그
     """
     body = re.sub(r"\s*#shorts\b", "", title or "", flags=re.I).strip()
     lines = [f"【 {body} 】"]
     if disclosure_short:
         lines.append(disclosure_short.strip())
+    if ai_illustration:
+        lines.append(AI_ILLUSTRATION_NOTICE)
     lines += ["", PINNED_NOTICE.get(mode, PINNED_NOTICE["travel"]), "", " ".join(hashtags[:HASHTAG_MAX])]
     return "\n".join(lines).strip()
 

@@ -4,7 +4,7 @@ core/scene_images.py - 씬별 AI 이미지 생성 (문학·역사·철학 등 �
 - 키: 기존 .env GEMINI_API_KEY 하나 (추가 키 없음)
 - 모델: .env IMAGE_MODEL (기본 gemini-3.1-flash-image). 2026-10 확인 결과 이 키로는 Imagen(imagen-3.0-generate-002·
   imagen-4.0)이 404(NOT_FOUND)라 Gemini 네이티브 이미지 생성을 씀. IMAGE_MODEL을 imagen-* 로 바꾸면 Imagen 호출 경로로 동작
-- 9:16, 해상도 .env IMAGE_SIZE (기본 2K = 1536x2752, 1K = 768x1376)
+- 9:16, 해상도 .env IMAGE_SIZE (기본 1K = 768x1376 - 쇼츠 모바일 화면에 충분하고 빠르고 저렴, 2K = 1536x2752)
 - 흐름: 대본(씬별 대사·분위기) → 대본 엔진(Claude→GPT→Gemini)이 영상 전체 공통 화풍 + 씬별 영문 프롬프트 작성 → 씬마다 이미지 생성(동시 3장)
 - 안전: 글자·로고·실존 인물 얼굴·책 표지·실제 매장 묘사 금지 (책 표지·책방은 진짜 사진만 - 표지는 마지막 씬 실물)
 - 같은 프롬프트는 다시 만들지 않음 (작업 폴더 캐시)
@@ -35,7 +35,7 @@ def image_model() -> str:
 
 
 def image_size() -> str:
-    return os.getenv("IMAGE_SIZE", "").strip() or "2K"
+    return os.getenv("IMAGE_SIZE", "").strip() or "1K"
 
 
 class ImageGenError(RuntimeError):

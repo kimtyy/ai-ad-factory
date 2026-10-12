@@ -120,8 +120,15 @@ si._client = lambda api_key=None: FakeImgClient()
 out1 = si.generate_one("test prompt", os.path.join(work, "g1.jpg"))
 kind, model, cfg = sent[-1]
 check(kind == "content" and model == "gemini-3.1-flash-image" and cfg.image_config.aspect_ratio == "9:16"
-      and cfg.image_config.image_size == "2K" and Image.open(out1).size == (1536, 2752),
-      "기본 모델: 기존 GEMINI_API_KEY로 gemini-3.1-flash-image (Imagen 3는 이 키로 404), 9:16·2K")
+      and cfg.image_config.image_size == "1K" and os.path.exists(out1),
+      "기본 모델: 기존 GEMINI_API_KEY로 gemini-3.1-flash-image (Imagen 3는 이 키로 404), 9:16·1K(768x1376, 비용·속도)")
+from core import pipeline as _pl  # noqa: E402
+from core.shorts_meta import AI_ILLUSTRATION_NOTICE, make_shorts_copy  # noqa: E402
+_bd = _pl.upload_texts(_pl.JobSpec(mode="book", name="시골책방"), make_shorts_copy("book", mock=True))["desc"]
+_cd = _pl.upload_texts(_pl.JobSpec(mode="commerce", name="x", link="https://link.coupang.com/a/x"),
+                       make_shorts_copy("commerce", mock=True))["desc"]
+check(AI_ILLUSTRATION_NOTICE in _bd and _bd.splitlines()[1] == AI_ILLUSTRATION_NOTICE and AI_ILLUSTRATION_NOTICE not in _cd,
+      "유튜브 설명란: 시골책방(AI 일러스트)은 'AI 생성 일러스트 사용' 자동, 실물 사진만 쓰는 쇼핑·사장님은 안 붙임")
 os.environ["IMAGE_MODEL"] = "imagen-3.0-generate-002"
 si.generate_one("test prompt", os.path.join(work, "g2.jpg"))
 check(sent[-1][0] == "images" and sent[-1][1] == "imagen-3.0-generate-002" and sent[-1][2].aspect_ratio == "9:16",

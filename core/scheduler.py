@@ -342,8 +342,10 @@ def process_event(service, cal_id: str, ev: Dict[str, Any], title: Dict[str, str
         if spec.mode == "book":
             lines += getattr(spec, "notes", [])
             lines += [f"🖼️ {v}" for v in ((scenes[0].get("book") or {}).get("visuals") or [])] if scenes else []
+            texts = pipeline.upload_texts(spec, res.shorts_copy, hook=(scenes[0].get("hook_title") or ""))
             lines += ["📚 시골책방 채널 미연결 → 로컬 렌더 + 첫 댓글 초안 저장 (업로드 안 함)",
                       f"영상 {dur:.1f}초 · 대본 엔진 {engine} · 파일 {os.path.relpath(res.final_path, ROOT)}",
+                      "", f"제목 초안: {texts['title']}", "설명란 초안:", texts["desc"],
                       "", "💬 첫 댓글 초안 (outputs/youtube/comment_drafts.json):", res.comment]
         else:
             texts = pipeline.upload_texts(spec, res.shorts_copy, hook=(scenes[0].get("hook_title") or ""))

@@ -275,7 +275,8 @@ def upload_texts(spec: JobSpec, copy: Optional[Dict[str, Any]], hook: str = "") 
     short = disclosure_short(spec) or ""
     if spec.mode == "travel" and short:
         short = "※ " + short
-    desc = build_shorts_description(spec.mode, copy["title"], copy["hashtags"], short)
+    # 시골책방은 씬 1~N-1이 AI 일러스트 → 설명란에 'AI 생성 일러스트 사용' 자동 (실물 사진만 쓰는 다른 모드는 안 붙임)
+    desc = build_shorts_description(spec.mode, copy["title"], copy["hashtags"], short, ai_illustration=spec.mode == "book")
     if spec.mode == "book":
         comment = book_comment(spec, copy)
     else:
