@@ -113,17 +113,76 @@ def nl_lookup(isbn13: str, key: Optional[str] = None) -> Optional[Dict[str, Any]
 
 
 # ---------------------------------------------------------------- 3) 쿠팡 파트너스 (표지·제휴 링크)
-def coupang_book(title: str, author: str = "", client=None) -> Optional[Dict[str, Any]]:
-    """쿠팡에서 같은 책 찾기: 상품명에 제목이 들어 있는 것만 (다른 상품을 표지로 쓰지 않게)"""
+# 판본을 가르는 표시. 강한 표시가 쿠팡 상품명에 있는데 기준 판본(카카오 제목·출판사·책소개)에 없으면 다른 판본
+STRONG_MARKERS = ("초판본", "초판", "필사", "육필", "개정판", "개정증보", "증보판", "특별판", "한정판", "리커버", "양장", "반양장",
+                  "합본", "큰글씨", "큰글자", "영문판", "영한", "세트", "오디오북", "ebook", "전자책", "만화", "그림책", "컬러링",
+                  "미니북", "포켓", "사진판", "필사본", "낭독")
+WEAK_MARKERS = ("에디션", "edition", "기념판", "뉴")          # 같은 판본 홍보 문구에도 자주 붙음 → 판정에 안 씀
+
+
+def edition_mismatch(product_name: str, reference: str) -> List[str]:
+    """쿠팡 상품명의 강한 판본 표시 중 기준 판본에 없는 것 (빈 목록 = 판본이 어긋나는 표시 없음)"""
+    pn, ref = _norm(product_name), _norm(reference)
+    return [m for m in STRONG_MARKERS if _norm(m) in pn and _norm(m) not in ref]
+
+
+def _extra_tokens(product_name: str, title: str, author: str) -> List[str]:
+    """상품명에서 제목·저자를 뺀 나머지 낱말 (2자 이상) - 판본을 구별하는 단서"""
+    rest = product_name
+    for w in [title, author] + re.split(r"\s+", title):
+        if w:
+            rest = rest.replace(w, " ")
+    toks = [t for t in re.findall(r"[가-힣A-Za-z0-9]+", rest) if len(t) >= 2]
+    return [t for t in toks if _norm(t) not in {_norm(m) for m in WEAK_MARKERS}]
+
+
+def score_edition(product_name: str, title: str, author: str, reference: str) -> Dict[str, Any]:
+    """판본 일치 점수: 기준 판본에도 나오는 낱말 수 - 안 나오는 낱말 수 - 강한 표시 불일치×3"""
+    ref = _norm(reference)
+    toks = _extra_tokens(product_name, title, author)
+    hit = [t for t in toks if _norm(t) in ref]
+    miss = [t for t in toks if _norm(t) not in ref]
+    bad = edition_mismatch(product_name, reference)
+    return {"score": len(hit) - len(miss) - 3 * len(bad), "hit": hit, "miss": miss, "bad": bad, "plain": not toks}
+
+
+def coupang_book(title: str, author: str = "", client=None, reference: str = "",
+                 rejected: Optional[List[str]] = None, publisher: str = "") -> Optional[Dict[str, Any]]:
+    """
+    쿠팡에서 같은 판본 찾기 (다른 상품·다른 판본을 표지·구매 링크로 쓰지 않게). reference = 카카오 판본의 제목·출판사·책소개
+    - 판본 단서가 기준 판본과 맞는 상품(점수 ≥ 1) 중 최고점
+    - 상품명이 제목뿐인 상품은, 검색 결과에 다른 판본이 보이면(여러 판본) 판본을 확인할 수 없어 쓰지 않음.
+      모든 후보가 제목뿐이면(판본이 하나뿐인 책) 첫 번째를 씀
+    rejected: 건너뛴 상품과 이유를 담아 돌려줌
+    """
     from core.coupang import CoupangPartners
     client = client or CoupangPartners()
     if not client.enabled:
         return None
     nt = _norm(title)
-    items = client.search(f"{title} {author}".strip(), limit=10)
-    for it in items:
-        if nt and nt in _norm(it.get("name")) and it.get("image_url"):
-            return it
+    # 출판사를 붙여 먼저 찾고(같은 판본이 잘 잡힘), 없으면 저자로 (검색 한도 1시간 10회라 최대 2번)
+    queries = list(dict.fromkeys(q.strip() for q in (f"{title} {publisher}" if publisher else "", f"{title} {author}") if q.strip()))
+    cands, seen = [], set()
+    for q in queries:
+        for it in client.search(q, limit=10):
+            if it.get("product_id") not in seen and nt and nt in _norm(it.get("name")) and it.get("image_url"):
+                seen.add(it.get("product_id"))
+                cands.append(it)
+        if any(score_edition(it.get("name", ""), title, author, reference or title)["score"] >= 1 for it in cands):
+            break
+    scored = [(score_edition(it.get("name", ""), title, author, reference or title), it) for it in cands]
+    good = sorted([x for x in scored if x[0]["score"] >= 1 and not x[0]["bad"]], key=lambda x: -x[0]["score"])
+    if good:
+        return good[0][1]
+    many_editions = any(not sc["plain"] for sc, _ in scored)
+    plain = [it for sc, it in scored if sc["plain"]]
+    if plain and not many_editions:
+        return plain[0]
+    if rejected is not None:
+        for sc, it in scored[:3]:
+            why = (f"판본 표시 {', '.join(sc['bad'])}" if sc["bad"] else "제목뿐이라 판본 확인 불가" if sc["plain"]
+                   else f"판본 단서 불일치 {', '.join(sc['miss'][:3])}")
+            rejected.append(f"'{it.get('name', '')[:30]}' ({why})")
     return None
 
 
@@ -224,7 +283,13 @@ def collect_book(query: str, author: str = "", aladin_link: str = "", out_dir: s
     cp = None
     if use_coupang:
         try:
-            cp = coupang_book(info.title, info.author, coupang_client)
+            skipped: List[str] = []
+            ref = " ".join([info.title, info.publisher, info.description[:400]])
+            cp = coupang_book(info.title, info.author, coupang_client, reference=ref, rejected=skipped,
+                              publisher=info.publisher)
+            if skipped and not cp:
+                info.warnings.append("쿠팡 검색 결과가 다른 판본이라 표지·구매 링크로 쓰지 않았어요: " + "; ".join(skipped[:2])
+                                     + " → 기본 표지를 쓰고, 구매 링크는 직접 넣어 주세요 (알라딘 제휴 링크 등)")
         except Exception as e:
             info.warnings.append(f"쿠팡 파트너스 검색 실패: {e}")
         if cp:

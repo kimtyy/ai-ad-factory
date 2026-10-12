@@ -127,6 +127,31 @@ try:
     check(bi.looks_like_isbn("978-89-000-0000-2") and bi.looks_like_isbn("8900000000") and not bi.looks_like_isbn("하늘과 바람"),
           "ISBN 판별 (하이픈 허용)")
 
+    # 판본 매칭 (실제 쿠팡 검색 결과 상품명 그대로)
+    REAL = ["하늘과 바람과 별과 시(초판본):1955년 정음사 오리지널 초판본 표지 디자인", "하늘과 바람과 별과 시(특별판 육필원고본)",
+            "하늘과 바람과 별과 시", "하늘과 바람과 별과 시 블랙 연필 문구 세트(미니북+블랙연필+크라프트노트)",
+            "하늘과 바람과 별과 시:윤동주 전 시집｜서거 77주년, 탄생 105주년 기념 '하늘과 바람과 별과 시' 뉴 에디션",
+            "하늘과 바람과 별과 시 (양장)"]
+    REF = ("하늘과 바람과 별과 시 스타북스 2022년 윤동주 서거 77주년과 탄생 105주년을 맞아 새롭게 편집한 『윤동주 전 시집』 "
+           "2017년 윤동주 탄생 100주년을 기념해")
+    real_cp = FakeCoupang([{"product_id": str(k), "name": n, "image_url": "https://coupang/img.jpg", "partner_url": "x"}
+                           for k, n in enumerate(REAL)])
+    got = bi.coupang_book("하늘과 바람과 별과 시", "윤동주", real_cp, reference=REF, publisher="스타북스")
+    check(got and got["product_id"] == "4" and real_cp.searched[0] == "하늘과 바람과 별과 시 스타북스",
+          "판본 매칭: 출판사로 먼저 검색 → 책소개와 단서(77주년·105주년)가 맞는 판본 선택 (초판본·특별판·세트·양장 제외)")
+    rej = []
+    amb = FakeCoupang([{"product_id": str(k), "name": n, "image_url": "https://coupang/img.jpg", "partner_url": "x"}
+                       for k, n in enumerate([REAL[0], REAL[1], REAL[2]])])
+    check(bi.coupang_book("하늘과 바람과 별과 시", "윤동주", amb, reference=REF, rejected=rej) is None
+          and any("판본 확인 불가" in r for r in rej) and any("초판본" in r for r in rej),
+          "다른 판본이 섞여 있고 맞는 판본이 없으면 제목뿐인 상품도 안 씀 (판본 확인 불가)")
+    one = FakeCoupang([{"product_id": "1", "name": "어떤 책", "image_url": "https://coupang/img.jpg", "partner_url": "x"}])
+    check(bi.coupang_book("어떤 책", "", one, reference="어떤 책 출판사")["product_id"] == "1", "판본이 하나뿐인 책(제목뿐 상품만)은 그대로 사용")
+    calls.clear()
+    os.environ["NL_CERT_KEY"] = "test-nl"
+    fb = bi.collect_book("하늘과 바람과 별과 시", out_dir=work, coupang_client=amb)
+    check(fb.cover_source == "nl" and not fb.purchase_link and any("다른 판본이라" in w and "직접 넣어" in w for w in fb.warnings),
+          "판본이 어긋나면 쿠팡 표지·링크 대신 기본 표지(도서관) + 링크 직접 입력 안내")
     padded = Image.new("RGB", (600, 600), (255, 255, 255))
     padded.paste(Image.new("RGB", (400, 600), (90, 120, 80)), (100, 0))
     trimmed = bi.trim_margins(padded)
