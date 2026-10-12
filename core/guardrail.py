@@ -18,6 +18,9 @@ ALLOWED_LLM_MODELS = frozenset([
 ALLOWED_IMAGE_MODELS = frozenset([
     "imagen-3.0-generate-001",
     "imagen-3.0-generate-002",
+    # 2026-10: 이 Gemini 키로는 Imagen이 404 → Gemini 네이티브 이미지 생성 (시골책방 씬 일러스트, core/scene_images.py)
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite-image",
 ])
 
 # 비디오 생성 API 모델은 전면 차단 (EMPTY - 일체 허용하지 않음)

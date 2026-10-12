@@ -212,7 +212,8 @@ try:
     check(not at.exception and not any(t.key == "product_name_input" for t in at.text_input), "시골책방 입력 칸 (상품 입력 칸 대신)")
     [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
     sbx = at.session_state.storyboard
-    check(len(sbx) == 6 and [s.get("image_path") for s in sbx] == [ups[0]] * 4 + [ups[1], ups[2]], "기획 → 씬 사진 = 책/책방 사진 (순번 배정으로 섞이지 않음)")
+    check(len(sbx) == 6 and all("ai_images" in (s.get("image_path") or "") for s in sbx[:-1]) and sbx[-1]["image_path"] == ups[0]
+          and sbx[-1]["layout"] == "book_quote", "기획 → 씬 1~5는 AI 일러스트, 마지막(책 공개) 씬만 진짜 표지")
     yu.DRAFTS_PATH = os.path.join(work, "drafts_app.json")
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     jobs.append(at.session_state.job.workdir)
@@ -224,7 +225,7 @@ try:
         subprocess.run([ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{q_start + 1.5:.2f}", "-i", final, "-frames:v", "1", png], check=True)
         f = np.array(Image.open(png).convert("RGB")).astype(int)
         fh, fw = f.shape[:2]
-        lp, qp = f[int(fh * BOOK_LABEL_CY), int(fw * 0.2)], f[int(fh * QUOTE_CARD_CY), int(fw * 0.1)]
+        lp, qp = f[int(fh * BOOK_LABEL_CY), int(fw * 0.2)], f[int(fh * 0.52), int(fw * 0.1)]   # 인용 카드: 전체 화면 그림 위 가운데
         check(all(abs(lp[c] - BOOK_PAPER[c]) < 40 for c in range(3)) and all(abs(qp[c] - BOOK_PAPER[c]) < 45 for c in range(3)),
               f"완성 영상 인용 장면: 종이색 라벨 바 + 종이 인용 카드 {tuple(lp)} {tuple(qp)}")
     texts = " ".join(t.value or "" for t in at.text_area)

@@ -664,6 +664,7 @@ def _book_autofill():
         ss.book_autofill_msg = ("error", str(e), [])
         return
     ss.book_title = info.title or query
+    ss.book_publisher = info.publisher
     for key, val in (("book_author", info.author), ("book_info", info.description), ("book_link", info.purchase_link)):
         if val and not (ss.get(key) or "").strip():
             ss[key] = val
@@ -1025,6 +1026,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         book_title=ss.get("book_title", ""), book_author=ss.get("book_author", ""), book_quote=ss.get("book_quote", ""),
         book_link=ss.get("book_link", ""), book_search_kw=ss.get("book_search_kw", ""),
         book_photo_count=ss.get("book_photo_count", 1), book_template=ss.get("book_template", "basic"),
+        book_publisher=ss.get("book_publisher", ""),
         affiliate_program=ss.get("affiliate_program", ""),
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)

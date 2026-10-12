@@ -159,7 +159,7 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             segs = [(0.0, dur, caption, hook)]
         pngs = []
         for j, (s, e, cap, hk) in enumerate(segs):
-            if not (cap or hk or brand or disclosure or bars or label or quote):
+            if not (cap or hk or brand or disclosure or bars or label or quote or item.get("info_line")):
                 continue
             layer = Image.fromarray(comp.create_overlay_image(caption_text=cap, hook_title=hk, width=W, height=H, mode=mode,
                                                               center_y=item.get("caption_center_y")
@@ -172,6 +172,8 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 if "label" not in static_layers:
                     static_layers["label"] = comp.render_book_label(label, W, H)
                 layer.alpha_composite(static_layers["label"])
+            if item.get("info_line"):
+                layer.alpha_composite(comp.render_info_line(item["info_line"], W, H))
             if quote:
                 if ("quote", idx) not in static_layers:
                     static_layers[("quote", idx)] = comp.render_quote_card(quote, item.get("quote_source", ""), W, H,

@@ -54,6 +54,8 @@ class JobSpec:
     book_search_kw: str = ""
     book_photo_count: int = 1
     book_template: str = "basic"
+    book_publisher: str = ""
+    book_genre: str = ""
     # 숙소 (렌더만)
     affiliate_program: str = ""
     # 공통
@@ -155,15 +157,7 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
         scenes = plan_book_storyboard(store_name=spec.name, book_title=spec.book_title, author=spec.book_author,
                                       book_info=spec.usp, quote=spec.book_quote, media_paths=spec.media_paths,
                                       book_photo_count=spec.book_photo_count, template=spec.book_template, **common)
-        # 씬별 이미지 매칭: 책방·분위기 장면에 대사와 어울리는 책방 사진(올린 사진 + 라이브러리), 없으면 흐린 표지 배경
-        from core.book_scenes import assign_visuals
-        from core.planners.book import split_book_media
-        book_photos, store_photos = split_book_media(spec.media_paths, spec.book_photo_count)
-        log = assign_visuals(scenes, cover=book_photos[0] if book_photos else None,
-                             page=book_photos[1] if len(book_photos) > 1 else None, event_photos=store_photos,
-                             api_key=spec.api_key, mock=spec.mock, out_dir=job.assets_dir)
-        if scenes and log:
-            scenes[0].setdefault("book", {})["visuals"] = log
+        apply_book_visuals(spec, job, scenes)
     elif spec.is_bundle:
         scenes = plan_bundle_storyboard(theme=spec.bundle_theme, items=spec.bundle_items,
                                         media_paths=spec.media_paths, **common)
@@ -177,6 +171,43 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
                                           **common)
     assign_scene_media(spec, job, scenes)
     return scenes
+
+
+def apply_book_visuals(spec: JobSpec, job, scenes: List[Dict[str, Any]],
+                       progress: Optional[Callable[[int, int], None]] = None) -> None:
+    """
+    시골책방 화면 구성: 마지막(책 공개 CTA) 씬만 진짜 표지 카드 + 책 정보, 나머지 씬은 대본에 맞춰 생성한 AI 일러스트 (전체 화면)
+    표지(책 사진 1번째)는 마지막 씬에만. 이미지 생성이 일부 실패하면 바로 앞 씬 그림을 다시 쓰고, 전부 실패하면 오류
+    """
+    from core.scene_images import generate_scene_images
+    cover = spec.media_paths[0] if spec.media_paths else None
+    res = generate_scene_images(scenes, os.path.join(job.assets_dir, "ai_images"),
+                                book={"info": spec.usp, "genre": spec.book_genre}, api_key=spec.api_key, mock=spec.mock,
+                                on_done=progress)
+    if not res["images"]:
+        raise RuntimeError("씬 이미지를 하나도 만들지 못했어요: " + " / ".join(res["errors"][:2]))
+    last = None
+    for s in scenes:
+        if s.get("role") == "cta":
+            continue
+        k = int(s["scene_index"])
+        path = res["images"].get(k) or last or next(iter(res["images"].values()))
+        last = path
+        s.update({"source_path": path, "layout": "full", "media_kind": "ai_image", "ai_prompt": res["prompts"].get(k, "")})
+        s.pop("caption_center_y", None)
+        if s.get("quote_card"):
+            s["quote_cy"] = 0.52                     # 전체 화면 그림 위 가운데 종이 카드
+    cta = next((s for s in scenes if s.get("role") == "cta"), None)
+    if cta is not None and cover:
+        from core.planners.book_fable import CTA_CAPTION_CY
+        info = " · ".join(x for x in (spec.book_author, spec.book_publisher) if x)
+        cta.update({"source_path": cover, "layout": "book_quote", "caption_center_y": CTA_CAPTION_CY, "media_kind": "cover",
+                    "info_line": info})
+    if scenes:
+        scenes[0].setdefault("book", {})["visuals"] = [
+            f"AI 일러스트 {len(res['images'])}장 생성 ({res['model']}, 프롬프트 {res['engine']})"
+            + (f" · 실패 {len(res['errors'])}장은 앞 장면 그림 재사용" if res["errors"] else ""),
+            f"화풍: {res['style'][:80]}"]
 
 
 def assign_scene_media(spec: JobSpec, job, scenes: List[Dict[str, Any]]) -> None:

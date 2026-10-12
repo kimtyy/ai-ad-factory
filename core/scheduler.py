@@ -132,17 +132,21 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
         # 템플릿: 원문이 있으면 우화, 없으면 책소개로 사유 스토리텔링(책소개가 충분할 때), 그것도 없으면 기본 큐레이션
         tpl_req = {"우화": "fable", "사유": "reflect", "기본": "basic"}.get(f.get("템플릿", ""), "")
         title, author, intro, link = f.get("책", ""), f.get("저자", ""), f.get("소개", ""), f.get("링크", "")
+        publisher = f.get("출판사", "")
+        # 시골책방 화면: 씬 1~N-1은 AI 일러스트, 마지막 씬만 표지 → 사진은 표지 한 장만 (자동 수집 표지, '표지: 직접'이면 inbox 첫 사진)
+        common["media_paths"] = list(media[:1]) if f.get("표지") == "직접" else []
         if query and f.get("자동수집", "예") not in ("아니오", "끔"):
             # 책 정보 자동 수집: 카카오·국립중앙도서관(책소개)·쿠팡 파트너스(고화질 표지·제휴 링크). 직접 적은 값이 우선
             from core.book_info import BookInfoError, collect_book
             try:
                 info = collect_book(query, author=author, aladin_link=link, out_dir=os.path.join(STATE_DIR, "books"))
                 title, author = title or info.title, author or info.author
+                publisher = publisher or info.publisher
                 intro, link = intro or info.description, link or info.purchase_link
                 notes.append("📚 책 정보 자동 수집: " + info.summary() + " · 출처 " + ", ".join(info.sources))
                 notes += [f"⚠️ {w}" for w in info.warnings if "키 없음" not in w or not info.sources]
                 if info.cover_path and f.get("표지", "자동") != "직접":
-                    common["media_paths"] = [info.cover_path] + list(media)      # 1번째 = 표지, 나머지(inbox) = 책방 사진
+                    common["media_paths"] = [info.cover_path]
             except BookInfoError as e:
                 need.append(f"책 정보 자동 수집 실패: {e}")
         from core.planners.book import REFLECT_MIN_INFO
@@ -155,10 +159,12 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
             tpl = "basic"
             notes.append("책소개가 짧아 사유 스토리텔링 대신 기본 큐레이션으로 만들었어요")
         if not intro:
-            notes.append("책소개가 없어 제목·사진만으로 대본을 써요 (설명란 '소개:'로 사실을 적어 주면 더 정확해요)")
+            notes.append("책소개가 없어 제목만으로 대본을 써요 (설명란 '소개:'로 사실을 적어 주면 더 정확해요)")
+        if not common["media_paths"] and media:
+            common["media_paths"] = list(media[:1])          # 자동 수집 표지가 없으면 inbox 첫 사진을 표지로
         spec = pipeline.JobSpec(mode="book", name=f.get("책방") or "시골책방", usp=intro, book_title=title,
                                 book_author=author, book_quote=f.get("문장", ""), book_link=link,
-                                book_search_kw=f.get("검색어", ""), book_template=tpl,
+                                book_search_kw=f.get("검색어", ""), book_template=tpl, book_publisher=publisher,
                                 book_photo_count=2 if f.get("책사진") == "2" else 1, **common)
     else:
         items = []
@@ -184,7 +190,8 @@ def spec_from_event(title: Dict[str, str], fields: Dict[str, str], api_key: Opti
             spec = pipeline.JobSpec(mode="commerce", name=f.get("상품", ""), usp=f.get("특징", ""), link=f.get("링크", ""),
                                     **common)
     if not spec.media_paths and not mock:
-        need.append(f"사진폴더: inbox/{folder} 에 사진이 없어요 (설명란 '사진폴더: 폴더이름', 파일 이름 순서 = 씬 순서)")
+        need.append("표지: 책 표지를 찾지 못했어요 (책 제목·ISBN 확인, 또는 inbox 폴더에 표지 사진)" if mode == "book" else
+                    f"사진폴더: inbox/{folder} 에 사진이 없어요 (설명란 '사진폴더: 폴더이름', 파일 이름 순서 = 씬 순서)")
     if need:
         raise SpecError("설명란에 빠진 항목: " + " / ".join(need))
     spec.notes = notes            # 결과 블록에 함께 적을 안내 (자동 수집 출처·템플릿 전환 등)

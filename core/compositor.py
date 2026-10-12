@@ -72,6 +72,7 @@ BOOK_CAPTION_FONT_RATIO = 0.060        # 명조체 자막은 조금 작게 (차�
 QUOTE_CARD_X = (0.08, 0.92)
 QUOTE_CARD_CY = 0.680                  # 인용 씬: 위로 줄인 표지 카드 아래 (쇼츠 하단 UI 위)
 QUOTE_FONT_RATIO = 0.052
+INFO_LINE_CY = 0.575                   # 책 공개 장면: 위로 줄인 표지 카드(24.5~55%) 바로 아래 저자·출판사
 HOOK_SOLO_SEC = 1.5              # hook_sec 정보가 없을 때 후킹 단독 노출 시간 (asset_generator.HOOK_SOLO_SEC와 동일)
 
 
@@ -581,6 +582,21 @@ class AdCompositor:
                       font=src_font, fill=BOOK_ACCENT + (255,))
         return layer
 
+    def render_info_line(self, text: str, width: int, height: int, cy: float = INFO_LINE_CY) -> Image.Image:
+        """책 공개 장면: 표지 카드 아래 작은 책 정보 (저자 · 출판사), 명조체 흰 글씨 + 그림자"""
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        if not (text or "").strip():
+            return layer
+        font = ImageFont.truetype(self.serif_font_path, int(width * 0.034))
+        draw = ImageDraw.Draw(layer)
+        bb = draw.textbbox((0, 0), text, font=font)
+        x, y = (width - (bb[2] - bb[0])) // 2 - bb[0], int(height * cy) - (bb[3] - bb[1]) // 2 - bb[1]
+        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).text((x + 2, y + 3), text, font=font, fill=(0, 0, 0, 220))
+        layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(3)))
+        draw.text((x, y), text, font=font, fill=(255, 250, 240, 255))
+        return layer
+
     def render_disclosure(self, text: str, width: int, height: int) -> Image.Image:
         """제휴 광고 표시 레이어: 위쪽 가운데 작은 글씨(반투명 흰색 + 얇은 외곽선), 폭 넘으면 2줄"""
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -913,13 +929,15 @@ class AdCompositor:
                             mode=mode,
                             center_y=item.get("caption_center_y") or (BUNDLE_CAPTION_CY if bars else None)
                         )
-                        if brand or disclosure or bars or label or item.get("quote_card"):
+                        if brand or disclosure or bars or label or item.get("quote_card") or item.get("info_line"):
                             merged = Image.fromarray(overlay_img_arr).convert("RGBA")
                             if label:
                                 key = ("label", w, h)
                                 if key not in watermark_cache:
                                     watermark_cache[key] = self.render_book_label(label, w, h)
                                 merged.alpha_composite(watermark_cache[key])
+                            if item.get("info_line"):
+                                merged.alpha_composite(self.render_info_line(item["info_line"], w, h))
                             if item.get("quote_card"):
                                 merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h,
                                                                               cy=item.get("quote_cy"),
