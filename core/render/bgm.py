@@ -54,8 +54,14 @@ def list_tracks(bgm_dir: Optional[str] = None) -> List[str]:
     bgm_dir = bgm_dir or BGM_DIR          # 호출 시점의 폴더 (기본값에 경로를 묶어 두면 바꿔도 반영 안 됨)
     if not os.path.isdir(bgm_dir):
         return []
-    return sorted(os.path.join(bgm_dir, f) for f in os.listdir(bgm_dir)
-                  if f.lower().endswith(BGM_EXTS) and not f.startswith("."))
+    files = sorted(f for f in os.listdir(bgm_dir) if f.lower().endswith(BGM_EXTS) and not f.startswith("."))
+    # 같은 곡의 원본(.wav)과 배포용 압축본(.mp3)이 같이 있으면 한 곡으로 (원본 우선: 로컬은 wav, 클라우드는 git에 올린 mp3)
+    best = {}
+    for f in files:
+        key = os.path.splitext(f)[0].strip().lower()
+        if key not in best or (f.lower().endswith(".wav") and not best[key].lower().endswith(".wav")):
+            best[key] = f
+    return sorted(os.path.join(bgm_dir, f) for f in best.values())
 
 
 def _stem(name: str) -> str:

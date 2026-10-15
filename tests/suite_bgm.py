@@ -243,4 +243,11 @@ finally:
         shutil.rmtree(wd, ignore_errors=True)
 
 shutil.rmtree(work, ignore_errors=True)
+# 원본 wav + 배포용 mp3가 같이 있어도 한 곡 (원본 우선), mp3만 있으면 mp3
+_dd = tmp("bgm_dedupe_")
+for _n in ("Song_1-2.wav", "Song_1-2.mp3", "Only_2-2.mp3", ".hidden.mp3"):
+    open(os.path.join(_dd, _n), "wb").write(b"x")
+_lt = [os.path.basename(t) for t in bgm.list_tracks(_dd)]
+check(_lt == ["Only_2-2.mp3", "Song_1-2.wav"], f"같은 곡의 wav·mp3는 한 곡으로 (원본 우선) {_lt}")
+
 finish(fails)
