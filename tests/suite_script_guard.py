@@ -272,4 +272,11 @@ n_daebak = sum(s_["voiceover"].count("대박") for s_ in rp[:-1])
 for s_ in rp:
     print(f"     감탄사 재현 씬{s_['scene_index']}: {s_['voiceover']}")
 check(n_daebak == 1 and all(s_["caption"] == s_["subtitle"] == s_["voiceover"] for s_ in rp[:-1]), f"기획 결과: '대박' 4회 → 1회 (자막도 동기화)")
+# 숙소 대본 비문: 조건절 겹침·숙소를 식당에 빗댄 은유는 걸리고, 정상 문장은 통과
+from core.script_guard import find_banned_style as _fbs
+check(_fbs("배고프면 방 문만 나서면 식탁이 기다려요.") and _fbs("물놀이 뒤 식탁까지, 머무는 곳이 곧 식당이에요.")
+      and not _fbs("따뜻한 물에 몸 녹이고 저녁까지 그대로 머물러요.") and not _fbs("더운 날엔 이 물빛이 정답이에요.")
+      and not _fbs("비 오는 날엔 객실에서 쉬어요."),
+      "대본 가드: '~면 ~면' 조건절 겹침·'머무는 곳이 곧 식당' 은유 차단, 정상 문장은 통과")
+
 finish(fails)
