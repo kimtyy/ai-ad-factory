@@ -220,9 +220,12 @@ try:
     final = at.session_state.final_video_path
     check(not at.exception and bool(final) and os.path.exists(final), "렌더 완료 (로컬 저장)")
     if final and os.path.exists(final):
+        def _cover_offset():          # 0초 커버(완성 후 앞에 붙는 정지 클립)만큼 본편이 뒤로 밀림
+            from core.mode_policy import INTRO_COVER_SEC, intro_cover_enabled
+            return INTRO_COVER_SEC if intro_cover_enabled() else 0.0
         q_start = sum(probe(os.path.join(os.path.dirname(final), "..", "assets", f"scene_0{i}.mp3"))["duration"] or 0 for i in range(1, 4))
         png = os.path.join(work, "q.png")
-        subprocess.run([ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{q_start + 1.5:.2f}", "-i", final, "-frames:v", "1", png], check=True)
+        subprocess.run([ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{q_start + 2.0 + _cover_offset():.2f}", "-i", final, "-frames:v", "1", png], check=True)
         f = np.array(Image.open(png).convert("RGB")).astype(int)
         fh, fw = f.shape[:2]
         lp, qp = f[int(fh * BOOK_LABEL_CY), int(fw * 0.2)], f[int(fh * 0.52), int(fw * 0.1)]   # 인용 카드: 전체 화면 그림 위 가운데

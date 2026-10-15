@@ -140,10 +140,14 @@ try:
     check(at.radio(key="lf_pick") is not None, "후보 선택 라디오")
 
     # ---- 3. 렌더 → 완성본
+    def _cover_sec():
+        from core.mode_policy import INTRO_COVER_SEC, intro_cover_enabled
+        return INTRO_COVER_SEC if intro_cover_enabled() else 0.0
+
     at.button(key="lf_render_btn").click().run()
     r = at.session_state.lf_render
-    check(not r.get("error") and os.path.exists(r["path"]) and abs(r["duration"] - (cand.window_sec + 3.0)) < 0.2,
-          f"쇼츠 렌더 완료: {r.get('duration')}초 = 창 {cand.window_sec}s + CTA 3s ({r.get('error', '')})")
+    check(not r.get("error") and os.path.exists(r["path"]) and abs(r["duration"] - (cand.window_sec + 3.0 + _cover_sec())) < 0.2,
+          f"쇼츠 렌더 완료: {r.get('duration')}초 = 창 {cand.window_sec}s + CTA 3s + 0초 커버 {_cover_sec()}s ({r.get('error', '')})")
     check(99 in calls["voice"], "CTA 음성 생성이 호출됨")
     check(any("완성본" in m.value for m in at.markdown) and not at.exception, "완성본 섹션 표시")
 
