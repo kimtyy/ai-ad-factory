@@ -120,8 +120,8 @@ check("3자 큐레이터" in sys_inst and "TPO" in sys_inst and "팜플렛 낭�
       and "금지 (개조식 단문)" in sys_inst and "근데 진짜 대박인 건" not in sys_inst and "추임새 의무" not in sys_inst
       and "사진에 실제로 보이는 공간만 묘사하세요" not in sys_inst and "(~됨, ~임" not in sys_inst,
       "프롬프트: 3자 큐레이터·TPO 구어체 + 브로슈어 낭독·홍보 어미·개조식 금지 + 판에 박힌 패턴 엄격 금지 (예전 추임새 의무 삭제)")
-check('"story"' in user_prompt and "문장 하나씩 순서대로 씬 1~" in user_prompt and "쌀쌀한 날엔 통유리 실내 풀이 정답이에요" in user_prompt,
-      "프롬프트: 전체 독백(story) 먼저 → 씬별 분할, 이어지는 예시")
+check('"story"' in user_prompt and "문장 하나씩 순서대로 씬 1~" in user_prompt and "시청자 상황·기분 짚기" in user_prompt and "체크인 직후 수영장으로 직행" not in user_prompt,
+      "프롬프트: 전체 독백(story) 먼저 → 씬별 분할, 구조만 제시(예시 문장 복사 방지)")
 check("hook_title을 먼저 읽고" in user_prompt, "프롬프트: 씬 1 = 후킹 먼저 읽고 서브 문장 이어 읽기 안내")
 check("침대 추가" not in sb[4]["voiceover"] and not sb[4]["voiceover"].endswith("보!"), f"씬5 '침대 추가' 차단 + 잘림 없음: {sb[4]['voiceover']}")
 check("레스토랑" in sb[5]["voiceover"], f"씬6 비전 확인 레스토랑 대사 유지: {sb[5]['voiceover']}")
@@ -278,5 +278,9 @@ check(_fbs("배고프면 방 문만 나서면 식탁이 기다려요.") and _fbs
       and not _fbs("따뜻한 물에 몸 녹이고 저녁까지 그대로 머물러요.") and not _fbs("더운 날엔 이 물빛이 정답이에요.")
       and not _fbs("비 오는 날엔 객실에서 쉬어요."),
       "대본 가드: '~면 ~면' 조건절 겹침·'머무는 곳이 곧 식당' 은유 차단, 정상 문장은 통과")
+
+check(all(_fbs(t) for t in ("객실에서 바라보는 풍경이 예술이죠.", "창밖 바다와 마주하며 힐링의 시간이에요.", "특별한 바베큐 경험이 기다리고 있어요."))
+      and not _fbs("자쿠지에 몸 담그면 스트레스가 싹 녹아요."),
+      "대본 가드: '힐링의 시간'·'예술이죠'·'특별한 ~ 경험이 기다려요' 상투구 차단, 구체적 문장은 통과")
 
 finish(fails)
