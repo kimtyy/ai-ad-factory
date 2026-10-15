@@ -34,6 +34,31 @@ ENCODER_ARGS = {
     "libx264": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
 }
 _encoder_cache: Optional[str] = None
+LOW_MEM_X264 = ["-c:v", "libx264", "-preset", "superfast", "-crf", "21",
+                "-x264-params", "rc-lookahead=0:bframes=0:ref=1:sync-lookahead=0:threads=2"]
+
+
+def low_memory() -> bool:
+    """메모리가 작은 환경(Streamlit Cloud 약 1GB 등)인지: RENDER_LOW_MEMORY=1/0 으로 강제, 기본은 컨테이너 메모리 한도 2.5GB 이하면 켬"""
+    forced = os.getenv("RENDER_LOW_MEMORY", "").strip()
+    if forced in ("0", "1"):
+        return forced == "1"
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            if raw.isdigit() and int(raw) < 2.5 * 1024 ** 3:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def encoder_args(enc: str) -> List[str]:
+    """인코더별 인자. 저메모리 환경의 libx264는 lookahead·B프레임을 꺼 1080x1920에서도 수백 MB 안에 머문다 (용량은 다소 커짐)"""
+    if enc == "libx264" and low_memory():
+        return list(LOW_MEM_X264)
+    return list(ENCODER_ARGS[enc])
 
 
 class FFmpegAssembleError(RuntimeError):
@@ -212,91 +237,139 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             card_sec = float(brand.end_card.duration_sec) + xfade
     starts, total = build_timeline([s["dur"] for s in scenes], xfade, card_sec)
 
-    # ---------------------------------------------------------------- 2. filter_complex
-    inputs: List[str] = []
-    filters: List[str] = []
-    n_in = 0
+    # ---------------------------------------------------------------- 2. 씬 단위 스트리밍 조립 (메모리 일정)
+    # 모든 씬을 한 filter_complex에 넣으면 ffmpeg가 뒤쪽 씬까지 미리 디코딩해 프레임이 쌓인다 (8씬 1080x1920에서 3GB 이상,
+    # Streamlit Cloud 1GB 한도 초과). 씬을 하나씩 raw 프레임으로 풀어 파이썬에서 크로스페이드만 섞고 인코더로 흘려 보낸다:
+    # 동시에 메모리에 있는 프레임은 씬 1개 + 겹침 구간(약 8프레임)뿐이다. 화면(오버레이·페이드·전환)은 이전과 같다.
+    import numpy as np
 
-    def add_input(args: List[str]) -> int:
-        nonlocal n_in
-        inputs.extend(args)
-        n_in += 1
-        return n_in - 1
-
-    vlabels = []
+    units: List[Dict[str, Any]] = []
     for i, sc in enumerate(scenes):
-        vi = add_input(["-i", sc["video"]])
-        d = sc["dur"]
-        filters.append(f"[{vi}:v]fps={fps},scale={W}:{H}:flags=bicubic,setsar=1,format=yuv420p,"
-                       f"tpad=stop_mode=clone:stop_duration={d + 1:.3f},trim=duration={d:.3f},setpts=PTS-STARTPTS[v{i}b]")
-        cur = f"v{i}b"
-        for k, (png, s, e) in enumerate(sc["pngs"]):
-            pi = add_input(["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", png])
-            nxt = f"v{i}o{k}"
-            filters.append(f"[{cur}][{pi}:v]overlay=0:0:enable='between(t,{s:.3f},{e - 0.0005:.4f})':format=auto:eof_action=pass[{nxt}]")
-            cur = nxt
         is_final_clip = i == len(scenes) - 1 and not card_png
-        tail = f",fade=t=out:st={d - 0.4:.3f}:d=0.4" if is_final_clip else ""
-        filters.append(f"[{cur}]format=yuv420p,settb=AVTB,fps={fps}{tail}[v{i}]")   # xfade는 고정 프레임레이트 필요 (settb가 지움)
-        vlabels.append((f"v{i}", d))
+        units.append({"kind": "scene", "sc": sc, "dur": sc["dur"], "fade_out": is_final_clip})
     if card_png:
-        ci = add_input(["-loop", "1", "-framerate", str(fps), "-t", f"{card_sec:.3f}", "-i", card_png])
-        filters.append(f"[{ci}:v]scale={W}:{H},setsar=1,format=yuv420p,settb=AVTB,fps={fps},fade=t=out:st={card_sec - 0.4:.3f}:d=0.4[vcard]")
-        vlabels.append(("vcard", card_sec))
+        units.append({"kind": "card", "png": card_png, "dur": card_sec, "fade_out": True})
+    X = max(1, int(round(xfade * fps)))
 
-    acc, acc_dur = vlabels[0]
-    for j, (lab, d) in enumerate(vlabels[1:], 1):
-        out = f"x{j}"
-        filters.append(f"[{acc}][{lab}]xfade=transition=fade:duration={xfade:.3f}:offset={acc_dur - xfade:.3f}[{out}]")
-        acc, acc_dur = out, acc_dur + d - xfade
-    filters.append(f"[{acc}]trim=duration={total:.3f},setpts=PTS-STARTPTS[vout]")
+    def unit_cmd(u: Dict[str, Any]) -> List[str]:
+        d = u["dur"]
+        if u["kind"] == "card":
+            cmd = ["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", u["png"]]
+            chain = f"[0:v]scale={W}:{H},setsar=1,format=yuv420p,settb=AVTB,fps={fps},fade=t=out:st={d - 0.4:.3f}:d=0.4[vo]"
+            return cmd + ["-filter_complex", chain, "-map", "[vo]"]
+        sc = u["sc"]
+        cmd = ["-i", sc["video"]]
+        fl = [f"[0:v]fps={fps},scale={W}:{H}:flags=bicubic:out_range=tv,setsar=1,format=yuv420p,"   # yuvj(풀레인지)도 tv로 정규화
+              f"tpad=stop_mode=clone:stop_duration={d + 1:.3f},trim=duration={d:.3f},setpts=PTS-STARTPTS[b0]"]
+        cur = "b0"
+        for k, (png, s_, e_) in enumerate(sc["pngs"]):
+            cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", png]
+            nxt = f"o{k}"
+            fl.append(f"[{cur}][{k + 1}:v]overlay=0:0:enable='between(t,{s_:.3f},{e_ - 0.0005:.4f})':format=auto:eof_action=pass[{nxt}]")
+            cur = nxt
+        tail = f",fade=t=out:st={d - 0.4:.3f}:d=0.4" if u["fade_out"] else ""
+        fl.append(f"[{cur}]format=yuv420p,settb=AVTB,fps={fps}{tail}[vo]")
+        return cmd + ["-filter_complex", ";".join(fl), "-map", "[vo]"]
 
-    # 오디오: 각 씬의 타임라인 슬롯 길이에 맞춰 패딩 및 트림 후 순차(concat) 합성
-    # (씬 간 음성이 절대 겹치지 않고 정확히 씬 타임라인에 맞춰 순차 연결)
-    slot_durs = [
-        (sc["dur"] - xfade) if (i < len(scenes) - 1 or card_png) else sc["dur"]
-        for i, sc in enumerate(scenes)
-    ]
+    frame_bytes = W * H * 3 // 2
+
+    def scene_frames(u: Dict[str, Any], n_frames: int, tag: str):
+        """씬 하나를 raw yuv420p 프레임으로 (n_frames개 고정: 모자라면 마지막 프레임 반복)"""
+        err_path = os.path.join(work, f"unit_{tag}.err")
+        with open(err_path, "w", encoding="utf-8") as errf:
+            proc = subprocess.Popen([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_threads", "1",
+                                     "-filter_complex_threads", "1", *unit_cmd(u),
+                                     "-frames:v", str(n_frames), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
+                                    stdout=subprocess.PIPE, stderr=errf)
+            last = None
+            try:
+                for _ in range(n_frames):
+                    buf = proc.stdout.read(frame_bytes)
+                    if len(buf) < frame_bytes:
+                        if last is None:
+                            raise FFmpegAssembleError(f"씬 디코딩 실패({tag}): "
+                                                      + open(err_path, encoding="utf-8", errors="ignore").read()[-300:])
+                        buf = last
+                    last = buf
+                    yield buf
+            finally:
+                proc.stdout.close()
+                try:
+                    proc.wait(timeout=30)
+                except Exception:
+                    proc.kill()
+
+    def blend(a: bytes, b: bytes, k: int) -> bytes:
+        w = int(256 * (k + 1) / (X + 1))
+        x = np.frombuffer(a, np.uint8).astype(np.uint16)
+        y = np.frombuffer(b, np.uint8).astype(np.uint16)
+        return ((x * (256 - w) + y * w) >> 8).astype(np.uint8).tobytes()
+
+    def stream_video(sink) -> None:
+        prev_tail: List[bytes] = []
+        for i, u in enumerate(units):
+            n = max(2, int(round(u["dur"] * fps)))
+            x_in = min(X, n // 2, len(prev_tail)) if i > 0 else 0
+            x_out = min(X, n // 2) if i < len(units) - 1 else 0
+            gen = scene_frames(u, n, str(i))
+            for k in range(x_in):
+                sink.write(blend(prev_tail[k], next(gen), k))
+            for _ in range(n - x_in - x_out):
+                sink.write(next(gen))
+            prev_tail = [next(gen) for _ in range(x_out)]
+            for _ in gen:                    # 남은 프레임 소진 (프로세스 정리)
+                pass
+
+    # 오디오: 각 씬의 타임라인 슬롯 길이에 맞춰 패딩 및 트림 후 순차(concat) 합성 (씬 간 음성이 겹치지 않음)
+    slot_durs = [(sc["dur"] - xfade) if (i < len(scenes) - 1 or card_png) else sc["dur"] for i, sc in enumerate(scenes)]
+    a_inputs: List[str] = []
+    a_filters: List[str] = []
     alabels = []
     for i, sc in enumerate(scenes):
-        ai = add_input(["-i", sc["audio"]])
+        a_inputs += ["-i", sc["audio"]]
         slot_d = max(0.1, slot_durs[i])
-        filters.append(
-            f"[{ai}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"apad=whole_dur={slot_d:.3f},atrim=duration={slot_d:.3f}[aslot{i}]"
-        )
+        a_filters.append(f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                         f"apad=whole_dur={slot_d:.3f},atrim=duration={slot_d:.3f}[aslot{i}]")
         alabels.append(f"[aslot{i}]")
-
     if card_png:
-        filters.append(
-            f"anullsrc=r=44100:cl=stereo,atrim=duration={card_sec:.3f}[acard]"
-        )
+        a_filters.append(f"anullsrc=r=44100:cl=stereo,atrim=duration={card_sec:.3f}[acard]")
         alabels.append("[acard]")
-
-    filters.append(
-        f"{''.join(alabels)}concat=n={len(alabels)}:v=0:a=1[aout]"
-    )
-
-    script = os.path.join(work, "graph.txt")
-    with open(script, "w", encoding="utf-8") as f:
-        f.write(";\n".join(filters))
+    a_filters.append(f"{''.join(alabels)}concat=n={len(alabels)}:v=0:a=1[aout]")
+    audio_wav = os.path.join(work, "audio.wav")
+    ares = subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", *a_inputs, "-filter_complex", ";".join(a_filters),
+                           "-map", "[aout]", "-c:a", "pcm_s16le", audio_wav], capture_output=True, text=True,
+                          encoding="utf-8", errors="ignore")
+    if ares.returncode != 0 or not os.path.exists(audio_wav):
+        raise FFmpegAssembleError("오디오 조립 실패: " + (ares.stderr or "")[-400:])
 
     # ---------------------------------------------------------------- 3. 인코딩 (하드웨어 → 실패 시 libx264)
     encoder = pick_encoder()
     tried = []
     for enc in dict.fromkeys([encoder, "libx264"]):
-        cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", *inputs, "-/filter_complex", script,
-               "-map", "[vout]", "-map", "[aout]", *ENCODER_ARGS[enc], "-force_key_frames", "0",   # 시각 0 = IDR (커버 프레임)
+        cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", "2",
+               "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", "-i", audio_wav,
+               "-map", "0:v", "-map", "1:a", *encoder_args(enc), "-force_key_frames", "0",   # 시각 0 = IDR (커버 프레임)
                "-pix_fmt", "yuv420p", "-r", str(fps),
                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", f"{total:.3f}", out_path]
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
-        if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+        err_path = os.path.join(work, f"enc_{enc}.err")
+        with open(err_path, "w", encoding="utf-8") as errf:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
+            try:
+                stream_video(proc.stdin)
+            except (BrokenPipeError, OSError):
+                pass                          # 인코더가 먼저 종료(오류): 아래에서 반환 코드로 판단
+            finally:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+            rc = proc.wait()
+        err_txt = open(err_path, encoding="utf-8", errors="ignore").read()
+        if rc == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
             logger.info(f"ffmpeg 조립 완료 ({enc}, {len(scenes)}씬{' + 엔딩 카드' if card_png else ''}, {total:.2f}초 영상): "
                         f"{time.time() - t0:.1f}초 → {out_path}")
             shutil.rmtree(work, ignore_errors=True)
             return out_path
-        with open(os.path.join(work, f"fail_{enc}.log"), "w", encoding="utf-8") as f:     # 실패 시 원인 확인용 (작업 폴더에 남김)
-            f.write(subprocess.list2cmdline(cmd) + "\n\n" + (res.stderr or ""))
-        tried.append(f"{enc}: {(res.stderr or '')[-400:]}")
-        logger.warning(f"ffmpeg 조립 실패 ({enc}) → 다음 인코더 시도: {(res.stderr or '')[-300:]}")
+        tried.append(f"{enc}: {err_txt[-400:]}")
+        logger.warning(f"ffmpeg 조립 실패 ({enc}) → 다음 인코더 시도: {err_txt[-300:]}")
     raise FFmpegAssembleError("ffmpeg 조립 실패: " + " | ".join(tried))
