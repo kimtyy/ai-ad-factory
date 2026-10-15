@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger("ad_factory.book_info")
 
@@ -211,8 +211,8 @@ def _download(url: str, out_path: str) -> Optional[tuple]:
         r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200 or len(r.content) < 500:
             return None
-        with Image.open(io.BytesIO(r.content)) as im:
-            im = trim_margins(im.convert("RGB"))         # 쇼핑몰 정사각 이미지의 흰 여백 → 표지만
+        with Image.open(io.BytesIO(r.content)) as source:
+            im = trim_margins(ImageOps.exif_transpose(source).convert("RGB"))  # EXIF 보정 후 흰 여백 → 표지만
             im.save(out_path, "JPEG", quality=95)
             return im.size
     except Exception as e:

@@ -15,16 +15,17 @@ from typing import Any, Dict, List, Optional
 from core.llm import script_llm_ready
 from core.radar.hints import HookHints, copies_reference
 from core.script_guard import (COPY_TONE_RULES, VO_HARD_MAX, complete_sentence, diversify_exclamations,
-                               find_banned_style,
+                               find_banned_style, find_concept_drift, repeated_line_issues,
                                find_promo_tone, find_unsupported_claim, find_unsupported_spec, is_hook_echo,
                                shorten_line, strip_brochure_words, to_haeyo)
+from core.mode_policy import COMMERCE_POLICY, clamp_line_to_policy, create_length_violation_checker
 
 logger = logging.getLogger("ad_factory.planners.commerce")
 
 # 쿠팡 파트너스 고지 문구: 영상 화면용(짧게) / 영상 설명·고정 댓글용(쿠팡 안내 원문)
 COUPANG_DISCLOSURE = "쿠팡 파트너스 활동의 일환으로 일정액의 수수료를 제공받습니다"
 COUPANG_DISCLOSURE_FULL = "이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
-COMMERCE_CTA = "제품 정보는 고정 댓글 링크에 남겨 둘게요!"
+COMMERCE_CTA = "궁금하면 고정 댓글 링크부터 확인해 봐요!"   # 행동 1개 + 이유 1개 (이유: 궁금하면)
 DEFAULT_HOOK = "이거 써 보셨어요?"
 
 MIN_SCENES = 4     # 후킹 + 특징 2 + CTA (사진이 적으면 같은 사진을 다른 카메라 모션으로 재사용)
@@ -62,7 +63,7 @@ def _scene(i: int, role: str, text: str, hook: str = "") -> Dict[str, Any]:
     return {
         "scene_index": i + 1, "scene_number": i + 1, "role": role,
         "target_visual_role": role, "visual_keywords": [ROLE_LABELS_KO.get(role, role)],
-        "duration_sec": 2.5, "hook_title": hook, "voiceover": text, "subtitle": caption, "caption": caption,
+        "duration_sec": COMMERCE_POLICY.default_scene_sec, "hook_title": hook, "voiceover": text, "subtitle": caption, "caption": caption,
         "visual_description": ROLE_LABELS_KO.get(role, role), "image_prompt_en": "",
         "video_motion_prompt_en": motions[i % len(motions)], "focus_bottom": False,
     }
@@ -184,6 +185,7 @@ def plan_commerce_storyboard(
     output_plan_path: Optional[str] = None,
     hook_hints: Optional[HookHints] = None,
     product_boxes: Optional[Dict[str, Any]] = None,
+    core_concept: str = "",
 ) -> List[Dict[str, Any]]:
     """
     쇼핑 제휴 콘티. 씬 수 = 사진·영상 수 (MIN_SCENES~MAX_SCENES, 부족하면 같은 사진을 앵글을 바꿔 재사용).
@@ -206,7 +208,7 @@ def plan_commerce_storyboard(
     llm, llm_story = None, ""
     if not mock and script_llm_ready(api_key):   # Gemini 키 없이 Claude·GPT 키만 있어도 대본 엔진 사용
         try:
-            llm = _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints)
+            llm = _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints, core_concept=core_concept)
             llm_story = getattr(llm, "story", "")
         except Exception as e:
             logger.warning(f"쇼핑 플래너 Gemini 호출 실패, 템플릿 대사로 대체: {e}")
@@ -220,15 +222,16 @@ def plan_commerce_storyboard(
             continue
         fallback = lambda: _template_line(role, used_templates)   # noqa: E731 (필요할 때만 하나씩 꺼냄)
         text = to_haeyo(str(item.get("voiceover") or "").strip()) or fallback()
-        for check, label in ((lambda t: _claim(t, usp), "근거 없는 주장"), (find_promo_tone, "홍보 어투")):
+        for check, label in ((lambda t: _claim(t, usp), "근거 없는 주장"), (find_promo_tone, "홍보 어투"),
+                             (lambda t: find_concept_drift(t, core_concept, usp), "1컨셉 이탈")):
             hit = check(text)
             if hit:
                 logger.info(f"[{label} 차단] 씬 {i + 1}: '{hit}' (대사: {text}) → 템플릿 대사")
                 text = fallback()
         hook = ""
         if i == 0:
-            hook = str((llm[0].get("hook_title") if llm else "") or "").strip() or DEFAULT_HOOK
-            if _claim(hook, usp) or find_promo_tone(hook):
+            hook = to_haeyo(str((llm[0].get("hook_title") if llm else "") or "").strip()) or DEFAULT_HOOK   # 훅도 합쇼체 금지
+            if _claim(hook, usp) or find_promo_tone(hook) or find_banned_style(hook):
                 hook = DEFAULT_HOOK
             if hook_hints and copies_reference(hook, hook_hints):
                 hook = DEFAULT_HOOK
@@ -245,7 +248,17 @@ def plan_commerce_storyboard(
         if find_banned_style(done):
             logger.info(f"[판에 박힌 패턴 차단] 씬 {i + 1}: {find_banned_style(done)} (대사: {done}) → 템플릿 대사")
             done = fallback()
+        done = clamp_line_to_policy(done, COMMERCE_POLICY)
         scenes.append(_scene(i, role, done, hook))
+
+    # 씬 간 앵무새 반복(훅 포함) 차단: 겹치는 씬은 아직 안 쓴 템플릿 대사로 교체 (씬 1은 훅 비교에서 이미 처리)
+    body_vo = [sc["voiceover"] for sc in scenes[:-1]]
+    for j, why in repeated_line_issues(body_vo, scenes[0].get("hook_title", "") if scenes else "").items():
+        if j == 0:
+            continue
+        new_line = _template_line(scenes[j]["role"], used_templates)
+        logger.info(f"[씬 간 반복 차단] 씬 {j + 1}: {why} (대사: {body_vo[j]}) → '{new_line}'")
+        scenes[j]["voiceover"] = scenes[j]["subtitle"] = scenes[j]["caption"] = new_line
 
     for sc, sm in zip(scenes, scene_media):
         sc.update({"source_path": sm["path"], "shot": sm["shot"], "product_box": sm["box"], "media_kind": sm["kind"]})
@@ -254,6 +267,7 @@ def plan_commerce_storyboard(
 
     if scenes:
         scenes[0]["script_engine"] = getattr(llm, "engine", "") if llm else "template"
+        scenes[0]["core_concept"] = (core_concept or "").strip()
     body = scenes[:-1]
     varied, changes = diversify_exclamations([s["voiceover"] for s in body], reserved=scenes[0]["hook_title"])
     for s, vo in zip(body, varied):
@@ -371,10 +385,10 @@ COMMERCE_SYSTEM = ("당신은 쇼핑 제휴 숏폼(릴스/쇼츠)의 3자 큐레
                    "응답은 JSON만 출력합니다.")
 
 
-def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints=None):
+def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir, hook_hints=None, core_concept=""):
     from core.llm import generate_json, repair_scene_lines
     from core.render.commerce_layout import SHOT_LABELS
-    from core.script_guard import STYLE_REPAIR_RULES, length_rule, script_violation_finder
+    from core.script_guard import STYLE_REPAIR_RULES, line_char_range, script_violation_finder
 
     contents: List[Any] = []
     for i, sm in enumerate(scene_media[:len(roles)]):
@@ -385,10 +399,17 @@ def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir,
     n = len(roles)
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
     persona_rules = COPY_TONE_RULES
+    # 줄당 글자 수는 모드 정책(최대 32자)을 넘기지 않게: 씬이 적어도 한 줄을 길게 늘여 쓰지 않는다 (잘리면 비문이 되므로 처음부터 짧게)
+    _lo, _hi, _, _ = line_char_range(n - 1)
+    _hi = min(_hi, COMMERCE_POLICY.max_chars - 2)
+    _lo = max(18, min(_lo, _hi - 8))
+    line_len_rule = f"각 voiceover는 공백 포함 {_lo}~{_hi}자 한 문장 (최대 {COMMERCE_POLICY.max_chars}자, 한 문장에 한 가지 이야기만)"
+    concept_guide = f"- ★ 확정된 단 하나의 코어 컨셉 (Core Concept): '{core_concept}' (이번 영상 전체를 관통할 메인 혜택/가치)\n" if core_concept else ""
     contents.append(f"""
 [상품 정보]
 - 상품명(판매 페이지 표기): {product_name}
 - 판매 페이지에 적힌 특징(USP, 여기 있는 사실만 근거로 사용): {usp or '(없음 - 사진에 보이는 것만 말하세요)'}
+{concept_guide}
 
 [작성 규칙]
 1. 먼저 사진과 상품명으로 이 상품이 어떤 종류인지 파악하세요. 대사는 반드시 그 상품 종류에 맞는 말이어야 합니다
@@ -397,7 +418,7 @@ def _plan_with_gemini(product_name, usp, roles, scene_media, api_key, thumb_dir,
    부분(전체 모습·기능·디테일·사용 장면)에 대한 이야기여야 합니다. 화면 1:1 매칭: 1번은 전체 소개, 중간은 기능·디테일, 마지막은 실사용·마무리.
    사진이 없는 씬은 기본 구성({role_hint})을 따르세요.
 3. 먼저 3자 큐레이터가 '이런 순간엔 이 제품'을 짚어 주는 이야기(story)를 정확히 {n - 1}개의 완결 문장으로 쓰고,
-   문장 하나씩 씬 1~{n - 1}의 voiceover로 넣으세요. {length_rule(n - 1)}. 해요체 종결 어미로 끝나는 완결 문장.
+   문장 하나씩 씬 1~{n - 1}의 voiceover로 넣으세요. {line_len_rule}. 해요체 종결 어미로 끝나는 완결 문장.
 4. 효능·수치·인증·순위·가격·할인(예: 48시간, 2배, 특허, 1위, 30% 할인)은 위 USP에 그대로 적힌 것만 쓰세요. 없으면 쓰지 마세요.
    지어낸 사용 후기 대신 쓰는 상황(언제·어디서·누구에게)과 사진에 보이는 사실로 이야기하세요.
 5. 상품명 전체를 읽지 말고 '이 히터', '이 제품'처럼 짧게 부르세요. 특수문자/이모지 금지(쉼표·느낌표·물음표만).
@@ -413,7 +434,10 @@ JSON만 출력: {{"story": "...", "scenes": [{{"scene_index": 1, "hook_title": "
     data, engine = generate_json(contents, COMMERCE_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="쇼핑 대본")
     # 판에 박힌 패턴 + 어미 리듬(질문형·감탄형 최소 1개씩, 평서 연속 금지) 위반 줄을 한 번에 다시 쓰게 함
     vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)]         if isinstance(data, dict) else []
-    data, fixes = repair_scene_lines(data, script_violation_finder(vo_lines), COMMERCE_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    hook_line = str(((data.get("scenes") or [{}])[0] or {}).get("hook_title") or "") if isinstance(data, dict) else ""
+    data, fixes = repair_scene_lines(data, create_length_violation_checker(
+        COMMERCE_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line)),
+                                     COMMERCE_SYSTEM, STYLE_REPAIR_RULES, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data

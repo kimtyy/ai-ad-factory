@@ -9,3 +9,8 @@ textColor = "#F8FAFC"
 [server]
 # 스마트폰 영상 업로드 허용 용량 (MB)
 maxUploadSize = 500
+# 클라우드 배포: 브라우저 자동 열기·사용 통계 끔 (Community Cloud는 포트·주소를 자체 관리)
+headless = true
+
+[browser]
+gatherUsageStats = false

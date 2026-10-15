@@ -16,11 +16,25 @@ import subprocess
 import sys
 import time
 
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 # (파일, 설명, 느림 여부)
 SUITES = [
+    ("suite_video_overlay.py", "촬영 영상 직가공: 나레이션 겹침 재배치·9:16 크롭/블러·20% 더킹/음소거·특수문자 자막·HDR/세로", False),
+    ("suite_script_phase2.py", "대본 Phase 2: clamp 비문 방지·조사 보정·1컨셉 연관성/씬 간 반복·훅 해요체·상투구·예시 잔재·CTA 단일 행동", False),
+    ("suite_audio_stt.py", "롱폼 전사 엔진: 가짜 전사기 주입·공용 캐시(적중/무효화/깨짐)·16kHz 추출·긴 문장 분할·지연 임포트·AGPL 금지", False),
+    ("suite_highlight_selector.py", "롱폼 하이라이트 선정: 창 15~22초·총 ≤25초·비겹침 3개·트랙 A/C/B·무음 스냅/마진/틈 클램프·LLM ID만·경고 플래그·음악 휴리스틱", False),
+    ("suite_highlight_render.py", "롱폼 하이라이트 렌더 연결: window 단일 인코딩·창+CTA 길이·CTA 연장/정지·트랙 A/C/B 오디오·자막 상대시간·HDR 창 정규화·선정→렌더", False),
+    ("suite_visual_scorer.py", "시각 품질 스코어러: 선명도·조도·급패닝·흔들림·컷 감점/원천 제외, 후보 창 샘플링, highlight_selector 하드 필터·가중 합산", False),
+    ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
+    ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
+    ("suite_store_fixes.py", "매장 모드 실영상 피드백: 씬 1 본문 단일 자막·독립 커버 thumbnail.jpg·해시태그 단일 소스/업종 가드·첫 댓글 지도 URL 제거", False),
     ("suite_ugc_normalize.py", "스마트폰 영상 정규화 (회전·VFR·HDR·가로·짧은 클립)", False),
     ("suite_job_lazy_folders.py", "작업 폴더 지연 생성 + 빈 폴더 자동 정리", False),
     ("suite_travel_golden7.py", "숙소 7씬 황금 비율 + 비전 슬롯 배정 + BGM 제외", False),
@@ -34,6 +48,7 @@ SUITES = [
     ("suite_llm_router.py", "대본 LLM 자동 백업 (Claude → GPT → Gemini)·요청 형식·가드레일·판에 박힌 패턴 금지·플래너 연결", False),
     ("suite_radar_meta.py", "떡상 레이더 → 업로드 메타데이터 자동 주입 (트렌드 다이제스트·필수 맥락·레이더 태그·표시) + 첫 0.5초 커버", False),
     ("suite_bgm.py", "자체 음원 BGM: 나레이션 32% 덕킹·드롭 구간 시작·페이드·반복·음량 보정·영상 무손실·실패 처리·스위치·완료 표시", False),
+    ("suite_railway.py", "Railway 배포: 컨테이너 스케줄러(캘린더 10분·레이더 07:00)·서버 데이터 가져오기(zip 안전)·리눅스 호환·배포 설정 파일", False),
     ("suite_youtube_upload.py", "썸네일 자동 생성(영상 첫 0.3초) + 유튜브 쇼츠 업로드(썸네일·첫 댓글 패키지·아동용 아님 확인·비공개 댓글 대기열·채널 확인)", False),
     ("suite_app_owner_hybrid.py", "사장님 하이브리드: 영상 소스 관리·네이버 지역 검색 API·사진 기반 매장 특징·기획 연동", False),
     ("suite_owner_planner.py", "사장님(트랙 B) 플래너", False),
@@ -62,7 +77,7 @@ def main(argv=None) -> int:
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", RUN_LIVE_TESTS="1" if args.live else "0")
     selected = [s for s in SUITES if (not args.fast or not s[2]) and (not args.pattern or args.pattern in s[0])]
-    print(f"🧪 회귀 테스트 {len(selected)}개 스위트 ({'LIVE' if args.live else '오프라인'}{', 빠른 모드' if args.fast else ''})\n")
+    print(f"🧪 회귀 테스트 {len(selected)}개 스위트 ({'LIVE' if args.live else '오프라인'}{', 빠른 모드' if args.fast else ''})\n", flush=True)
 
     totals = {"PASS": 0, "FAIL": 0, "SKIP": 0}
     failed_suites = []
@@ -80,16 +95,16 @@ def main(argv=None) -> int:
             failed_suites.append(name)
         mark = "✅" if ok else "❌"
         print(f"{mark} {name:<30} PASS {counts['PASS']:>3}  FAIL {counts['FAIL']:>2}  SKIP {counts['SKIP']:>2}  "
-              f"({time.time() - t0:5.1f}s)  {desc}")
+              f"({time.time() - t0:5.1f}s)  {desc}", flush=True)
         if not ok:
             for line in [l for l in out.splitlines() if l.startswith("FAIL ") or "Error" in l or "Traceback" in l][:8]:
-                print(f"      {line}")
+                print(f"      {line}", flush=True)
 
-    print(f"\n합계: PASS {totals['PASS']} · FAIL {totals['FAIL']} · SKIP {totals['SKIP']} · {time.time() - t_all:.0f}s")
+    print(f"\n합계: PASS {totals['PASS']} · FAIL {totals['FAIL']} · SKIP {totals['SKIP']} · {time.time() - t_all:.0f}s", flush=True)
     if failed_suites:
-        print("실패 스위트: " + ", ".join(failed_suites))
+        print("실패 스위트: " + ", ".join(failed_suites), flush=True)
         return 1
-    print("모든 스위트 통과")
+    print("모든 스위트 통과", flush=True)
     return 0
 
 

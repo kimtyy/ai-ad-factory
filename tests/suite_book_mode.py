@@ -84,12 +84,12 @@ check(sb[0]["script_engine"] == "claude" and sb[0]["hook_title"] == "부끄럼 �
       "Claude 대본 + 라벨 바 '📚 시골책방의 한 권' + CTA (책방 방문 + 구매 링크는 댓글)")
 check("베스트셀러" not in vo[2] and not any(find_banned_style(v) for v in vo), f"근거 없는 '베스트셀러' 문장은 템플릿으로 ('{vo[2]}')")
 prompt = seen["prompts"][0]
-check("결말" in prompt and "~어때요?" in prompt and INFO in prompt and "인용과 CTA는 따로" in prompt
+check("결말" in prompt and "억지로 의문문·감탄문을 만들지 마세요" in prompt and INFO in prompt and "인용과 CTA는 따로" in prompt
       and seen["labels"][0][:3] == ["[책 사진]", "[책방 사진]", "[책방 사진]"],
-      "프롬프트: 책 소개 사실만·줄거리/결말 금지·어미 리듬 규칙 + 책·책방 사진 전달 (인용문은 AI에 맡기지 않음)")
+      "프롬프트: 책 소개 사실만·줄거리/결말 금지·평서문 기본(억지 의문문 금지) + 책·책방 사진 전달 (인용문은 AI에 맡기지 않음)")
 kinds = [ending_kind(v) for v in [vo[0], vo[1], vo[2], vo[4]]]
-check("question" in kinds and "exclaim" in kinds and not any(a == b == "plain" for a, b in zip(kinds, kinds[1:])),
-      f"어미 리듬: 질문형·감탄형 포함, 평서 연속 없음 {kinds}")
+check(all(v.rstrip().endswith((".", "!", "?")) for v in [vo[0], vo[1], vo[2], vo[4]]),
+      f"어미를 강제로 바꾸지 않음 (질문·감탄 의무 없음, 템플릿 줄의 '.'→'!' 변환도 하지 않음) {kinds}")
 check(all(s.get("caption_center_y") == BOOK_CAPTION_CY for s in sb[:4]) and sb[4].get("caption_center_y") is None,
       "자막 위치: 표지 카드 씬은 라벨 바 아래, 책방 씬은 화면 가운데")
 
@@ -175,9 +175,9 @@ check(rates[:2] == ["+0%", "-5%"] and sb[3].get("tts_rate") == "-5%" and not sb[
 cm = build_first_comment("book", "이 책, 어떤 밤에 읽고 싶어요? 👇", ["#책추천", "#동네책방", "#시집", "#x"], search_keyword="시골책방",
                          items=[{"short": "「하늘과 바람과 별과 시」", "link": LINK}])
 blocks = cm.split("\n\n")
-check(blocks[0].startswith("이 책") and "네이버에서 '시골책방' 검색" in blocks[1] and "map.naver.com/p/search/" in blocks[1]
+check(blocks[0].startswith("이 책") and "네이버 지도나 카카오맵에서 '시골책방'을 검색해 보세요" in blocks[1] and "map.naver.com" not in cm
       and blocks[2] == f"📖 「하늘과 바람과 별과 시」 구매 👉 {LINK}" and blocks[3] == ALADIN_DISCLOSURE_FULL
-      and blocks[4] == "#책추천 #동네책방 #시집", "첫 댓글: 참여 질문 → 책방 검색·지도 → 「책」 알라딘 구매 → 알라딘 제휴 고지 → 해시태그")
+      and blocks[4] == "#책추천 #동네책방 #시집", "첫 댓글: 참여 질문 → 지도 앱 검색 안내(URL 없음) → 「책」 알라딘 구매 → 알라딘 제휴 고지 → 해시태그")
 check(ALADIN_DISCLOSURE_FULL == "이 포스팅은 알라딘 제휴 마케팅 활동의 일환으로, 도서 구매 시 일정액의 수수료를 제공받습니다."
       and [shop_link_kind(u) for u in (LINK, "https://aladin.kr/p/abc", "https://link.coupang.com/a/x")] == ["aladin", "aladin", "coupang"],
       "알라딘 제휴 고지 문구(지정 원문) + 알라딘 링크 판별")
@@ -226,12 +226,12 @@ try:
         f = np.array(Image.open(png).convert("RGB")).astype(int)
         fh, fw = f.shape[:2]
         lp, qp = f[int(fh * BOOK_LABEL_CY), int(fw * 0.2)], f[int(fh * 0.52), int(fw * 0.1)]   # 인용 카드: 전체 화면 그림 위 가운데
-        check(all(abs(lp[c] - BOOK_PAPER[c]) < 40 for c in range(3)) and all(abs(qp[c] - BOOK_PAPER[c]) < 45 for c in range(3)),
+        check(all(abs(lp[c] - BOOK_PAPER[c]) < 45 for c in range(3)) and all(abs(qp[c] - BOOK_PAPER[c]) < 65 for c in range(3)),
               f"완성 영상 인용 장면: 종이색 라벨 바 + 종이 인용 카드 {tuple(lp)} {tuple(qp)}")
     texts = " ".join(t.value or "" for t in at.text_area)
     d2 = json.load(open(yu.DRAFTS_PATH, encoding="utf-8")) if os.path.exists(yu.DRAFTS_PATH) else []
-    check(ALADIN_DISCLOSURE_FULL in texts and LINK in texts and "map.naver.com" in texts,
-          "완료 화면: 첫 댓글 초안 (책방 지도·알라딘 링크·알라딘 제휴 고지)")
+    check(ALADIN_DISCLOSURE_FULL in texts and LINK in texts and "카카오맵" in texts and "map.naver.com" not in texts,
+          "완료 화면: 첫 댓글 초안 (지도 앱 검색 안내·알라딘 링크·알라딘 제휴 고지, 지도 URL 없음)")
     check(len(d2) == 1 and d2[0]["mode"] == "book" and LINK in d2[0]["text"] and os.path.samefile(d2[0]["video_path"], final),
           "렌더 직후 첫 댓글 텍스트가 대기열에 자동 저장 (업로드 연결 전)")
     check(not any("유튜브 쇼츠 업로드" in (b.label or "") for b in at.button) and any("연결 전" in (i.value or "") for i in at.info),

@@ -1,10 +1,13 @@
 """
 core/llm/router.py - 대본 생성 LLM 라우터: Claude → OpenAI → Gemini 자동 백업(Fallback)
 
-- 1순위 Claude (anthropic SDK, ANTHROPIC_API_KEY, 모델 ANTHROPIC_MODEL 기본 claude-haiku-5-5)
+- 1순위 Claude (anthropic SDK, ANTHROPIC_API_KEY)
+  · 모델 티어: 최종 대본·나레이션 생성(script) = ANTHROPIC_MODEL_SCRIPT 기본 claude-haiku-5-5(교체 가능),
+    그 밖의 백엔드 작업(파싱·분류·하이라이트 선정·프롬프트 생성) = ANTHROPIC_MODEL 기본 claude-haiku-5-5
+  · effort: script = ANTHROPIC_EFFORT_SCRIPT 기본 low, 백엔드 = ANTHROPIC_EFFORT 기본 low
   ※ 요청하신 Claude 3.5 Haiku(claude-3-5-haiku-20241022)는 2026-02-19 서비스 종료 → 호출하면 매번 오류.
      현행 Haiku인 claude-haiku-5-5(입력 $0.10 / 출력 $0.50 per 1M tokens)를 기본값으로 사용
-- 2순위 OpenAI (openai SDK, OPENAI_API_KEY, 모델 OPENAI_MODEL 기본 gpt-4o-mini)
+- 2순위 OpenAI (openai SDK, OPENAI_API_KEY, 모델 OPENAI_MODEL 기본 gpt-4o)
 - 3순위 Gemini (기존 엔진, GEMINI_API_KEY) - 앞의 둘이 모두 실패하거나 키가 없을 때 마지막 안전망
 - API 오류·잔액 부족·Rate Limit·네트워크·응답 JSON 파싱 실패·안전 거절이면 SDK 재시도 1회 뒤 즉시 다음 엔진으로
 - contents: 기존 Gemini 호출과 같은 형식 (문자열과 PIL 이미지를 순서대로 섞은 리스트) → 엔진별 형식으로 변환
@@ -21,9 +24,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("ad_factory.llm")
 
-DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"            # 백엔드 작업 (파싱·분류·선정)
+DEFAULT_ANTHROPIC_SCRIPT_MODEL = "claude-haiku-5-5"     # 최종 대본·나레이션 (2026-10 비교 결과 Sonnet은 개선 없음 → Haiku. 필요 시 ANTHROPIC_MODEL_SCRIPT로 교체)
+DEFAULT_ANTHROPIC_EFFORT = "low"
+DEFAULT_ANTHROPIC_SCRIPT_EFFORT = "low"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+# 최종 대본/나레이션을 쓰는 호출(purpose) → script 티어. 나머지(매장 특징 요약·1컨셉 제안·하이라이트 선정·씬 이미지 프롬프트 등)는 백엔드 티어
+SCRIPT_PURPOSES = frozenset([
+    "사장님 광고 대본", "쇼핑 대본", "묶음 큐레이션 대본", "숙소 대본", "시골책방 대본", "촬영 영상 직가공 대본",
+    "대본 규칙 보정",           # 규칙 위반 대사를 다시 쓰는 호출도 최종 문장을 만드는 일
+])
+
+
+def tier_for_purpose(purpose: str) -> str:
+    """호출 목적 → 모델 티어 ('script' = 최종 대본/나레이션, 'backend' = 그 외)"""
+    return "script" if (purpose or "").strip() in SCRIPT_PURPOSES else "backend"
 PROVIDER_ORDER = ("claude", "openai", "gemini")
 PROVIDER_LABEL = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}
 IMAGE_MAX_SIDE = 1024          # 이미지는 긴 변 1024px로 줄여 보냄 (토큰·시간 절약, 장면 판단엔 충분)
@@ -70,10 +86,22 @@ def parse_json_text(text: str) -> Any:
 
 
 # ---------------------------------------------------------------- 엔진별 호출
-def _call_claude(contents: List[Any], system: str, temperature: float, max_tokens: int) -> str:
+def claude_model_for(tier: str) -> Tuple[str, str]:
+    """티어 → (Claude 모델, effort). 환경변수로 교체 가능"""
+    if tier == "script":
+        model = (os.getenv("ANTHROPIC_MODEL_SCRIPT") or DEFAULT_ANTHROPIC_SCRIPT_MODEL).strip()
+        effort = (os.getenv("ANTHROPIC_EFFORT_SCRIPT") or DEFAULT_ANTHROPIC_SCRIPT_EFFORT).strip()
+    else:
+        model = (os.getenv("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL).strip()
+        effort = (os.getenv("ANTHROPIC_EFFORT") or DEFAULT_ANTHROPIC_EFFORT).strip()
+    return model, effort
+
+
+def _call_claude(contents: List[Any], system: str, temperature: float, max_tokens: int, tier: str = "backend") -> str:
     import anthropic
     from core.guardrail import validate_model_call
-    model = validate_model_call(os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL).strip(), category="llm")
+    model_name, effort = claude_model_for(tier)
+    model = validate_model_call(model_name, category="llm")
     blocks: List[Dict[str, Any]] = []
     for c in contents:
         if isinstance(c, str):
@@ -82,10 +110,11 @@ def _call_claude(contents: List[Any], system: str, temperature: float, max_token
         elif _is_image(c):
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _image_b64(c)}})
     client = anthropic.Anthropic(max_retries=SDK_RETRIES, timeout=REQUEST_TIMEOUT)
-    # Haiku 5.5: 사고(thinking)는 기본 켜짐·끌 수 없음, 샘플링 값(temperature)은 기본값만 허용 → 보내지 않음. 깊이는 effort로 조절
-    resp = client.messages.create(model=model, max_tokens=max_tokens, system=system,
+    # Haiku 5.5: 사고(thinking) 토큰이 max_tokens에 포함되므로 잘림 방지를 위해 최소 4096 토큰 확보
+    claude_max_tokens = max(max_tokens, 4096)
+    resp = client.messages.create(model=model, max_tokens=claude_max_tokens, system=system,
                                   messages=[{"role": "user", "content": blocks}],
-                                  output_config={"effort": "medium"})
+                                  output_config={"effort": effort})
     if resp.stop_reason == "refusal":
         raise RuntimeError(f"Claude 안전 거절 ({getattr(resp.stop_details, 'category', None)})")
     if resp.stop_reason == "max_tokens":
@@ -96,7 +125,7 @@ def _call_claude(contents: List[Any], system: str, temperature: float, max_token
 def _call_openai(contents: List[Any], system: str, temperature: float, max_tokens: int) -> str:
     import openai
     from core.guardrail import validate_model_call
-    model = validate_model_call(os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL).strip(), category="llm")
+    model = validate_model_call((os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL).strip(), category="llm")
     parts: List[Dict[str, Any]] = []
     for c in contents:
         if isinstance(c, str):
@@ -122,7 +151,7 @@ def _call_gemini(contents: List[Any], system: str, temperature: float, max_token
     from core.guardrail import validate_model_call
     client = genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))   # 변수로 잡아 둬야 호출 중에 닫히지 않음
     res = client.models.generate_content(
-        model=validate_model_call(DEFAULT_GEMINI_MODEL, category="llm"), contents=contents,
+        model=validate_model_call((os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL).strip(), category="llm"), contents=contents,
         config=types.GenerateContentConfig(system_instruction=system, response_mime_type="application/json",
                                            temperature=temperature))
     return res.text
@@ -148,12 +177,15 @@ _overrides: Dict[str, Callable[..., str]] = {}
 
 
 def generate_json(contents: List[Any], system: str, *, temperature: float = 0.6, max_tokens: int = 8000,
-                  gemini_api_key: Optional[str] = None, purpose: str = "대본") -> Tuple[Any, str]:
+                  gemini_api_key: Optional[str] = None, purpose: str = "대본",
+                  tier: Optional[str] = None) -> Tuple[Any, str]:
     """
     → (파싱된 JSON, 실제로 응답한 엔진 'claude'|'openai'|'gemini')
     Claude부터 차례로 시도, 실패하면 사유를 남기고 다음 엔진. 전부 실패하면 LLMUnavailable
+    tier: 'script'(최종 대본·나레이션) | 'backend'(그 외). 생략하면 purpose로 판단(SCRIPT_PURPOSES)
     """
     errors: List[str] = []
+    tier = tier or tier_for_purpose(purpose)
     providers = available_providers(gemini_api_key, contents)
     if not providers:
         raise LLMUnavailable(["ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 가 모두 비어 있음"])
@@ -162,7 +194,7 @@ def generate_json(contents: List[Any], system: str, *, temperature: float = 0.6,
             if p in _overrides:
                 text = _overrides[p](contents, system, temperature, max_tokens)
             elif p == "claude":
-                text = _call_claude(contents, system, temperature, max_tokens)
+                text = _call_claude(contents, system, temperature, max_tokens, tier)
             elif p == "openai":
                 text = _call_openai(contents, system, temperature, max_tokens)
             else:
@@ -171,7 +203,8 @@ def generate_json(contents: List[Any], system: str, *, temperature: float = 0.6,
             if errors:
                 logger.warning(f"[{purpose}] {PROVIDER_LABEL[p]}로 자동 전환해 생성 (앞선 실패: {' | '.join(errors)})")
             else:
-                logger.info(f"[{purpose}] {PROVIDER_LABEL[p]}로 생성")
+                logger.info(f"[{purpose}] {PROVIDER_LABEL[p]}로 생성"
+                            + (f" ({claude_model_for(tier)[0]}, {tier})" if p == "claude" else ""))
             return data, p
         except Exception as e:      # 엔진별 API 오류(잔액 부족·Rate Limit·5xx·네트워크)·거절·JSON 오류 → 다음 엔진
             reason = f"{PROVIDER_LABEL[p]}: {type(e).__name__}: {str(e)[:160]}"
@@ -199,7 +232,7 @@ def repair_scene_lines(data: Any, find_violation: Callable[[str], Optional[str]]
               f"[고칠 대사]\n{listing}\n\n"
               'JSON만 출력: {"fixes": [{"scene_index": 1, "voiceover": "..."}]}')
     try:
-        fixed, provider = generate_json([prompt], system, temperature=0.5, max_tokens=2000, gemini_api_key=gemini_api_key,
+        fixed, provider = generate_json([prompt], system, temperature=0.5, max_tokens=4000, gemini_api_key=gemini_api_key,
                                         purpose="대본 규칙 보정")
     except Exception as e:
         return data, [f"규칙 보정 실패: {e}"]

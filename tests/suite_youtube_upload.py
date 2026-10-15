@@ -60,9 +60,11 @@ Image.fromarray(np.random.default_rng(0).integers(0, 255, (1920, 1080, 3), dtype
 up = yu.thumbnail_for_upload(noisy)
 small = os.path.join(work, "small_thumb.png")
 Image.fromarray(np.zeros((1920, 1080, 3), dtype=np.uint8)).save(small)
-check(os.path.getsize(noisy) > yu.THUMB_MAX_BYTES and up.endswith("_upload.jpg") and os.path.getsize(up) <= yu.THUMB_MAX_BYTES
-      and Image.open(up).size == (1080, 1920) and yu.thumbnail_for_upload(small) == small,
-      "썸네일 2MB 한도: 큰 PNG는 같은 크기 JPEG 사본으로 등록 (원본 PNG 유지)")
+up_small = yu.thumbnail_for_upload(small)
+check(os.path.getsize(noisy) > yu.THUMB_MAX_BYTES and os.path.basename(up) == "thumbnail.jpg" and os.path.getsize(up) <= yu.THUMB_MAX_BYTES
+      and Image.open(up).size == (1080, 1920) and os.path.exists(noisy) and os.path.basename(up_small) == "thumbnail.jpg"
+      and Image.open(up_small).format == "JPEG" and os.path.exists(small),
+      "썸네일은 항상 독립 커버 이미지 thumbnail.jpg(JPEG, 2MB 이하)로 등록, 원본 PNG 유지")
 
 # ---------------------------------------------------------------- 2. 영상 첫 0.3초 = 썸네일
 ff = imageio_ffmpeg.get_ffmpeg_exe()
@@ -134,8 +136,9 @@ check("cid=1234567" in dt["comment"] and "수수료" in dt["comment"] and dt["ti
       "첫 댓글: 아고다 제휴 링크 + 공정위 고지 전문, 제목 = 쇼츠 카피")
 do = default_texts("owner", make_shorts_copy("owner", usp="숙성 삼겹살", product_name="가평 솔바람", mock=True, seed=1), "", "", "",
                    "가평 솔바람 펜션", "가평 솔바람")
-check(PINNED_NOTICE["owner"] in do["desc"] and "http" not in do["desc"] and "네이버에서 '가평 솔바람' 검색" in do["comment"],
-      "사장님: 링크 없이 첫 댓글에 네이버 검색 안내")
+check(PINNED_NOTICE["owner"] in do["desc"] and "http" not in do["desc"] and "네이버 지도나 카카오맵에서 '가평 솔바람'을 검색해 보세요" in do["comment"]
+      and "map.naver.com" not in do["comment"],
+      "사장님: 링크 없이 첫 댓글에 지도 앱 검색 안내 (클릭 안 되는 지도 URL 없음)")
 
 # ---------------------------------------------------------------- 4. 업로드 (가짜 YouTube API)
 calls = []
@@ -239,7 +242,7 @@ check(res["video_id"] == "VID123" and res["url"] == "https://youtube.com/shorts/
 check(ins["body"]["snippet"]["title"] == "여기 진짜 한국 맞아요? #Shorts" and ins["body"]["status"]["privacyStatus"] == "public"
       and ins["body"]["snippet"]["categoryId"] == "19" and "cid=1234567" in ins["body"]["snippet"]["description"],
       "제목에 #Shorts, 여행 카테고리, 설명란에 제휴 링크")
-check(th["videoId"] == "VID123" and th["media_body"]._filename.endswith("_upload.jpg")
+check(th["videoId"] == "VID123" and th["media_body"]._filename.endswith("thumbnail.jpg")
       and cm["body"]["snippet"]["topLevelComment"]["snippet"]["textOriginal"] == dt["comment"].strip(),
       "thumbnails.set에 2MB 이하 썸네일, commentThreads.insert에 첫 댓글")
 
@@ -268,6 +271,17 @@ check(res2["video_id"] == "VID123" and not res2["thumbnail_ok"] and not res2["co
       and any("감사" in w for w in res2["warnings"]) and any("썸네일" in w for w in res2["warnings"]),
       "썸네일이 거절돼도 영상 업로드는 성공 + 경고 (미감사 프로젝트 비공개 잠김 → 첫 댓글은 대기열)")
 os.remove(yu.PENDING_PATH)
+
+# 썸네일 등록이 HttpError가 아닌 예외(네트워크·파일·인코딩)로 실패해도 업로드 결과는 유지, 쇼츠 0초 프레임 안내
+yu._service_factory = factory(thumb_err=OSError("연결이 끊겼어요"))
+res_t = yu.upload_short(intro, "t", "d", mode="travel", thumb_path=thumb, comment="링크", privacy="private")
+check(res_t["video_id"] == "VID123" and not res_t["thumbnail_ok"] and res_t["url"].endswith("VID123")
+      and any("첫 프레임(0초)" in w and "OSError" in w for w in res_t["warnings"]),
+      f"썸네일 등록의 일반 예외도 영상 업로드 결과는 그대로 + '쇼츠는 0초 프레임이 대표 썸네일' 안내 {res_t['warnings']}")
+res_h = None
+yu._service_factory = factory(thumb_err=http_err(403))
+res_h = yu.upload_short(intro, "t", "d", mode="travel", thumb_path=thumb, comment="링크", privacy="private")
+check(res_h["video_id"] == "VID123" and any("첫 프레임(0초)" in w for w in res_h["warnings"]), "HttpError(403)에도 같은 안내")
 try:
     yu.upload_short(intro, "", "d", mode="travel")
     check(False, "빈 제목")
@@ -293,11 +307,10 @@ check(cp_qbad["comment_question"] in [q.format(kw=sm.pick_keyword("owner", "맥�
 
 do2 = default_texts("owner", cp_q, "", "", "", "설맥 가평현리점", "설맥 가평현리점")
 blocks = do2["comment"].split("\n\n")
-check(blocks[0] == cp_q["comment_question"] and "네이버에서 '설맥 가평현리점' 검색" in blocks[1]
-      and "🗺️ 네이버 지도: https://map.naver.com/p/search/" in blocks[1]
-      and unquote(naver_map_link("설맥 가평현리점").rsplit("/", 1)[1]) == "설맥 가평현리점"
+check(blocks[0] == cp_q["comment_question"] and "네이버 지도나 카카오맵에서 '설맥 가평현리점'을 검색해 보세요" in blocks[1]
+      and "http" not in do2["comment"] and "map.naver.com" not in do2["comment"]
       and blocks[2] == " ".join(cp_q["hashtags"][:3]) and len(blocks) == 3,
-      "사장님 첫 댓글 = 참여 질문 → 네이버 검색 안내 + 지도 링크 → 핵심 해시태그 3개")
+      "사장님 첫 댓글 = 참여 질문 → 지도 앱 검색 안내(URL 없음) → 핵심 해시태그 3개 (설명란과 같은 풀의 앞 3개)")
 ct = build_first_comment("travel", "누구랑 가고 싶어요? 👇", ["#a", "#b"], link="https://www.agoda.com/x?cid=1", disclosure_full="수수료 고지")
 check(ct.startswith("누구랑") and "cid=1" in ct and "수수료 고지" in ct and ct.endswith("#a #b"),
       "숙소·쇼핑 첫 댓글 = 참여 질문 → 제휴 링크 + 고지 전문 → 해시태그")

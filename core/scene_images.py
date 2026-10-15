@@ -18,7 +18,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 logger = logging.getLogger("ad_factory.scene_images")
 
@@ -153,8 +153,8 @@ def generate_one(prompt: str, out_path: str, api_key: Optional[str] = None, mode
             last = str(e)[:300]
     if not data:
         raise ImageGenError(f"이미지 생성 실패 ({model}): {last}")
-    with Image.open(io.BytesIO(data)) as im:
-        im.convert("RGB").save(out_path, "JPEG", quality=94)
+    with Image.open(io.BytesIO(data)) as source:
+        ImageOps.exif_transpose(source).convert("RGB").save(out_path, "JPEG", quality=94)
     return out_path
 
 

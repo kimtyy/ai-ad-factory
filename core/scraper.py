@@ -31,7 +31,7 @@ def clean_text(text: Optional[str]) -> str:
     return text
 
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import numpy as np
 
 
@@ -214,7 +214,8 @@ def classify_photo_with_vision(img_bytes: bytes, client: Any, cache: Optional[Di
         return cache[cache_key]
     try:
         from google.genai import types
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        with Image.open(io.BytesIO(img_bytes)) as source:
+            img = ImageOps.exif_transpose(source).convert("RGB")
         img.thumbnail((512, 512))
         res = client.models.generate_content(
             model=validate_model_call("gemini-3.6-flash", category="llm"),
@@ -289,16 +290,16 @@ def download_product_images(candidates: List[Dict[str, Any]], output_dir: str, r
             digest = hashlib.md5(data).hexdigest()
             if digest in seen:
                 continue
-            with Image.open(io.BytesIO(data)) as im:
+            with Image.open(io.BytesIO(data)) as source:
+                fmt = source.format or "JPEG"
+                im = ImageOps.exif_transpose(source)
                 w, h = im.size
-                fmt = (im.format or "JPEG").lower()
-            if min(w, h) < PRODUCT_IMAGE_MIN_SIDE or max(w, h) / max(1, min(w, h)) > 2.5:
-                continue
+                if min(w, h) < PRODUCT_IMAGE_MIN_SIDE or max(w, h) / max(1, min(w, h)) > 2.5:
+                    continue
+                ext = ".png" if fmt.lower() == "png" else (".webp" if fmt.lower() == "webp" else ".jpg")
+                path = os.path.join(output_dir, f"{prefix}_{len(saved) + 1:02d}{ext}")
+                im.save(path, format=fmt)
             seen.add(digest)
-            ext = ".png" if fmt == "png" else (".webp" if fmt == "webp" else ".jpg")
-            path = os.path.join(output_dir, f"{prefix}_{len(saved) + 1:02d}{ext}")
-            with open(path, "wb") as f:
-                f.write(data)
             saved.append(os.path.abspath(path))
         except Exception as e:
             logger.debug(f"상품 사진 다운로드 건너뜀 ({u}): {e}")

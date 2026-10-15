@@ -32,3 +32,12 @@ def remove_media(paths: List[str], index: int) -> List[str]:
     if 0 <= index < len(out):
         out.pop(index)
     return out
+
+
+def reorder_media(paths: List[str], from_idx: int, to_idx: int) -> List[str]:
+    """from_idx 위치의 미디어를 to_idx 위치로 이동"""
+    out = list(paths)
+    if 0 <= from_idx < len(out) and 0 <= to_idx < len(out) and from_idx != to_idx:
+        item = out.pop(from_idx)
+        out.insert(to_idx, item)
+    return out

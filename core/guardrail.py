@@ -9,9 +9,11 @@ logger = logging.getLogger("ad_factory.guardrail")
 # 허용 모델 화이트리스트
 ALLOWED_LLM_MODELS = frozenset([
     "gemini-3.6-flash",
-    # 대본 엔진 자동 백업 (core/llm/router.py): 1순위 Claude Haiku, 2순위 OpenAI 경량 모델
+    # 대본 엔진 자동 백업 (core/llm/router.py): 1순위 Claude (대본=Sonnet / 백엔드=Haiku), 2순위 OpenAI
     "claude-haiku-5-5",
     "claude-haiku-4-5",
+    "claude-sonnet-5-5",
+    "gpt-4o",
     "gpt-4o-mini",
 ])
 

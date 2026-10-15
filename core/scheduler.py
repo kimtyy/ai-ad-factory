@@ -220,11 +220,14 @@ def save_state(state: Dict[str, Any]) -> None:
 
 
 def render_busy() -> bool:
-    """대시보드 등에서 ffmpeg가 돌고 있으면 True (렌더 겹치면 둘 다 느려지고 메모리 부족 위험)"""
+    """대시보드 등에서 ffmpeg가 돌고 있으면 True (렌더 겹치면 둘 다 느려지고 메모리 부족 위험). Windows·리눅스(Railway) 공용"""
     try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15,
-                             encoding="utf-8", errors="ignore").stdout
-        return any(line.lower().startswith('"ffmpeg') for line in out.splitlines())
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15,
+                                 encoding="utf-8", errors="ignore").stdout
+            return any(line.lower().startswith('"ffmpeg') for line in out.splitlines())
+        out = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True, timeout=15).stdout
+        return any(line.strip().lower().startswith("ffmpeg") for line in out.splitlines())
     except Exception:
         return False
 
@@ -353,7 +356,7 @@ def process_event(service, cal_id: str, ev: Dict[str, Any], title: Dict[str, str
                 from core import youtube_upload as yu
                 up = yu.upload_short(res.final_path, texts["title"], texts["desc"], mode=spec.mode, thumb_path=res.thumb_path,
                                      comment=texts["comment"], privacy="private",
-                                     tags=pipeline.UPLOAD_TAGS.get(spec.mode, []),
+                                     tags=texts.get("tags") or pipeline.UPLOAD_TAGS.get(spec.mode, []),
                                      category_id=yu.CATEGORY_PEOPLE)
                 extra["adf_video"] = up["video_id"]
                 rec["video_id"] = up["video_id"]

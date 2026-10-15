@@ -142,7 +142,10 @@ class FakeModels:
         self.reply = reply
 
     def generate_content(self, **kw):
-        captured["contents"] = kw.get("contents")
+        c = kw.get("contents")
+        last = c[-1] if isinstance(c, list) and c else c
+        if not (isinstance(last, str) and last.startswith("아래 숏폼 대사들이 규칙을 어겼습니다")):   # 규칙 보정(재작성) 호출은 기획 프롬프트가 아님
+            captured["contents"] = c
         return FakeResp(self.reply)
 
 

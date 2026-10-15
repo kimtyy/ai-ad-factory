@@ -78,11 +78,11 @@ check([s.get("source_path") for s in sb] == [P1, P1, P1, P2, P2, P1, P1, P1] and
       "상품별 사진만 그 상품 씬에 (사진 1장이면 풀샷 → 중앙 줌인), 훅 = 상품 1 사진, CTA = 마지막 상품 사진 (전 씬 지정)")
 check(seen["labels"][0] == ["[상품 1 사진]", "[상품 2 사진]", "[상품 3 사진]"], "상품마다 사진을 엔진에 함께 전달 (상품 번호 표시)")
 check("0~3초" in plan_prompt and "상품당 7초" in plan_prompt and "'첫 번째', '두 번째', '마지막'" in plan_prompt
-      and "~어때요?" in plan_prompt and "~딱이죠!" in plan_prompt and "500g 초경량" in plan_prompt,
-      "프롬프트: 3초 훅 → 상품당 7초 → CTA 구조 + 어미 리듬 규칙(질문형·감탄형) + 상품별 USP")
+      and "억지로 의문문·감탄문을 만들지 마세요" in plan_prompt and "최소 1문장은 질문형" not in plan_prompt and "500g 초경량" in plan_prompt,
+      "프롬프트: 3초 훅 → 상품당 7초 → CTA 구조 + 평서문 기본(억지 의문문·감탄문 금지) + 상품별 USP")
 kinds = [ending_kind(v) for v in vo[:-1]]
-check("question" in kinds and "exclaim" in kinds and not any(a == b == "plain" for a, b in zip(kinds, kinds[1:])),
-      f"어미 리듬: 질문형·감탄형 포함 + 템플릿이 끼어도 평서 연속 없음 {kinds}")
+check(all(v.rstrip().endswith((".", "!", "?")) for v in vo[:-1]) and not any("규칙을 어겼습니다" in p for p in seen["prompts"]),
+      f"어미를 강제로 바꾸지 않음: 질문·감탄 의무 없이 1차 생성이 그대로 유지, 재작성 호출 없음 {kinds}")
 names = [it["short"] for it in sb[0]["bundle_items"]]
 check(names == ["미니 무선 핸디청소기", "LED 무드등 수면등", "접이식 빨래 건조대 대형"] and sb[0]["bundle_items"][1]["link"].startswith("https://smartstore"),
       "콘티에 상품별 짧은 이름·링크 기록 (첫 댓글 구매 좌표용)")
@@ -98,7 +98,7 @@ seen.update(prompts=[], n=0)
 sb2 = plan_bundle_storyboard("자취생", [dict(it) for it in ITEMS], media_paths=[P1, P2, P1], api_key=None)
 reply = reply_backup
 repair = [p for p in seen["prompts"] if "규칙을 어겼습니다" in p]
-check(repair and "질문형" in repair[0] and "감탄·확신형" in repair[0], "질문·감탄 없는 '~요.' 일색 → 어미 방향을 지정해 다시 쓰게 함")
+check(not repair, "질문·감탄 없는 '~요.' 일색이어도 억지 재작성하지 않음 (자연스러운 평서문 허용)")
 check(sb2[0]["bundle_title"] == TEMPLATE_TITLE.format(theme="자취생"), f"'최저가·품절' 타이틀은 버리고 템플릿 '{sb2[0]['bundle_title']}'")
 
 # 엔진이 모두 실패하면 템플릿 (구조 유지)
@@ -108,9 +108,8 @@ sb3 = plan_bundle_storyboard("자취생", [dict(it) for it in ITEMS], media_path
 rt._overrides = {}
 os.environ["ANTHROPIC_API_KEY"] = ""
 check(sb3[0]["script_engine"] == "template" and len(sb3) == 8 and sb3[0]["hook_title"] == DEFAULT_HOOK
-      and all(sb3[1 + 2 * k]["voiceover"].startswith(ORDINALS[k]) for k in range(3))
-      and not any(a == b == "plain" for a, b in zip(*[[ending_kind(s["voiceover"]) for s in sb3[:-1]][o:] for o in (0, 1)])),
-      f"엔진 전부 실패 → 서수가 붙은 템플릿 대본 (구조 유지, 평서 연속 없음) {[ending_kind(s['voiceover']) for s in sb3[:-1]]}")
+      and all(sb3[1 + 2 * k]["voiceover"].startswith(ORDINALS[k]) for k in range(3)),
+      f"엔진 전부 실패 → 서수가 붙은 템플릿 대본 (구조 유지, 템플릿 어미를 억지로 바꾸지 않음) {[ending_kind(s['voiceover']) for s in sb3[:-1]]}")
 try:
     plan_bundle_storyboard("x", ITEMS[:2], media_paths=[P1, P2], mock=True)
     check(False, "상품 2개")

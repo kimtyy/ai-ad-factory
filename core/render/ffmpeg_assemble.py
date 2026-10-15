@@ -22,7 +22,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import imageio_ffmpeg
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger("ad_factory.render.ffmpeg")
 
@@ -111,7 +111,7 @@ def build_timeline(scene_durations: List[float], xfade: float, card_sec: float =
 
 def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24, mode: str = "commerce",
              brand=None, disclosure: Optional[str] = None, intro_image: Optional[str] = None, bars=None, label=None,
-             xfade: float = 0.35, intro_sec: float = 0.3, hook_solo_sec: float = 1.5,
+             xfade: float = 0.35, intro_sec: float = 0.5, hook_solo_sec: float = 1.5,
              center_modes=("travel", "owner", "commerce")) -> str:
     """
     comp: AdCompositor (create_overlay_image·render_disclosure·font_path 재사용)
@@ -143,20 +143,25 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         if not ap or not os.path.exists(ap):
             raise FileNotFoundError(f"씬 {idx + 1} 오디오 파일 누락: {ap}")
         a_dur = probe(ap)["duration"]
-        if not a_dur:
-            raise FFmpegAssembleError(f"씬 {idx + 1} 오디오 길이를 읽지 못함: {ap}")
+        from core.mode_policy import get_mode_policy
+        policy = get_mode_policy(mode)
         is_last = idx == len(manifest) - 1
-        dur = a_dur + (1.0 if is_last else 0.2 + xfade) + float(item.get("hold_sec") or 0)   # hold_sec: 낭독 뒤 화면 여운 (인용 카드)
+        dur = a_dur + (1.0 if is_last else policy.tail_sec + xfade) + float(item.get("hold_sec") or 0)
+        dur = max(policy.min_scene_sec, dur)
         caption = item.get("subtitle") or item.get("caption") or item.get("voiceover", "")
         quote = item.get("quote_card") or ""
         if quote:
             caption = ""                     # 인용 씬: 자막 대신 종이 인용 카드
         hook = item.get("hook_title", "") or ""
-        if mode in center_modes and hook.strip():
+        from core.mode_policy import hook_split_enabled
+        hook_on = hook_split_enabled()
+        is_partial_echo = bool(hook and caption and (caption.startswith(hook) or hook in caption)) \
+            or (not hook_on and mode in center_modes)        # 훅 분리 중단: 중앙 자막 모드는 본문 대사만 단일 자막
+        if hook_on and mode in center_modes and hook.strip() and not is_partial_echo:
             hs = max(0.5, min(float(item.get("hook_sec") or hook_solo_sec), dur - 0.5))
             segs = [(0.0, hs, None, hook), (hs, dur, caption, None)]
         else:
-            segs = [(0.0, dur, caption, hook)]
+            segs = [(0.0, dur, caption, None if is_partial_echo else hook)]
         pngs = []
         for j, (s, e, cap, hk) in enumerate(segs):
             if not (cap or hk or brand or disclosure or bars or label or quote or item.get("info_line")):
@@ -193,7 +198,8 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             pngs.append((png, s, e))
         if idx == 0 and intro_image and os.path.exists(intro_image):
             ip = os.path.join(work, "intro.png")
-            Image.open(intro_image).convert("RGB").resize((W, H), Image.LANCZOS).save(ip)
+            with Image.open(intro_image) as source:
+                ImageOps.exif_transpose(source).convert("RGB").resize((W, H), Image.LANCZOS).save(ip)
             pngs.append((ip, 0.0, min(intro_sec, dur)))
         scenes.append({"video": vp, "audio": ap, "dur": dur, "pngs": pngs})
 
@@ -245,14 +251,31 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         acc, acc_dur = out, acc_dur + d - xfade
     filters.append(f"[{acc}]trim=duration={total:.3f},setpts=PTS-STARTPTS[vout]")
 
+    # 오디오: 각 씬의 타임라인 슬롯 길이에 맞춰 패딩 및 트림 후 순차(concat) 합성
+    # (씬 간 음성이 절대 겹치지 않고 정확히 씬 타임라인에 맞춰 순차 연결)
+    slot_durs = [
+        (sc["dur"] - xfade) if (i < len(scenes) - 1 or card_png) else sc["dur"]
+        for i, sc in enumerate(scenes)
+    ]
     alabels = []
     for i, sc in enumerate(scenes):
         ai = add_input(["-i", sc["audio"]])
-        ms = int(round(starts[i] * 1000))
-        filters.append(f"[{ai}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay={ms}|{ms}[a{i}]")
-        alabels.append(f"[a{i}]")
-    filters.append(f"{''.join(alabels)}amix=inputs={len(alabels)}:normalize=0:dropout_transition=0,"
-                   f"apad=whole_dur={total:.3f},atrim=duration={total:.3f}[aout]")
+        slot_d = max(0.1, slot_durs[i])
+        filters.append(
+            f"[{ai}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"apad=whole_dur={slot_d:.3f},atrim=duration={slot_d:.3f}[aslot{i}]"
+        )
+        alabels.append(f"[aslot{i}]")
+
+    if card_png:
+        filters.append(
+            f"anullsrc=r=44100:cl=stereo,atrim=duration={card_sec:.3f}[acard]"
+        )
+        alabels.append("[acard]")
+
+    filters.append(
+        f"{''.join(alabels)}concat=n={len(alabels)}:v=0:a=1[aout]"
+    )
 
     script = os.path.join(work, "graph.txt")
     with open(script, "w", encoding="utf-8") as f:

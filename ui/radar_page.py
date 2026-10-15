@@ -134,8 +134,11 @@ def render_radar_page():
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns([1.2, 1.4, 1, 1])
         with c1:
-            vertical = st.selectbox("업종", list(VERTICAL_KEYWORDS) + ["all"], key="radar_vertical",
-                                    format_func=lambda v: "전체" if v == "all" else VERTICAL_LABELS[v])
+            vert_opts = [str(k) for k in list(VERTICAL_KEYWORDS) + ["all"] if k]
+            vertical = st.selectbox(
+                str("업종" or ""), vert_opts, key="radar_vertical",
+                format_func=lambda v: "전체" if v == "all" else str(VERTICAL_LABELS.get(v, v or ""))
+            )
         with c2:
             days = st.slider("최근 업로드 기간 (일)", 3, 30, key="radar_days")
         with c3:
@@ -178,10 +181,17 @@ def render_radar_page():
             st.session_state.radar_source = keys[0]
         v1, v2 = st.columns([1, 1])
         with v1:
-            src = st.segmented_control("데이터", keys, key="radar_source", format_func=lambda k: src_labels[k]) or keys[0]
+            radar_src_keys = [str(k) for k in keys if k]
+            src = st.segmented_control(
+                str("데이터" or ""), radar_src_keys, key="radar_source",
+                format_func=lambda k: str(src_labels.get(k, k or ""))
+            ) or (radar_src_keys[0] if radar_src_keys else "live")
         with v2:
-            view_v = st.segmented_control("업종 보기", list(VERTICAL_KEYWORDS), key="radar_view_vertical",
-                                          format_func=lambda v: VERTICAL_LABELS[v]) or "stay"
+            radar_view_opts = [str(k) for k in VERTICAL_KEYWORDS if k]
+            view_v = st.segmented_control(
+                str("업종 보기" or ""), radar_view_opts, key="radar_view_vertical",
+                format_func=lambda v: str(VERTICAL_LABELS.get(v, v or ""))
+            ) or "stay"
         view_ratio = min_ratio_for(view_v, float(min_ratio))
         conn = store.connect(dict(sources)[src])
         try:

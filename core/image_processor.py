@@ -2,6 +2,7 @@
 core/image_processor.py - rembg 기반 제품 누끼(투명 PNG) 추출 및 AI 연출 배경과의 자연스러운 합성
 """
 import os
+import io
 import logging
 from typing import Optional, Tuple
 from PIL import Image, ImageFilter, ImageOps
@@ -25,9 +26,11 @@ def extract_product_cutout(
 
     try:
         from rembg import remove
-        with open(input_image_path, "rb") as input_file:
-            input_bytes = input_file.read()
-            output_bytes = remove(input_bytes)
+        with Image.open(input_image_path) as source:
+            normalized = ImageOps.exif_transpose(source)
+            buffer = io.BytesIO()
+            normalized.save(buffer, format="PNG")
+            output_bytes = remove(buffer.getvalue())
         
         with open(output_cutout_path, "wb") as output_file:
             output_file.write(output_bytes)
@@ -38,7 +41,8 @@ def extract_product_cutout(
     except Exception as e:
         logger.warning(f"rembg 누끼 추출 실패 또는 모델 다운로드 미완료 ({e}). PIL 마스크 폴백으로 전환합니다.")
         # 폴백: 흰색/밝은 배경 부드러운 투명화 처리
-        img = Image.open(input_image_path).convert("RGBA")
+        with Image.open(input_image_path) as source:
+            img = ImageOps.exif_transpose(source).convert("RGBA")
         datas = img.getdata()
         new_data = []
         for item in datas:
@@ -70,8 +74,10 @@ def composite_cutout_on_background(
     """
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     
-    bg = Image.open(background_path).convert("RGBA")
-    cutout = Image.open(cutout_path).convert("RGBA")
+    with Image.open(background_path) as source:
+        bg = ImageOps.exif_transpose(source).convert("RGBA")
+    with Image.open(cutout_path) as source:
+        cutout = ImageOps.exif_transpose(source).convert("RGBA")
 
     bg_w, bg_h = bg.size
 

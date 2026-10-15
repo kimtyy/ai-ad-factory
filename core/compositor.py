@@ -6,7 +6,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from moviepy.editor import (
     VideoFileClip,
@@ -31,7 +31,7 @@ XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
 XFADE_BY_MODE = {"book": 0.6}          # 시골책방: 차분한 호흡 (긴 디졸브)
 DUCK_BY_MODE = {"book": 0.25}          # 시골책방: 나레이션 중 BGM을 조금 더 낮게 (기본 32%)
 BGM_FROM_START_MODES = ("book",)       # 잔잔한 곡은 드롭이 아니라 처음부터
-INTRO_SEC = 0.8             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 쇼츠 썸네일은 영상 프레임 중에서 고르므로
+INTRO_SEC = 0.5             # 영상 첫 화면 커버(썸네일) 길이: PC 스튜디오 쇼츠 썸네일은 영상 프레임 중에서 고르므로
                             # 0~0.8초를 '시그니처 비주얼 + 헤드카피' 커버로 고정 (첫 프레임 = 커버, IDR 키프레임)
 THUMB_FONT_RATIO = 0.26     # 썸네일 메인 카피 최대 글자 크기 (폭 대비, 기존 0.115의 약 2.3배 - 짧은 카피면 2줄 안에서 이 크기)
 THUMB_TEXT_WIDTH = 0.90
@@ -201,7 +201,7 @@ class AdCompositor:
 
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
                        center_y: float = CAPTION_CENTER_Y, font_path: Optional[str] = None,
-                       caption_ratio: float = CAPTION_FONT_RATIO) -> np.ndarray:
+                       caption_ratio: float = CAPTION_FONT_RATIO, stroke_ratio: Optional[float] = None) -> np.ndarray:
         """
         travel/owner 공통 하단 자막 (배경 박스 없음):
         - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
@@ -245,7 +245,8 @@ class AdCompositor:
                 placed.append((x, y + (lh - (bb[3] - bb[1])) // 2 - bb[1], ln, f, color))
                 y += lh
 
-        stroke = max(3, int(width * CAPTION_STROKE_RATIO))
+        effective_stroke_ratio = stroke_ratio if stroke_ratio is not None else CAPTION_STROKE_RATIO
+        stroke = max(3, int(width * effective_stroke_ratio))
         # 짙은 드롭섀도우: 아래로 살짝 내린 검은 글자를 블러 → 두 번 겹쳐 농도 확보
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         sd = ImageDraw.Draw(shadow)
@@ -292,8 +293,9 @@ class AdCompositor:
             text = f"{text}{accent}".strip()       # 'ㄷㄷ'·'?!'는 마지막 어절에 붙여 한 줄로 따로 떨어지지 않게
         if text:
             img.alpha_composite(self._thumb_main_layer(text, emoji, W, H))
-        if sub_text and sub_text.strip():
-            img.alpha_composite(self._thumb_sub_layer(sub_text.strip(), W, H))
+        sub_clean = (sub_text or "").strip()
+        if sub_clean and sub_clean not in ("가게", "매장", "상점", "None", "null", "undefined"):
+            img.alpha_composite(self._thumb_sub_layer(sub_clean, W, H))
 
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         img.convert("RGB").save(out_path, "PNG", optimize=True)
@@ -634,13 +636,14 @@ class AdCompositor:
           * 일반 씬: 하단 62% 지점(쇼츠 UI 세이프존)에 볼드 자막 노출
         """
         if mode in CENTER_CAPTION_MODES:
-            # 쇼핑은 상품 카드(화면 31~71%)를 가리지 않도록 카드 위쪽에 자막
-            center = COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else CAPTION_CENTER_Y
-            if kwargs.get("center_y"):
-                center = float(kwargs["center_y"])
-            return self._caption_block(caption_text, hook_title, width, height, center_y=center,
+            from core.mode_policy import get_mode_policy
+            policy = get_mode_policy(mode)
+            center = kwargs.get("center_y") or (COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else policy.center_y)
+            cap_ratio = kwargs.get("caption_ratio") or policy.caption_font_ratio
+            st_ratio = kwargs.get("stroke_ratio") or policy.caption_stroke_ratio
+            return self._caption_block(caption_text, hook_title, width, height, center_y=float(center),
                                        font_path=self.serif_font_path if mode == "book" else None,
-                                       caption_ratio=BOOK_CAPTION_FONT_RATIO if mode == "book" else CAPTION_FONT_RATIO)
+                                       caption_ratio=cap_ratio, stroke_ratio=st_ratio)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
@@ -810,8 +813,11 @@ class AdCompositor:
         from core.render import bgm as bgm_mod
         from core.render.ffmpeg_assemble import build_timeline, probe
         a_durs = [probe(it["audio_path"])["duration"] or 0.0 for it in manifest]
+        from core.mode_policy import get_mode_policy
+        mode = manifest[0].get("mode", "commerce") if manifest else "commerce"
+        policy = get_mode_policy(mode)
         xf = getattr(self, "xfade", XFADE_SEC)
-        durs = [a + (1.0 if i == len(a_durs) - 1 else 0.2 + xf) + float(manifest[i].get("hold_sec") or 0)
+        durs = [max(policy.min_scene_sec, a + (1.0 if i == len(a_durs) - 1 else policy.tail_sec + xf) + float(manifest[i].get("hold_sec") or 0))
                 for i, a in enumerate(a_durs)]
         starts, _ = build_timeline(durs, xf)
         intervals = bgm_mod.narration_intervals(zip(starts, a_durs)) if narration else []
@@ -868,6 +874,7 @@ class AdCompositor:
                 if item.get("quote_card"):
                     caption_text = ""          # 인용 씬: 자막 대신 인용 카드
                 hook_title = item.get("hook_title", "")
+                is_last_scene = (idx == len(asset_manifest))
 
                 if not video_path or not os.path.exists(video_path):
                     raise FileNotFoundError(f"씬 {scene_num} 비디오 파일 누락: {video_path}")
@@ -880,12 +887,11 @@ class AdCompositor:
                 audio_duration = audio_clip.duration
                 logger.info(f"씬 {scene_num}: 나레이션 오디오 원본 길이 = {audio_duration:.2f}초")
 
-                # 2. 비디오 길이 안전 연장 (엔딩 나레이션 잘림 원천 차단: 마지막 씬 +1.0초, 일반 씬 +0.2초 여유 마진)
-                is_last_scene = (idx == len(asset_manifest))
-                # 다음 씬과 XFADE_SEC만큼 겹쳐 디졸브: 겹치는 만큼 꼬리를 늘려 나레이션 간격(0.2초)·전체 길이는 그대로,
-                # 겹침 구간에는 앞 씬의 무음 꼬리만 깔리므로 두 나레이션이 섞이지 않음
-                tail_margin = (1.0 if is_last_scene else 0.2 + XFADE) + float(item.get("hold_sec") or 0)
+                from core.mode_policy import get_mode_policy
+                policy = get_mode_policy(mode)
+                tail_margin = (1.0 if is_last_scene else policy.tail_sec + XFADE) + float(item.get("hold_sec") or 0)
                 scene_target_duration = audio_duration + tail_margin
+                scene_target_duration = max(policy.min_scene_sec, scene_target_duration)
                 logger.info(f"씬 {scene_num} (마지막={is_last_scene}): 오디오 {audio_duration:.2f}초 + 테일 마진 {tail_margin:.2f}초 -> 비디오 목표 재생 시간: {scene_target_duration:.2f}초")
 
                 # 3. 비디오 로드 및 목표 재생 시간에 맞춤
@@ -904,14 +910,19 @@ class AdCompositor:
                 # 4. 자막 오버레이 (실사 모드 씬 1: 후킹 단독 0~hook_sec → 서브 자막, 나레이션 2단 음성과 같은 시점)
                 w, h = synced_video.size
                 if caption_text or hook_title or brand or disclosure or bars or label or item.get("quote_card"):
-                    split_hook = mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
-                    if split_hook:
+                    from core.mode_policy import hook_split_enabled
+                    hook_on = hook_split_enabled()
+                    split_hook = hook_on and mode in CENTER_CAPTION_MODES and bool(hook_title and hook_title.strip())
+                    # 훅 분리를 끈 중앙 자막 모드: 헤드라인을 자막에 섞지 않고 본문 대사만 (헤드라인은 썸네일·제목에만 쓰임)
+                    is_partial_echo = bool(hook_title and caption_text and (caption_text.startswith(hook_title) or hook_title in caption_text)) \
+                        or (not hook_on and mode in CENTER_CAPTION_MODES)
+                    if split_hook and not is_partial_echo:
                         hook_sec = float(item.get("hook_sec") or HOOK_SOLO_SEC)
                         hook_sec = max(0.5, min(hook_sec, scene_target_duration - 0.5))
                         segments = [(0.0, hook_sec, None, hook_title), (hook_sec, scene_target_duration - hook_sec, caption_text, None)]
                         logger.info(f"씬 {scene_num} 후킹 단독 0~{hook_sec:.2f}초 '{hook_title}' → 서브 자막 '{caption_text}'")
                     else:
-                        segments = [(0.0, scene_target_duration, caption_text, hook_title)]
+                        segments = [(0.0, scene_target_duration, caption_text, None if is_partial_echo else hook_title)]
                         if mode in CENTER_CAPTION_MODES:
                             logger.info(f"씬 {scene_num} 중앙 자막 렌더링 (화면 50%): '{caption_text}'")
                         elif hook_title and hook_title.strip():
@@ -994,7 +1005,8 @@ class AdCompositor:
             if intro_image and os.path.exists(intro_image) and processed_clips:
                 first = processed_clips[0]
                 fw, fh = first.size
-                intro_arr = np.array(Image.open(intro_image).convert("RGB").resize((fw, fh), Image.LANCZOS))
+                with Image.open(intro_image) as source:
+                    intro_arr = np.array(ImageOps.exif_transpose(source).convert("RGB").resize((fw, fh), Image.LANCZOS))
                 intro_clip = ImageClip(intro_arr).set_start(0).set_duration(min(INTRO_SEC, first.duration))
                 first_with_intro = CompositeVideoClip([first, intro_clip]).set_duration(first.duration).set_audio(first.audio)
                 opened_clips += [intro_clip, first_with_intro]

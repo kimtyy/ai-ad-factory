@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from core.script_guard import complete_sentence, ending_kind, find_banned_style, find_promo_tone, shorten_line, to_haeyo
 
+from core.script_guard import RHYTHM_ENFORCE  # noqa: E402
+
 logger = logging.getLogger("ad_factory.planners.book_fable")
 
 FABLE_QUOTE_MAX = 350
@@ -133,7 +135,7 @@ def plan_fable(store_name: str, book_title: str, author: str, book_info: str, qu
     # 템플릿이 끼어 평서가 이어지면 그 템플릿 줄만 감탄형으로
     body = [s for s in scenes if s["role"] in ("hook", "situation", "comfort")]
     kinds = [ending_kind(s["voiceover"]) for s in body]
-    for j, s in enumerate(body):
+    for j, s in enumerate(body if RHYTHM_ENFORCE else ()):
         near_plain = (j > 0 and kinds[j - 1] == "plain") or (j + 1 < len(kinds) and kinds[j + 1] == "plain")
         if s["scene_index"] - 1 in templated and kinds[j] == "plain" and near_plain and s["voiceover"].endswith("요."):
             s["voiceover"] = s["subtitle"] = s["caption"] = s["voiceover"][:-1] + "!"

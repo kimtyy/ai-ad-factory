@@ -202,9 +202,9 @@ def frame_n(n):
     return np.frombuffer(raw, np.uint8).reshape(1920, 1080, 3).astype(int)
 
 
-d0, d18, d21 = (float(np.abs(frame_n(k) - ti).mean()) for k in (0, 18, 21))
-check(INTRO_SEC == 0.8 and d0 < 6 and d18 < 6 and d21 > 20,
-      f"커버: 0~0.8초(프레임 0~18) = 썸네일 (차이 {d0:.1f}·{d18:.1f}), 0.875초부터 본편 ({d21:.1f})")
+d0, d18, d21 = (float(np.abs(frame_n(k) - ti).mean()) for k in (0, 11, 14))
+check(INTRO_SEC == 0.5 and d0 < 6 and d18 < 6 and d21 > 20,
+      f"커버: 0~0.5초(프레임 0~11) = 썸네일 (차이 {d0:.1f}·{d18:.1f}), 0.58초(프레임 14)부터 본편 ({d21:.1f})")
 probe = subprocess.run([ff, "-hide_banner", "-i", out, "-vf", "select=eq(n\\,0),showinfo", "-frames:v", "1", "-f", "null", "-"],
                        capture_output=True, text=True).stderr
 check("iskey:1" in probe and "type:I" in probe and "pts_time:0 " in probe.replace("pts_time:0\t", "pts_time:0 "),

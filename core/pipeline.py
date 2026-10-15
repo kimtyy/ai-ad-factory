@@ -52,10 +52,13 @@ class JobSpec:
     book_quote: str = ""
     book_link: str = ""
     book_search_kw: str = ""
-    book_photo_count: int = 1
-    book_template: str = "basic"
     book_publisher: str = ""
     book_genre: str = ""
+    book_photo_count: int = 1
+    book_template: str = "basic"
+    # 1컨셉 1메시지 광고용 핵심 컨셉
+    core_concept: str = ""
+    tone_instruction: str = ""
     # 숙소 (렌더만)
     affiliate_program: str = ""
     # 공통
@@ -79,6 +82,8 @@ class RenderResult:
     bgm: Dict[str, Any]
     generated_images: List[str]
     comment: str = ""
+    metadata: Optional[Dict[str, Any]] = None
+    cover_path: Optional[str] = None        # 업로드·미리보기용 독립 커버 이미지 (thumbnail.jpg)
 
 
 # ---------------------------------------------------------------- 씬 사진·영상 배정 (화면·스케줄러 공용)
@@ -152,15 +157,18 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
             raise ValueError("상호명을 입력해 주세요.")
         scenes = plan_owner_storyboard(business_name=spec.name, usp=spec.usp, business_type=spec.business_type,
                                        search_keyword=spec.search_keyword or spec.name, media_paths=spec.media_paths,
-                                       num_scenes=spec.num_scenes or DEFAULT_SCENES, hook_hints=spec.hook_hints, **common)
+                                       num_scenes=spec.num_scenes or DEFAULT_SCENES, hook_hints=spec.hook_hints,
+                                       core_concept=spec.core_concept, tone_instruction=spec.tone_instruction, **common)
     elif spec.mode == "book":
         scenes = plan_book_storyboard(store_name=spec.name, book_title=spec.book_title, author=spec.book_author,
                                       book_info=spec.usp, quote=spec.book_quote, media_paths=spec.media_paths,
-                                      book_photo_count=spec.book_photo_count, template=spec.book_template, **common)
+                                      book_photo_count=spec.book_photo_count, template=spec.book_template,
+                                      core_concept=spec.core_concept, **common)
         apply_book_visuals(spec, job, scenes)
     elif spec.is_bundle:
         scenes = plan_bundle_storyboard(theme=spec.bundle_theme, items=spec.bundle_items,
-                                        media_paths=spec.media_paths, **common)
+                                        media_paths=spec.media_paths,
+                                        core_concept=spec.core_concept, **common)
     else:
         if not spec.name.strip():
             raise ValueError("상품명을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
@@ -168,7 +176,7 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
             raise ValueError("상품 사진이 없습니다. 판매 페이지 링크를 크롤링하거나 상품 사진을 직접 올려 주세요.")
         scenes = plan_commerce_storyboard(product_name=spec.name, usp=spec.usp, media_paths=spec.media_paths,
                                           num_scenes=spec.num_scenes or DEFAULT_SCENES, product_boxes=spec.product_boxes,
-                                          **common)
+                                          core_concept=spec.core_concept, **common)
     assign_scene_media(spec, job, scenes)
     return scenes
 
@@ -262,6 +270,7 @@ def book_comment(spec: JobSpec, copy: Optional[Dict[str, Any]]) -> str:
     link = (spec.book_link or "").strip()
     return build_first_comment("book", copy.get("comment_question", ""), copy.get("hashtags"),
                                search_keyword=(spec.book_search_kw or "").strip() or spec.name.strip(),
+                               address=spec.address or "",
                                items=[{"short": f"「{spec.book_title.strip()}」", "link": link}] if link else None)
 
 
@@ -285,8 +294,13 @@ def upload_texts(spec: JobSpec, copy: Optional[Dict[str, Any]], hook: str = "") 
         comment = build_first_comment(spec.mode, copy.get("comment_question", ""), copy.get("hashtags"),
                                       search_keyword=spec.search_keyword or (spec.name if spec.mode == "owner" else ""),
                                       link="" if spec.mode == "owner" or spec.is_bundle else spec.link,
-                                      disclosure_full=full, items=bundle_comment_items(spec) if spec.is_bundle else None)
-    return {"title": copy["title"][:TITLE_MAX], "desc": desc, "comment": comment}
+                                      disclosure_full=full, items=bundle_comment_items(spec) if spec.is_bundle else None,
+                                      business_type=spec.business_type or "", usp=spec.usp or "",
+                                      core_concept=getattr(spec, "core_concept", "") or "",
+                                      address=spec.address if spec.mode == "owner" else "")
+    ts = (copy or {}).get("tag_set") or {}
+    return {"title": copy["title"][:TITLE_MAX], "desc": desc, "comment": comment,
+            "tags": list(ts.get("pool") or [])}
 
 
 # ---------------------------------------------------------------- 렌더
@@ -305,6 +319,14 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     def step(pct: int, text: str):
         if progress:
             progress(pct, text)
+
+    # 렌더링 전 이전 작업의 잔여 오디오 및 임시 폴더 클린업
+    if hasattr(job, "clean_audio_assets"):
+        job.clean_audio_assets()
+    if hasattr(job, "final_dir"):
+        tmp_dir = os.path.join(job.final_dir, "_ffmpeg_tmp")
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     real_media = spec.mode in ("owner", "travel", "commerce", "book")
     gen = AssetGenerator(gemini_api_key=spec.api_key, voice_actor=spec.voice_actor, audio_mode=spec.audio_mode,
@@ -346,13 +368,33 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         hook = (scenes[0].get("hook_title") or "").strip() if scenes else ""
         usp_items = [s.strip() for s in re.split(r"[,/·\n]", spec.usp or "") if s.strip()]
         bundle_title = (scenes[0].get("bundle_title") or "") if spec.is_bundle and scenes else ""
+        
+        # [씬 1 중앙 뱃지 텍스트 우선순위]
+        # 1순위: 선택된 1컨셉 핵심 키워드 (spec.core_concept)
+        # 2순위: 등록된 정식 매장명 (spec.name, owner 모드)
+        # 3순위: USP 첫 구절 (usp_items[0])
+        # 4순위: 업종명 (spec.business_type)
+        concept_clean = getattr(spec, "core_concept", "") or ""
+        badge_sig = ""
+        if concept_clean.strip():
+            badge_sig = concept_clean.strip()
+        elif spec.mode == "owner" and spec.name and spec.name.strip():
+            badge_sig = spec.name.strip()
+        elif spec.mode == "book":
+            badge_sig = "마음을 다독이는 책" if fable else spec.book_title.strip()
+        elif usp_items:
+            badge_sig = usp_items[0]
+        elif spec.business_type and spec.business_type.strip() and spec.business_type.strip() not in ("기타", "가게", "매장"):
+            badge_sig = spec.business_type.strip()
+
         copy = make_shorts_copy(
             spec.mode, hook=hook, usp=spec.usp, product_name=bundle_title or spec.name, api_key=spec.api_key, mock=spec.mock,
             trend=digest_for(spec.mode, spec.business_type),
-            signature=(("마음을 다독이는 책" if fable else spec.book_title.strip()) if spec.mode == "book"
-                       else usp_items[0] if usp_items else ""),
+            signature=badge_sig,
             hidden_terms=[spec.book_title, spec.book_author] if fable else None,
-            region=region_of(spec.address) if spec.mode == "owner" else "")
+            region=region_of(spec.address) if spec.mode == "owner" else "",
+            core_concept=concept_clean,
+            business_type=spec.business_type or "")
         thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
                                       sub_text=copy["thumb_sub"], accent=copy["accent"])
     except Exception as e:
@@ -364,10 +406,33 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         label=book.get("label") if spec.mode == "book" else None,
         disclosure=disclosure_short(spec) or None,
         bars=((scenes[0].get("bundle_title") or "", spec.bundle_bottom or DEFAULT_BOTTOM_BAR) if spec.is_bundle and scenes else None),
-        intro_image=thumb, bgm_path=spec.bgm_path)
+        bgm_path=spec.bgm_path)   # 렌더는 커버와 무관 (0초 커버는 완성 후 후처리)
     bgm = {"on": bool(spec.bgm_path), "info": comp.last_bgm_info, "error": comp.last_bgm_error}
     logger.info(f"BGM 상태: {'켜짐' if spec.bgm_path else '꺼짐'} → {comp.last_bgm_info or comp.last_bgm_error or '적용 안 함'}")
     job.save_plan(scenes)
+
+    # 쇼츠 최적화 SEO 메타데이터 자동 생성 및 metadata.json 저장
+    seo_meta = None
+    try:
+        from core.seo_generator import generate_seo_metadata
+        seo_meta = generate_seo_metadata(
+            scenes=scenes,
+            mode=spec.mode,
+            product_name=(scenes[0].get("bundle_title") or spec.name) if spec.is_bundle and scenes else spec.name,
+            usp=spec.usp,
+            search_keyword=spec.search_keyword,
+            address=spec.address,
+            api_key=spec.api_key,
+            mock=spec.mock,
+            business_type=spec.business_type or "",
+            core_concept=getattr(spec, "core_concept", "") or "",
+            tag_set=(copy or {}).get("tag_set"),          # 설명란·첫 댓글·검색 태그가 같은 태그 풀을 쓴다
+        )
+        job.save_metadata(seo_meta)
+        logger.info(f"[SEO 메타데이터 저장 완료] {job.metadata_path}")
+    except Exception as me:
+        logger.warning(f"SEO 메타데이터 생성 중 오류 (렌더링은 완료): {me}")
+
     comment = ""
     if spec.mode == "book":
         # 시골책방 채널 업로드 연결 전: 첫 댓글 텍스트를 대기열(outputs/youtube/comment_drafts.json)에 바로 저장
@@ -375,5 +440,15 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         comment = book_comment(spec, copy)
         queue_comment_draft("book", final, comment, job_id=job.job_id)
     step(100, "✨ 렌더링 완료!")
+    cover = None
+    if thumb and os.path.exists(thumb):
+        try:
+            from core.youtube_upload import export_cover_jpg
+            cover = export_cover_jpg(thumb)
+            logger.info(f"[커버 이미지] {cover} ({os.path.getsize(cover) // 1024}KB)")
+            from core.render.cover_clip import apply_cover_if_enabled   # 영상 완성 후 독립 후처리: 커버 1장만 앞에 붙임
+            apply_cover_if_enabled(final, cover)
+        except Exception as ce:
+            logger.warning(f"커버 이미지(thumbnail.jpg) 저장 실패 - 업로드 시 다시 시도: {ce}")
     return RenderResult(final_path=final, thumb_path=thumb, shorts_copy=copy, bgm=bgm, generated_images=images,
-                        comment=comment)
+                        comment=comment, metadata=seo_meta, cover_path=cover)

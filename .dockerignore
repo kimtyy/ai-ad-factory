@@ -1,0 +1,22 @@
+# 비밀·대용량·로컬 산출물은 이미지에 넣지 않음 (서버에는 볼륨 /data + 대시보드 '서버 데이터 가져오기'로)
+.env
+.env.*
+!.env.example
+secrets/
+outputs/
+inbox/
+fonts/
+assets/bgm/*
+!assets/bgm/README.md
+scratch/
+sessions/
+.git/
+.venv/
+venv/
+**/__pycache__/
+*.pyc
+*.mp4
+*.mov
+*.mp3
+*.wav
+tests/_fixtures/

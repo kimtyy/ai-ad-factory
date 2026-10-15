@@ -9,7 +9,33 @@ import re
 import asyncio
 import logging
 import concurrent.futures
+from datetime import timezone as tz
+from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
+
+import edge_tts
+import edge_tts.constants
+import edge_tts.communicate
+import edge_tts.drm
+
+# Microsoft Edge-TTS 403 대응: api.msedgeservices.com 엔드포인트 패치
+_EDGE_TTS_NEW_WSS_URL = (
+    "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+    f"?Ocp-Apim-Subscription-Key={edge_tts.constants.TRUSTED_CLIENT_TOKEN}"
+)
+edge_tts.constants.WSS_URL = _EDGE_TTS_NEW_WSS_URL
+edge_tts.communicate.WSS_URL = _EDGE_TTS_NEW_WSS_URL
+
+def _safe_parse_rfc2616_date(date: str):
+    try:
+        parsed = parsedate_to_datetime(date)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=tz.utc)
+        return parsed.timestamp()
+    except Exception:
+        return None
+
+edge_tts.drm.DRM.parse_rfc2616_date = staticmethod(_safe_parse_rfc2616_date)
 
 logger = logging.getLogger("ad_factory.tts")
 
@@ -158,17 +184,106 @@ def space_region_names(text: str) -> str:
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200d]")
 
 
-def clean_tts_text(text: str, keep_commas: bool = False) -> str:
+# 영문 대문자 약어(HKG, LED, USB …)는 Edge-TTS가 자음만 뭉개 읽는다('ㅎㅋㄱ') → 알파벳 이름 그대로 한글로 풀어 읽게 한다.
+_LETTER_KO = {"A": "에이", "B": "비", "C": "씨", "D": "디", "E": "이", "F": "에프", "G": "지", "H": "에이치", "I": "아이", "J": "제이",
+              "K": "케이", "L": "엘", "M": "엠", "N": "엔", "O": "오", "P": "피", "Q": "큐", "R": "알", "S": "에스", "T": "티",
+              "U": "유", "V": "브이", "W": "더블유", "X": "엑스", "Y": "와이", "Z": "제트"}
+# 글자 이름이 아니라 단어로 읽는 약어 (한글 음가를 직접 지정)
+_ACRONYM_WORDS = {"NASA": "나사", "IKEA": "이케아", "OK": "오케이", "TV": "티비", "UFO": "유에프오", "WIFI": "와이파이",
+                  "VIP": "브이아이피", "DIY": "디아이와이", "BBQ": "비비큐"}
+# 영어 단어가 대문자로 적힌 것: 철자로 풀면 안 되므로 그대로 두어 엔진이 단어로 읽게 한다 (3글자 이하라 철자 규칙에 걸리는 것들)
+_ACRONYM_PASSTHROUGH = {"ONE", "BAR", "NEW", "HOT", "BIG", "TOP", "PRO", "MAX", "SPA", "BOX", "BAG", "CAR", "ART", "PET", "FIT",
+                        "SET", "DAY", "SUN", "SEA", "MIX", "POP", "TEA", "ICE", "KID", "ZOO", "WAY", "YES", "AIR", "OFF", "ON"}
+_ACRONYM = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2,8})(?![A-Za-z])")
+
+
+def spell_acronyms(text: str) -> str:
+    """
+    영문 대문자 약어를 한글 음가로 ('HKG의' → '에이치케이지의'). 사전의 단어형 약어는 단어 음가로, 영어 단어(ONE·BAR 등)는 그대로.
+    철자로 읽는 기준: 3자 이하이거나 모음(A·E·I·O·U)이 없는 약어(CCTV). 그보다 긴 모음 포함 표기(예: 상호 'BAKERY')는 단어로 보고 그대로 둔다.
+    소문자·혼합 표기는 건드리지 않음. 상호의 정확한 읽기는 readings(상호명 읽는 법)가 우선한다.
+    """
+    def repl(m):
+        w = m.group(1)
+        if w in _ACRONYM_WORDS:
+            return _ACRONYM_WORDS[w]
+        if w in _ACRONYM_PASSTHROUGH:
+            return w
+        if len(w) <= 3 or not re.search(r"[AEIOU]", w):
+            return "".join(_LETTER_KO.get(ch, ch) for ch in w)
+        return w
+    return _ACRONYM.sub(repl, text or "")
+
+
+def normalize_tts_pronunciation(text: str) -> str:
+    """
+    [TTS 오디오 발음 정규화 전처리 (Edge-TTS Normalizer)]
+    화면 자막은 시각적 직관성을 위해 '상시 N+1 행사', '10%', '1+1' 등 원문 기호를 유지하되,
+    TTS 엔진으로 전달되는 텍스트(tts_text)만 자연스러운 한국어 음가로 자동 치환합니다:
+    - 'N+1' / 'n+1' -> '엔 플러스 일'
+    - '1+1' -> '원 플러스 원'
+    - '2+1' -> '투 플러스 원'
+    - '3+1' -> '쓰리 플러스 원'
+    - '4+1' -> '포 플러스 원'
+    - 기타 'X+Y' -> 'X 플러스 Y'
+    - '%' -> '퍼센트'
+    - '~' / '～' -> 범위/기간 연결 시 '에서' 또는 '부터', 어미 뒤 늘임표는 호흡 쉼표
+    - '24시' -> '이십사 시' / '24시간' -> '이십사 시간'
+    """
+    if not text:
+        return ""
+    s = str(text)
+
+    # 0. 영문 대문자 약어 → 알파벳 이름 (N+1 처리보다 먼저: 'N'이 '엔'으로 풀리지 않게 N+1 패턴은 아래에서 별도 처리)
+    s = re.sub(r"(?<![A-Za-z])[nN]\s*\+\s*1(?![0-9])", "엔 플러스 일", s)
+    s = spell_acronyms(s)
+
+    # 1. 프로모션 / 행사 표기 (N+1, 1+1, 2+1 등)
+    # n+1 / N+1
+    s = re.sub(r'(?i)\b[nN]\s*\+\s*1\b', '엔 플러스 일', s)
+    s = re.sub(r'(?i)[nN]\+1', '엔 플러스 일', s)
+    # 1+1, 2+1, 3+1, 4+1 (광고/소비자 표준 구어 발음)
+    s = re.sub(r'\b1\s*\+\s*1\b', '원 플러스 원', s)
+    s = re.sub(r'1\+1', '원 플러스 원', s)
+    s = re.sub(r'\b2\s*\+\s*1\b', '투 플러스 원', s)
+    s = re.sub(r'2\+1', '투 플러스 원', s)
+    s = re.sub(r'\b3\s*\+\s*1\b', '쓰리 플러스 원', s)
+    s = re.sub(r'3\+1', '쓰리 플러스 원', s)
+    s = re.sub(r'\b4\s*\+\s*1\b', '포 플러스 원', s)
+    s = re.sub(r'4\+1', '포 플러스 원', s)
+    # 기타 숫자+숫자 (예: 5+1 등)
+    s = re.sub(r'(\d+)\s*\+\s*(\d+)', r'\1 플러스 \2', s)
+
+    # 2. 24시, 24시간
+    s = re.sub(r'24시간', '이십사 시간', s)
+    s = re.sub(r'24시(?![가-힣])', '이십사 시', s)
+
+    # 3. 퍼센트 (%)
+    s = re.sub(r'(\d+)\s*%', r'\1 퍼센트', s)
+    s = s.replace('%', ' 퍼센트 ')
+
+    # 4. 물결표 (~) 범위 및 기간 (10시~20시 -> 10시에서 20시, 1~2월 -> 1에서 2월)
+    s = re.sub(r'([0-9가-힣]+)\s*[~～]\s*([0-9가-힣]+)', r'\1에서 \2', s)
+    # 문장 끝이나 단어 뒤의 물결표(~, ~~): 부드러운 호흡 쉼표로 변환
+    s = re.sub(r'[~～]+', ', ', s)
+
+    return s
+
+
+def clean_tts_text(text: str, keep_commas: bool = True) -> str:
     """
     [TTS 음성 합성용 텍스트 정제기]
-    - 문장 부호(!, .)와 쉼표 제거 -> 음절 간 어색한 끊김 방지 및 자연스러운 연음 유도
-      (keep_commas=True: 의문문 억양용 '숨 쉼표'를 살림)
-    - 물음표(?)는 유지: 지우면 신경망 TTS가 평서문으로 읽어 끝음이 떨어짐 (실측: '맞아요' 끝 F0 -26% → '맞아요?' +5~21%)
+    - 발음 정규화(N+1 -> 엔 플러스 일, 1+1 -> 원 플러스 원, % -> 퍼센트, ~ -> 에서 등)
+    - 문장 부호(!, .) 정리 (물음표는 의문문 억양 유지를 위해 보존)
+    - keep_commas=True: 성우의 자연스러운 호흡 단위(의미 단위) 끊어읽기를 위해 쉼표(,) 보존
     - 특수문자 및 따옴표 제거
     - 숫자의 한자어 변환
     """
     if not text:
         return ""
+
+    # [핵심] 0. TTS 발음 정규화 전처리 (원문 자막은 보존, TTS 나래이션 음가만 한글 치환)
+    text = normalize_tts_pronunciation(text)
 
     # 0-1. 이모지·장식 기호 제거, 붙어 쓴 지역명 끊기, 영문 상호 정리 ("John's" → "Johns", '카페ONE' → '카페 ONE')
     text = _EMOJI.sub(" ", text)
@@ -186,11 +301,13 @@ def clean_tts_text(text: str, keep_commas: bool = False) -> str:
     text = text.replace("~", " ").replace("～", " ").replace("^", " ")
     text = re.sub(r'[\'\"`#*@&%=+;:\(\)\[\]\{\}<>\/\\_]', ' ', text)
 
-    # 2. 문장 부호(!, .) 및 쉼표 제거 (자연스러운 연음 유도). 물음표는 하나로 정리해 유지 ('?!', '??' → '?')
+    # 2. 문장 부호(!, .) 정리. 물음표는 하나로 정리해 유지 ('?!', '??' → '?')
     text = re.sub(r"\?[!?]*|!+\?", "?", text)
     text = text.replace("!", " ").replace(".", " ")
     if not keep_commas:
         text = text.replace(",", " ")
+    else:
+        text = re.sub(r",+", ",", text)
 
 
     # 4. 공백 및 조사 정리
@@ -288,6 +405,9 @@ def _run_async_safe(coro):
         return asyncio.run(coro)
 
 
+EDGE_ATTEMPTS = 5          # Edge-TTS는 간헐 403/429가 있어 충분히 재시도 (다른 엔진으로 넘기면 씬마다 목소리가 달라짐)
+
+
 def generate_speech(
     text: str,
     output_path: str,
@@ -320,35 +440,55 @@ def generate_speech(
     if not cleaned:
         cleaned = "힐링 여행을 즐겨보세요."
 
-    logger.info(f"[Edge-TTS] 음성 합성 시작: Voice={voice}, Rate={rate}, Pitch={pitch} -> '{cleaned}'")
-    print(f"[TTS] Edge-TTS 생성: Voice={voice} (원래 요청={voice_actor}), Rate={rate}, Pitch={pitch} -> {output_path}")
+    is_female = "SunHi" in voice
+    gender_label = "여성 음성 (SunHi)" if is_female else "남성/기타 음성"
 
-    try:
-        _run_async_safe(_generate_edge_tts_async(
-            text=cleaned,
-            voice=voice,
-            rate=rate,
-            pitch=pitch,
-            output_path=output_path
-        ))
+    logger.info(f"[Edge-TTS] 합성 요청: voice_actor='{voice_actor}' -> 매핑 Voice='{voice}' ({gender_label}), Rate={rate}, Pitch={pitch} -> '{cleaned}'")
+    print(f"[TTS] ========================================================")
+    print(f"[TTS] [성우 확인] 요청된 voice_actor: '{voice_actor}'")
+    print(f"[TTS] [보이스 매핑] Edge-TTS Voice: '{voice}' [{gender_label}]")
+    print(f"[TTS] [오디오 설정] Rate={rate}, Pitch={pitch} -> 대상 파일: {output_path}")
+    print(f"[TTS] ========================================================")
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-            sz = os.path.getsize(output_path)
-            logger.info(f"[Edge-TTS 성공] {output_path} ({sz:,} bytes)")
-            print(f"[TTS] [성공] {output_path} ({sz:,} bytes) [Voice: {voice}]")
-            return output_path
-        else:
-            raise RuntimeError("Edge-TTS 출력 파일이 비어있거나 생성되지 않았습니다.")
-
-    except Exception as e:
-        logger.warning(f"Edge-TTS 생성 실패 ({e}). gTTS Fallback 시도 중...")
-        print(f"[TTS] [경고] Edge-TTS 생성 예외 ({e}), gTTS Fallback 진행...")
+    last_err = None
+    for attempt in range(1, EDGE_ATTEMPTS + 1):
         try:
-            from gtts import gTTS
-            tts = gTTS(text=cleaned, lang="ko", slow=False)
-            tts.save(output_path)
-            print(f"[TTS] [gTTS Fallback 성공] {output_path}")
-            return output_path
-        except Exception as ge:
-            logger.error(f"gTTS Fallback도 실패: {ge}")
-            raise RuntimeError(f"모든 TTS 엔진 호출 실패: {ge}")
+            _run_async_safe(_generate_edge_tts_async(
+                text=cleaned,
+                voice=voice,
+                rate=rate,
+                pitch=pitch,
+                output_path=output_path
+            ))
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                sz = os.path.getsize(output_path)
+                logger.info(f"[Edge-TTS 성공] {output_path} ({sz:,} bytes) [Voice: {voice}]")
+                print(f"[TTS] [성공] {output_path} ({sz:,} bytes) [보이스 적용 완료: {voice} ({gender_label})]")
+                return output_path
+            else:
+                raise RuntimeError("Edge-TTS 출력 파일이 비어있거나 생성되지 않았습니다.")
+
+        except Exception as e:
+            last_err = e
+            if attempt < EDGE_ATTEMPTS:
+                import time
+                wait_sec = 1.0 * attempt
+                logger.warning(f"[Edge-TTS 재시도] {attempt}/{EDGE_ATTEMPTS} 회차 실패 ({e}), {wait_sec:.1f}초 대기 후 재시도...")
+                time.sleep(wait_sec)
+                continue
+
+    if os.getenv("TTS_ALLOW_GTTS", "0").strip() != "1":
+        # 다른 엔진(gTTS)은 목소리가 달라 한 씬만 성우가 바뀌어 들린다 → 기본은 대체하지 않고 실패로 알린다
+        raise RuntimeError(f"Edge-TTS {EDGE_ATTEMPTS}회 연속 실패 ({last_err}). 목소리 일관성을 위해 다른 음성 엔진으로 대체하지 않았어요. "
+                           "잠시 후 다시 렌더해 주세요 (이미 만든 씬 음성은 캐시로 재사용됩니다).")
+    logger.warning(f"Edge-TTS 생성 {EDGE_ATTEMPTS}회 연속 실패 ({last_err}). TTS_ALLOW_GTTS=1 이라 gTTS Fallback 시도 (목소리가 달라집니다)")
+    try:
+        from gtts import gTTS
+        tts = gTTS(text=cleaned, lang="ko", slow=False)
+        tts.save(output_path)
+        print(f"[TTS] [gTTS Fallback 성공] {output_path}")
+        return output_path
+    except Exception as ge:
+        logger.error(f"gTTS Fallback도 실패: {ge}")
+        raise RuntimeError(f"모든 TTS 엔진 호출 실패: {ge}")

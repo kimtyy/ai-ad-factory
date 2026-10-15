@@ -9,7 +9,7 @@ import logging
 import subprocess
 import tempfile
 from typing import List, Dict, Any, Optional
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import numpy as np
 import cv2
 
@@ -58,9 +58,8 @@ TTS_KEEP_TAIL_SEC = 0.12
 # Edge-TTS가 가끔 앞부분만 담긴 잘린 파일(예: 26자 대사에 0.36초)을 정상 응답처럼 돌려줌 → 글자 수 대비 너무 짧으면 재시도
 TTS_MIN_SEC_PER_CHAR = 0.06
 TTS_RETRIES = 2
-# 씬 음성 동시 생성 수: Edge-TTS는 네트워크 대기라 스레드로 겹치면 빨라짐
-# (실측 7씬: 순차 12.9초 → 2개 5.0초 → 4개 3.5초 → 6개 3.4초, 음성 길이·후킹 경계 동일, 차단·잘림 없음)
-TTS_WORKERS = 4
+# 씬 음성 동시 생성 수: 너무 많은 동시 요청 시 429 발생 방지를 위해 2개로 안정화
+TTS_WORKERS = 2
 
 
 def tts_too_short(text: str, seconds: Optional[float]) -> bool:
@@ -140,13 +139,13 @@ def num_to_sino_korean(num: int) -> str:
 def clean_tts_text(text: str) -> str:
     """
     TTS 음성 합성용 텍스트 정제기:
-    1. 물결표(~)는 쉼표로 치환하여 '물결표'라고 소리 내어 읽는 현상 원천 차단
-    2. 슬래시(/), 샵(#), 별표(*), 따옴표 등 발음 방해 특수문자 제거
-    3. 기호 치환 (+ -> 플러스, % -> 퍼센트)
-    4. 숫자(48시간 -> 사십팔 시간, 3초 -> 삼 초) 한자어 발음 변환
+    1. core.tts.normalize_tts_pronunciation으로 N+1, 1+1, %, ~ 등 발음 정규화
+    2. 특수문자 제거 및 숫자 한자어 발음 변환
     """
     if not text:
         return ""
+    from core.tts import normalize_tts_pronunciation
+    text = normalize_tts_pronunciation(text)
 
     # 1. 물결표(~)는 자연스러운 쉼표 호흡으로 치환
     text = re.sub(r'~+', ', ', text)
@@ -274,16 +273,15 @@ class AssetGenerator:
 
         # 여행 상품 모드: 수집된 갤러리 컷 1:1 매핑 (rembg 누끼 및 Imagen 3 완전 바이패스)
         if gallery_image_path and os.path.exists(gallery_image_path):
-            if not force and self.is_cached(out_path):
-                img_mtime = os.path.getmtime(gallery_image_path)
-                png_mtime = os.path.getmtime(out_path)
-                if png_mtime >= img_mtime:
-                    logger.info(f"[Cache Hit] 씬 {scene_num} 갤러리 이미지 이미 존재: {out_path}")
-                    return out_path
             logger.info(f"[Gallery Mapping] 씬 {scene_num}: 갤러리 컷 원본 1:1 매핑 ({gallery_image_path}) -> {out_path}")
             try:
-                with Image.open(gallery_image_path) as g_img:
-                    g_img.convert("RGB").save(out_path, "PNG")
+                with Image.open(gallery_image_path) as source:
+                    orientation = source.getexif().get(274, 1)
+                    if not force and orientation == 1 and self.is_cached(out_path):
+                        if os.path.getmtime(out_path) >= os.path.getmtime(gallery_image_path):
+                            logger.info(f"[Cache Hit] 씬 {scene_num} 갤러리 이미지 이미 존재: {out_path}")
+                            return out_path
+                    ImageOps.exif_transpose(source).convert("RGB").save(out_path, "PNG")
                 return out_path
             except Exception as ge:
                 logger.warning(f"갤러리 이미지 변환 실패 ({ge}). 원본 경로를 직접 사용합니다.")
@@ -315,6 +313,14 @@ class AssetGenerator:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp3")
         hook = self._spoken_hook(scene)
+        if self.audio_mode != "silent" and not force:
+            try:
+                with open(out_path + ".voice.json", "r", encoding="utf-8") as cache_file:
+                    cached_actor = json.load(cache_file).get("voice_actor")
+            except (OSError, ValueError, AttributeError):
+                cached_actor = None
+            if cached_actor != self.voice_actor:
+                force = True
 
         if self.audio_mode == "silent":
             # 무음 모드: 소리는 없지만 자막 전환 시점은 동일하게 유지
@@ -332,6 +338,7 @@ class AssetGenerator:
                 logger.info(f"[Cache Hit] 씬 {scene_num} 오디오 이미 존재: {out_path}")
                 return out_path
             self._synthesize(scene.get("voiceover", ""), out_path, scene, force)
+            self._save_voice_cache(out_path)
             return out_path
 
         hook_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_hook.mp3")
@@ -349,12 +356,20 @@ class AssetGenerator:
                                  capture_output=True, text=True, encoding="utf-8", errors="ignore")
             if res.returncode != 0:
                 raise RuntimeError(f"씬 {scene_num} 후킹+서브 음성 결합 실패: {res.stderr[-300:]}")
+            self._save_voice_cache(out_path)
             logger.info(f"씬 {scene_num} 2단 음성: 후킹 '{hook}' ({hook_sec:.2f}초) → 서브 '{scene.get('voiceover', '')}'")
         else:
             hook_sec = max(HOOK_SOLO_SEC, (_audio_seconds(hook_path) or 0.0) + HOOK_GAP_SEC)
             logger.info(f"[Cache Hit] 씬 {scene_num} 2단 음성 이미 존재 (후킹 {hook_sec:.2f}초): {out_path}")
         scene["hook_sec"] = round(hook_sec, 2)
         return out_path
+
+    def _save_voice_cache(self, audio_path: str) -> None:
+        metadata_path = audio_path + ".voice.json"
+        temp_path = metadata_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as cache_file:
+            json.dump({"voice_actor": self.voice_actor}, cache_file)
+        os.replace(temp_path, metadata_path)
 
     def generate_voices(self, scenes: List[Dict[str, Any]], force: bool = False,
                         on_done: Optional[Any] = None) -> List[str]:
@@ -394,18 +409,24 @@ class AssetGenerator:
 
     def _spoken_hook(self, scene: Dict[str, Any]) -> str:
         """씬 1 후킹 헤드라인을 먼저 읽을지 (실사 모드에서 hook_title이 있을 때만. 커머스는 기존 상단 후킹 바 유지)"""
-        if self.mode not in REAL_MEDIA_MODES:
-            return ""
+        from core.mode_policy import hook_split_enabled
+        if self.mode not in REAL_MEDIA_MODES or not hook_split_enabled():
+            return ""                 # 훅 분리 중단: 씬 1도 본문 대사만 한 번에 읽는다
         return str(scene.get("hook_title") or "").strip()
 
     def _synthesize(self, text: str, out_path: str, scene: Dict[str, Any], force: bool = False,
                     rate: Optional[str] = None) -> str:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         actor_info = VOICE_ACTOR_PROFILES.get(self.voice_actor, VOICE_ACTOR_PROFILES["female_20s"])
-        # Edge-TTS 파라미터: rate="+12%"(지루함 제거), pitch="+3Hz"(발랄한 톤), 여성 SunHi / 남성 InJoon
-        rate = rate or scene.get("tts_rate") or MODE_RATE.get(self.mode) or actor_info.get("rate", "+12%")
+        from core.mode_policy import get_mode_policy
+        policy = get_mode_policy(self.mode)
+        rate = rate or scene.get("tts_rate") or policy.tts_rate or actor_info.get("rate", "+12%")
         pitch = actor_info.get("pitch", "+3Hz")
-        logger.info(f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor}, Rate={rate}, Pitch={pitch}): '{text}'")
+        from core.tts import resolve_edge_voice
+        mapped_voice = resolve_edge_voice(self.voice_actor)
+        is_female = "SunHi" in mapped_voice
+        logger.info(f"[Edge-TTS] 씬 {scene_num} 한국어 음성 생성 시작 (성우={self.voice_actor} -> Voice={mapped_voice}, Rate={rate}, Pitch={pitch}): '{text}'")
+        print(f"[AssetGenerator] [씬 {scene_num}] 요청 voice_actor='{self.voice_actor}' -> 매핑 Voice='{mapped_voice}' ({'여성 SunHi' if is_female else '남성/기타'})")
 
         if self.mock:
             duration_sec = float(scene.get("duration_sec", 2.5))
@@ -418,14 +439,16 @@ class AssetGenerator:
         if spoken != text:
             logger.info(f"씬 {scene_num} 읽는 법 적용: '{text}' → '{spoken}'")
             text = spoken
+        raw_path = os.path.splitext(out_path)[0] + ".raw.mp3"
+        temporary_paths = [raw_path]
         try:
-            raw_path = os.path.splitext(out_path)[0] + ".raw.mp3"
             variants = question_variants(text)
             if len(variants) > 1:
                 # 의문문: 숨 쉼표 위치가 다른 후보를 합성해 말끝이 가장 많이 올라가는 것을 사용 (자막은 원문 그대로)
                 scored = []
                 for vi, variant in enumerate(variants):
                     cand_path = os.path.splitext(out_path)[0] + f".q{vi}.mp3"
+                    temporary_paths.append(cand_path)
                     self._speak_checked(variant, cand_path, rate, pitch, scene_num, keep_commas=True)
                     scored.append((end_rise_percent(cand_path), vi, variant, cand_path))
                 best = max(scored, key=lambda x: (x[0] if x[0] is not None else -999.0, -x[1]))
@@ -439,8 +462,15 @@ class AssetGenerator:
             logger.info(f"씬 {scene_num} Edge-TTS 음성 생성 완료 (앞뒤 무음 제거: {_audio_seconds(raw_path) or 0:.2f}초 → "
                         f"{_audio_seconds(out_path) or 0:.2f}초) -> {out_path}")
         except Exception as e:
-            logger.warning(f"씬 {scene_num} Edge-TTS 음성 생성 실패: {e}. 더미 오디오로 안전 복구합니다.")
-            self._create_mock_audio(float(scene.get("duration_sec", 2.5)), out_path)
+            # 삑 소리 더미나 다른 성우로 조용히 때우지 않는다: 한 씬만 목소리가 바뀌거나 효과음이 나는 영상이 만들어짐
+            logger.error(f"씬 {scene_num} Edge-TTS 음성 생성 실패: {e}")
+            raise RuntimeError(f"씬 {scene_num} 나레이션 음성을 만들지 못했어요 (같은 성우 유지를 위해 다른 음성으로 대체하지 않음): {e}")
+        finally:
+            for temporary_path in temporary_paths:
+                try:
+                    os.remove(temporary_path)
+                except FileNotFoundError:
+                    pass
         return out_path
 
     generate_audio = generate_voice
@@ -534,7 +564,8 @@ class AssetGenerator:
         - ease-out 곡선: 첫 프레임부터 빠르게 움직이고 끝에서 안착 (씬 전환 직후 정체감 제거)
         focus_bottom=True일 경우 건물 상단의 간판/로고가 프레임 밖으로 벗어나도록 하단 중심 크롭 적용.
         """
-        img = Image.open(image_path).convert("RGB")
+        with Image.open(image_path) as source:
+            img = ImageOps.exif_transpose(source).convert("RGB")
         target_w, target_h = 1080, 1920
         orig_w, orig_h = img.size
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
@@ -567,47 +598,47 @@ class AssetGenerator:
             ffmpeg_log_level="error",
             output_params=CLIP_ENCODE_PARAMS,
         )
-        writer.send(None)
+        try:
+            writer.send(None)
+            for i in range(total_frames):
+                t = min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0
+                e = kb_ease(t)
 
-        for i in range(total_frames):
-            t = min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0
-            e = kb_ease(t)
-
-            if motion_type in ("pan_right", "pan_left", "pan_down", "pan_up"):
-                z = 1.0 + (KB_PAN_ZOOM - 1.0) * e
-                crop_w = int(round(target_w / z))
-                crop_h = int(round(target_h / z))
-                p = e if motion_type in ("pan_right", "pan_down") else 1.0 - e
-                if motion_type in ("pan_right", "pan_left"):
-                    x1 = int(round((mw - crop_w) * p))
-                    y1 = (mh - crop_h) // 2
+                if motion_type in ("pan_right", "pan_left", "pan_down", "pan_up"):
+                    z = 1.0 + (KB_PAN_ZOOM - 1.0) * e
+                    crop_w = int(round(target_w / z))
+                    crop_h = int(round(target_h / z))
+                    p = e if motion_type in ("pan_right", "pan_down") else 1.0 - e
+                    if motion_type in ("pan_right", "pan_left"):
+                        x1 = int(round((mw - crop_w) * p))
+                        y1 = (mh - crop_h) // 2
+                    else:
+                        x1 = (mw - crop_w) // 2
+                        y1 = int(round((mh - crop_h) * p))
                 else:
-                    x1 = (mw - crop_w) // 2
-                    y1 = int(round((mh - crop_h) * p))
-            else:
-                # zoom_in: 1.0 → KB_ZOOM / zoom_out: KB_ZOOM → 1.0 (확대 배율 = 기준 크롭 / 현재 크롭)
-                z = 1.0 + (KB_ZOOM - 1.0) * (1.0 - e if motion_type == "zoom_out" else e)
-                crop_w = int(round((target_w * KB_ZOOM) / z))
-                crop_h = int(round((target_h * KB_ZOOM) / z))
-                x1 = mw // 2 - crop_w // 2
-                y1 = mh // 2 - crop_h // 2
+                    # zoom_in: 1.0 → KB_ZOOM / zoom_out: KB_ZOOM → 1.0 (확대 배율 = 기준 크롭 / 현재 크롭)
+                    z = 1.0 + (KB_ZOOM - 1.0) * (1.0 - e if motion_type == "zoom_out" else e)
+                    crop_w = int(round((target_w * KB_ZOOM) / z))
+                    crop_h = int(round((target_h * KB_ZOOM) / z))
+                    x1 = mw // 2 - crop_w // 2
+                    y1 = mh // 2 - crop_h // 2
 
-            crop_w, crop_h = min(crop_w, mw), min(crop_h, mh)
-            x1 = max(0, min(mw - crop_w, x1))
-            if focus_bottom:
-                # 씬 1 건물 외관 상단 간판 로고 배제: Y 좌표를 하단 중심(85% 지점)으로 배치하여 상단 영역을 화면 밖으로 완전히 배제
-                y1 = max(0, min(mh - crop_h, int((mh - crop_h) * 0.85)))
-            else:
-                y1 = max(0, min(mh - crop_h, y1))
-            x2 = x1 + crop_w
-            y2 = y1 + crop_h
+                crop_w, crop_h = min(crop_w, mw), min(crop_h, mh)
+                x1 = max(0, min(mw - crop_w, x1))
+                if focus_bottom:
+                    # 씬 1 건물 외관 상단 간판 로고 배제: Y 좌표를 하단 중심(85% 지점)으로 배치하여 상단 영역을 화면 밖으로 완전히 배제
+                    y1 = max(0, min(mh - crop_h, int((mh - crop_h) * 0.85)))
+                else:
+                    y1 = max(0, min(mh - crop_h, y1))
+                x2 = x1 + crop_w
+                y2 = y1 + crop_h
 
-            cropped_frame = base_np[y1:y2, x1:x2]
-            resized_frame = cv2.resize(cropped_frame, (target_w, target_h), interpolation=cv2.INTER_AREA
-                                       if crop_w > target_w else cv2.INTER_LINEAR)
-            writer.send(resized_frame.tobytes())
-
-        writer.close()
+                cropped_frame = base_np[y1:y2, x1:x2]
+                resized_frame = cv2.resize(cropped_frame, (target_w, target_h), interpolation=cv2.INTER_AREA
+                                           if crop_w > target_w else cv2.INTER_LINEAR)
+                writer.send(resized_frame.tobytes())
+        finally:
+            writer.close()
         return out_path
 
     def _create_product_card_video(
@@ -633,7 +664,8 @@ class AssetGenerator:
         from PIL import ImageFilter, ImageEnhance
         W, H = 1080, 1920
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
-        full_img = Image.open(image_path).convert("RGB")
+        with Image.open(image_path) as source:
+            full_img = ImageOps.exif_transpose(source).convert("RGB")
         img = shot_crop(full_img, shot, product_box)          # 카드에 들어갈 앵글 (배경은 원본 전체 사진으로 깔아 같은 상품임을 유지)
         if fit == "cover":                                     # 카드 비율 고정: 가운데 기준으로 잘라 카드를 꽉 채움
             ratio = ((card_box[2] - card_box[0]) * W) / ((card_box[3] - card_box[1]) * H)
@@ -673,35 +705,37 @@ class AssetGenerator:
 
         writer = imageio_ffmpeg.write_frames(out_path, size=(W, H), fps=fps, codec="libx264", pix_fmt_in="rgb24",
                                              macro_block_size=1, ffmpeg_log_level="error", output_params=CLIP_ENCODE_PARAMS)
-        writer.send(None)
-        total = max(1, int(round(duration_sec * fps)))
-        for i in range(total):
-            e = kb_ease(min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0)
-            # 배경: 1.0 → COMMERCE_BG_ZOOM 천천히 확대
-            bz = 1.0 + (COMMERCE_BG_ZOOM - 1.0) * e
-            bcw, bch = int(bw0 / bz), int(bh0 / bz)
-            bx, by = (bw0 - bcw) // 2, (bh0 - bch) // 2
-            frame = cv2.resize(bg_np[by:by + bch, bx:bx + bcw], (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32)
-            frame *= (1.0 - shadow * 0.85)
-            # 카드 안 Ken Burns: 줌인/줌아웃, 패닝은 같은 폭 안에서 좌우·상하로 살짝 이동
-            if motion_type == "zoom_out":
-                z = card_zoom - (card_zoom - 1.0) * e
-            elif motion_type.startswith("pan_"):
-                z = 1.0 + (card_zoom - 1.0) * 0.7
-            else:
-                z = 1.0 + (card_zoom - 1.0) * e
-            kw, kh = int(sw / z), int(sh / z)
-            slack_x, slack_y = sw - kw, sh - kh
-            px, py = slack_x // 2, slack_y // 2
-            if motion_type in ("pan_right", "pan_left"):
-                px = int(slack_x * (e if motion_type == "pan_right" else 1.0 - e))
-            elif motion_type in ("pan_down", "pan_up"):
-                py = int(slack_y * (e if motion_type == "pan_down" else 1.0 - e))
-            card = cv2.resize(src[py:py + kh, px:px + kw], (cw, ch), interpolation=cv2.INTER_AREA).astype(np.float32)
-            region = frame[cy:cy + ch, cx:cx + cw]
-            frame[cy:cy + ch, cx:cx + cw] = card * mask + region * (1.0 - mask)
-            writer.send(np.clip(frame, 0, 255).astype(np.uint8).tobytes())
-        writer.close()
+        try:
+            writer.send(None)
+            total = max(1, int(round(duration_sec * fps)))
+            for i in range(total):
+                e = kb_ease(min(1.0, (i / float(fps)) / motion_sec) if motion_sec > 0 else 1.0)
+                # 배경: 1.0 → COMMERCE_BG_ZOOM 천천히 확대
+                bz = 1.0 + (COMMERCE_BG_ZOOM - 1.0) * e
+                bcw, bch = int(bw0 / bz), int(bh0 / bz)
+                bx, by = (bw0 - bcw) // 2, (bh0 - bch) // 2
+                frame = cv2.resize(bg_np[by:by + bch, bx:bx + bcw], (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+                frame *= (1.0 - shadow * 0.85)
+                # 카드 안 Ken Burns: 줌인/줌아웃, 패닝은 같은 폭 안에서 좌우·상하로 살짝 이동
+                if motion_type == "zoom_out":
+                    z = card_zoom - (card_zoom - 1.0) * e
+                elif motion_type.startswith("pan_"):
+                    z = 1.0 + (card_zoom - 1.0) * 0.7
+                else:
+                    z = 1.0 + (card_zoom - 1.0) * e
+                kw, kh = int(sw / z), int(sh / z)
+                slack_x, slack_y = sw - kw, sh - kh
+                px, py = slack_x // 2, slack_y // 2
+                if motion_type in ("pan_right", "pan_left"):
+                    px = int(slack_x * (e if motion_type == "pan_right" else 1.0 - e))
+                elif motion_type in ("pan_down", "pan_up"):
+                    py = int(slack_y * (e if motion_type == "pan_down" else 1.0 - e))
+                card = cv2.resize(src[py:py + kh, px:px + kw], (cw, ch), interpolation=cv2.INTER_AREA).astype(np.float32)
+                region = frame[cy:cy + ch, cx:cx + cw]
+                frame[cy:cy + ch, cx:cx + cw] = card * mask + region * (1.0 - mask)
+                writer.send(np.clip(frame, 0, 255).astype(np.uint8).tobytes())
+        finally:
+            writer.close()
         return out_path
 
     def _create_mock_video(self, image_path: str, duration_sec: float, out_path: str):
@@ -730,11 +764,12 @@ class AssetGenerator:
                 logger.info(f"[Cache Hit] 씬 {scene_num} 비디오 이미 존재: {out_path}")
                 return out_path
 
-        # 모션은 실제 화면 노출 시간(나레이션 길이 + 컴포지터 테일 0.2초) 안에 끝까지 진행되도록 하고,
-        # 클립은 마지막 씬 테일(+1.0초)까지 덮도록 조금 더 길게 렌더 (넘는 부분은 끝 구도 유지)
+        from core.mode_policy import get_mode_policy
+        policy = get_mode_policy(self.mode)
         audio_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp3")
         voice_sec = _audio_seconds(audio_path)
-        motion_sec = (voice_sec or float(scene.get("duration_sec", 2.5))) + 0.2
+        raw_motion = (voice_sec or float(scene.get("duration_sec", policy.default_scene_sec))) + policy.tail_sec
+        motion_sec = max(policy.min_scene_sec, min(policy.max_scene_sec, raw_motion))
         duration_sec = motion_sec + 1.0
 
         # 씬 번호 및 모션 프롬프트에 따라 부드러운 줌인, 줌아웃, 상하/좌우 패닝 교차 배정

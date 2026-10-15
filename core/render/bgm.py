@@ -58,6 +58,21 @@ def list_tracks(bgm_dir: Optional[str] = None) -> List[str]:
                   if f.lower().endswith(BGM_EXTS) and not f.startswith("."))
 
 
+def _stem(name: str) -> str:
+    return os.path.splitext(os.path.basename(name or ""))[0].strip().lower()
+
+
+def find_track(name: str, bgm_dir: Optional[str] = None) -> Optional[str]:
+    """파일 이름(또는 경로)으로 곡 찾기. 확장자는 무시 (PC의 .wav 이름을 서버의 .m4a에도 그대로 쓰게)"""
+    if not name:
+        return None
+    tracks = list_tracks(bgm_dir)
+    for t in tracks:
+        if name in (t, os.path.basename(t)):
+            return t
+    return next((t for t in tracks if _stem(t) == _stem(name)), None)
+
+
 def signature_tracks() -> List[str]:
     """.env BGM_SIGNATURE_TRACKS(쉼표로 구분한 파일 이름) → 대시보드 목록 맨 앞에 ⭐로 표시"""
     return [s.strip() for s in os.getenv("BGM_SIGNATURE_TRACKS", "").split(",") if s.strip()]
@@ -66,7 +81,7 @@ def signature_tracks() -> List[str]:
 def ordered_tracks(bgm_dir: Optional[str] = None) -> List[str]:
     sig = signature_tracks()
     tracks = list_tracks(bgm_dir)
-    first = [t for name in sig for t in tracks if os.path.basename(t) == name]
+    first = [t for name in sig for t in tracks if _stem(t) == _stem(name)]
     return first + [t for t in tracks if t not in first]
 
 
@@ -81,7 +96,8 @@ def book_default_track(bgm_dir: Optional[str] = None) -> Optional[str]:
     name = os.getenv("BGM_BOOK_TRACK", "").strip()
     if not name:
         return None
-    return name if name in [os.path.basename(t) for t in list_tracks(bgm_dir)] else None
+    t = find_track(name, bgm_dir)          # 확장자 무시 (서버는 m4a)
+    return os.path.basename(t) if t else None
 
 
 def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Optional[random.Random] = None) -> Optional[str]:
@@ -93,10 +109,7 @@ def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Option
         return None
     if choice == RANDOM:
         return (rng or random).choice(tracks)
-    for t in tracks:
-        if choice in (t, os.path.basename(t)):
-            return t
-    return None
+    return find_track(choice, bgm_dir)
 
 
 def mean_volume_db(path: str) -> Optional[float]:

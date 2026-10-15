@@ -15,6 +15,7 @@ from core.guardrail import validate_model_call
 from core.script_guard import COPY_TONE_RULES, VO_LIMIT, VO_HARD_MAX, complete_sentence, diversify_exclamations, shorten_line, strip_brochure_words, to_haeyo, is_hook_echo, \
     find_off_scene_topic, find_promo_tone, find_unsupported_claim, safe_line_for
 from core.radar.hints import HookHints, copies_reference
+from core.mode_policy import TRAVEL_POLICY, clamp_line_to_policy, create_length_violation_checker
 
 logger = logging.getLogger("ad_factory.analyzer")
 
@@ -357,33 +358,56 @@ def generate_mock_travel_storyboard(
     tone_and_manner: str = "aggro",
     script_style: str = "info",
     photo_inventory: Optional[Dict[str, int]] = None,
-    template: str = DEFAULT_TRAVEL_TEMPLATE
+    template: str = DEFAULT_TRAVEL_TEMPLATE,
+    core_concept: str = "",
 ) -> List[dict]:
     """
-    [숙소 제휴 Mock 콘티 - Script-First 규격]
-    - 템플릿(golden7/classic) + 사진 인벤토리 기반 씬 역할 배정 (특정 숙소 고유 정보 미포함)
+    [숙소 제휴 Mock 콘티 - 1컨셉 1메시지 & Script-First 규격]
+    - 선택된 1컨셉(core_concept)이 있는 경우 전체 스토리를 해당 1컨셉 관통으로 전개
+    - 시설 단순 나열 배제 및 비전-스토리 맥락화(Contextual Bridging)
     - 숙소 이름 철저 은닉 (Curiosity Gap), 엔딩 댓글 유도 CTA 자동 삽입
     """
     lines = MOCK_TRAVEL_LINES.get(script_style, MOCK_TRAVEL_LINES["info"])
     golden_lines = MOCK_GOLDEN7_LINES.get(script_style, MOCK_GOLDEN7_LINES["info"])
     slots = build_travel_slots(num_scenes, photo_inventory, usp, template)
     total = len(slots)
+    concept_clean = (core_concept or "").strip()
     scenes = []
     for i, slot in enumerate(slots):
         v_role = slot["role"]
         is_last = (i == total - 1)
         if is_last:
             text = TRAVEL_CTA_VOICEOVER
+        elif concept_clean:
+            # 1컨셉 절대 종속 & 비전-스토리 맥락화 (Contextual Bridging) Mock 대사
+            if i == 0:
+                text = f"{concept_clean} 즐기기 완벽한 비밀 스테이예요!"
+            elif v_role in ("pool", "view", "view_or_night"):
+                text = f"탁 트인 전망을 감상하며 {concept_clean}의 여유를 만끽할 수 있어요."
+            elif v_role in ("bedroom", "bedroom_or_view"):
+                text = f"포근한 공간에서 푹 쉬고 일어나 맞이하는 든든한 하루예요."
+            elif v_role in ("facility", "lounge"):
+                text = f"분위기 좋은 공간에서 펼쳐지는 풍성한 경험을 놓치지 마세요."
+            else:
+                text = f"{concept_clean}의 매력에 푹 빠져드는 힐링의 시간이에요."
         elif template == "golden7" and not slot["fallback_from"] and i < len(golden_lines):
             text = golden_lines[i]
         else:
             text = lines.get(v_role, lines["view"])
+        
+        hook_text = ""
+        if i == 0:
+            if concept_clean:
+                hook_text = f"{concept_clean[:10]} 보러 갈래요?" if len(concept_clean) > 5 else f"{concept_clean} 끝판왕?"
+            else:
+                hook_text = lines["hook_title"]
+
         scenes.append({
             "scene_index": i + 1,
             "scene_number": i + 1,
             "role": narrative_role_for(i, total, v_role),
             "duration_sec": 2.5,
-            "hook_title": lines["hook_title"] if i == 0 else "",
+            "hook_title": hook_text,
             "voiceover": text,
             "subtitle": text,
             "caption": text,
@@ -415,7 +439,8 @@ def plan_storyboard(
     photo_inventory: Optional[Dict[str, int]] = None,
     travel_template: str = DEFAULT_TRAVEL_TEMPLATE,
     slot_photo_notes: Optional[List[Optional[str]]] = None,
-    hook_hints: Optional[HookHints] = None
+    hook_hints: Optional[HookHints] = None,
+    core_concept: str = ""
 ) -> List[dict]:
     """
     Step 1: 레퍼런스 영상 분석 및 씬별 콘티 역기획 실행.
@@ -440,7 +465,7 @@ def plan_storyboard(
     role_plan = [sl["role"] for sl in slot_plan]
     target_length = TRAVEL_TEMPLATES.get(travel_template, TRAVEL_TEMPLATES["classic"])["length"]
     logger.info(
-        f"Step 1 시작 (모드={mode}): 제품명/여행지='{product_name}', USP='{usp}', 목표 씬={num_scenes}, "
+        f"Step 1 시작 (모드={mode}): 제품명/여행지='{product_name}', USP='{usp}', 코어컨셉='{core_concept}', 목표 씬={num_scenes}, "
         f"톤앤매너='{tone_info['name']}', 길이='{preset_info['name']}', 오디오='{audio_mode}', force={force}"
     )
     
@@ -474,7 +499,8 @@ def plan_storyboard(
                 tone_and_manner=tone_and_manner,
                 script_style=script_style,
                 photo_inventory=photo_inventory,
-                template=travel_template
+                template=travel_template,
+                core_concept=core_concept,
             )
         else:
             scenes = generate_mock_storyboard(
@@ -519,23 +545,38 @@ def plan_storyboard(
         style_preset = SCRIPT_STYLE_PRESETS.get(script_style, SCRIPT_STYLE_PRESETS["info"])
         style_instruction = style_preset["instruction"]
 
-        # 숙소 제휴 모드: 숙소명 철저 은닉(Curiosity Gap), 유튜버 썰 독백 → 씬별 분할(씬당 15~VO_LIMIT자), 사진 공간 기준 이야기 (뷔페 언급 금지)
+        concept_clean = (core_concept or "").strip()
+        concept_rule = ""
+        if concept_clean:
+            concept_rule = (
+                f"[★ 확정된 단 하나의 코어 컨셉 (Core Concept) - 100% 절대 관통]:\n"
+                f"   - 이번 30초 숏폼 전체를 관통할 단 하나의 핵심 혜택/메시지: '{concept_clean}'\n"
+                f"   - 씬 1의 훅 헤드라인(hook_title)부터 본문 전체와 마지막 CTA 직전까지 오직 이 '단 하나의 1컨셉'만을 집중 관통하세요!\n"
+                f"   - [단순 시설 나열 절대 금지]: 수영장 나왔다고 수영장 얘기, 침대 나왔다고 침대 얘기 등 시설을 백화점식으로 나열하는 것은 엄격히 금지됩니다.\n"
+                f"   - [비전-스토리 맥락화 (Contextual Bridging)]: 사진 속 공간과 풍경이 무엇이든, "
+                f"그 공간을 이 코어 컨셉('{concept_clean}')을 누리고 증명하는 감성적 무대와 배경으로 자연스럽게 맥락화하세요.\n"
+                f"     * 풍경/뷰 컷 ➔ 탁 트인 시야와 함께 온전히 누리는 감성적 여유\n"
+                f"     * 객실/실내 컷 ➔ 안락한 공간 속에서 편안하게 마주하는 힐링의 순간\n"
+                f"     * 특화/공용 공간 컷 ➔ 머무는 시간의 가치를 더해주는 특별한 경험\n"
+            )
+
         system_instruction = (
             "당신은 인스타그램 릴스, 틱톡, 유튜브 쇼츠에서 수백만 조회수와 폭발적인 댓글 참여율을 이끌어내는 "
             "'대한민국 1등 여행/숙소 숏폼 크리에이티브 디렉터'입니다.\n\n"
-            "당신의 미션은 시청자가 1초 만에 시선을 빼앗기고, 영상이 끝날 때까지 몰입하며, 댓글에 정보를 묻지 않고는 못 배기게 만드는 숏폼 여행 콘텐츠를 기획하는 것입니다.\n"
+            "\"쇼츠는 광고다. 광고는 1컨셉 1메시지다.\"\n"
+            "당신의 미션은 시청자가 1초 만에 시선을 빼앗기고, 영상이 끝날 때까지 단 하나의 킬러 혜택에 몰입하며, 댓글에 정보를 묻지 않고는 못 배기게 만드는 숏폼 여행 콘텐츠를 기획하는 것입니다.\n"
             "다음 핵심 원칙을 철저히 준수해야 합니다:\n"
-            f"1. [선택된 대본 기획 스타일 준수 ({style_preset['name']})]:\n"
+            + (f"0. {concept_rule}\n" if concept_rule else "")
+            + f"1. [선택된 대본 기획 스타일 준수 ({style_preset['name']})]:\n"
             f"   {style_instruction}\n"
-            f"2. [영상 길이 {target_length} 규격 & 씬당 대본 공백 포함 15~{VO_LIMIT}자]:\n"
-            f"   - 각 씬의 voiceover는 공백 포함 15~{VO_LIMIT}자의 구어체 조각으로 쓰세요. {VO_LIMIT}자를 넘으면 영상이 길어집니다.\n"
+            f"2. [영상 씬 듀레이션 {TRAVEL_POLICY.min_scene_sec}~{TRAVEL_POLICY.max_scene_sec}초 & 씬당 대본 공백 포함 {TRAVEL_POLICY.min_chars}~{TRAVEL_POLICY.max_chars}자]:\n"
+            f"   - 각 씬의 voiceover는 공백 포함 {TRAVEL_POLICY.min_chars}~{TRAVEL_POLICY.max_chars}자의 감성 구어체로 쓰세요. 절대 {TRAVEL_POLICY.max_chars}자를 초과하지 마세요.\n"
             "   - 먼저 영상 전체 대본(story)을 유튜버가 시청자 한 명에게 썰 푸는 독백 하나로 쓰고, 그것을 순서대로 잘라 씬별 voiceover로 나누세요. "
             "팜플렛 낭독체·홍보 어미·개조식 단문은 전면 금지입니다 (아래 [대본 톤] 참조).\n"
-            "3. [대본과 실제 사진 에셋의 정합성 - '사진 낭독' 아님]:\n"
+            "3. [대본과 실제 사진 에셋의 정합성 & 비전-스토리 맥락화 (Contextual Bridging)]:\n"
             "   - 각 씬은 사용자 프롬프트에 배정된 시각 역할의 '실제 숙소 사진'과 함께 송출됩니다.\n"
-            "   - 그 씬 대사는 화면 속 공간을 '이야기하는' 문장이어야 합니다(그 공간에서 뭘 하면 좋은지, 어떤 기분인지). 사진에 보이는 걸 나열해 읽지 마세요.\n"
-            "   - 확보된 사진 구성과 특장점(USP)에 없는 시설·경관(수영장, 호수, 바다, 라운지 등)을 지어내면 허위광고가 됩니다.\n"
-            "   - 사진에 없는 '조식 뷔페', '식사' 등 허위 정보는 언급하지 마세요.\n"
+            "   - 그 씬 대사는 화면 속 공간을 '코어 컨셉의 맥락'으로 풀어내는 감각적인 문장이어야 합니다(그 공간에서 코어 컨셉을 어떻게 누리는지, 어떤 기분인지). 사진에 보이는 걸 기계적으로 나열해 읽지 마세요.\n"
+            "   - 시설 단순 설명('수영장이 있어요', '침대가 푹신해요')을 멈추고, 선택된 1컨셉의 가치를 증명하는 배경으로 사진을 활용하세요.\n"
             "4. [정보 은닉(Curiosity Gap) 절대 원칙 - 숙소명 직접 언급 엄격 금지]:\n"
             f"   - 크롤링된 실제 숙소명/상호명('{product_name}')을 대본 나레이션(voiceover) 및 자막(caption) 어디에도 직접 언급하는 것을 엄격히 금지합니다!\n"
             "   - 숙소명 대신 '문 열자마자 감탄 나오는 뷰', '나만 알고 싶은 비밀 숙소', '귀빈들만 찾던 비밀 스테이' 등 시각적 공간감과 경험 중심의 표현으로 100% 치환하세요.\n"
@@ -569,18 +610,30 @@ def plan_storyboard(
                     "scene_index": i + 1,
                     "role": narrative_role_for(i, len(role_plan), r),
                     "voiceover": TRAVEL_CTA_VOICEOVER if i == last_i else (
-                        f"<story의 첫 문장: 헤드라인을 받아 썰을 시작 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{VO_LIMIT}자>" if i == 0 else
-                        f"<story의 {i + 1}번째 문장: 앞 문장을 이음말로 받아 이어감 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{VO_LIMIT}자>"),
+                        f"<story의 첫 문장: 헤드라인을 받아 썰을 시작 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{TRAVEL_POLICY.max_chars}자>" if i == 0 else
+                        f"<story의 {i + 1}번째 문장: 앞 문장을 이음말로 받아 이어감 ({slot_plan[i]['desc']} 화면), 해요체 종결 어미로 끝나는 완결 문장 15~{TRAVEL_POLICY.max_chars}자>"),
                     "subtitle": TRAVEL_CTA_SUBTITLE if i == last_i else "<voiceover와 동일>",
                     "target_visual_role": r,
                     "visual_keywords": ROLE_KEYWORDS.get(r, []),
                     "hook_title": "<8~12자 후킹 헤드라인>" if i == 0 else "",
-                    "duration_sec": 2.5,
+                    "duration_sec": TRAVEL_POLICY.default_scene_sec,
                     "video_motion_prompt_en": TRAVEL_MOTIONS[i % len(TRAVEL_MOTIONS)],
                 }
                 for i, r in enumerate(role_plan)
             ],
         }, ensure_ascii=False, indent=2)
+
+        concept_prompt_block = ""
+        if concept_clean:
+            concept_prompt_block = f"""
+[★ 확정된 단 하나의 코어 컨셉 (Core Concept) - 100% 절대 관통]
+이번 영상은 아래 단 하나의 핵심 혜택/가치만을 30초 내내 증명하고 관통해야 합니다:
+👉 확정 코어 컨셉: "{concept_clean}"
+- 씬 1의 훅(hook_title)부터 본문 씬들, 마지막 CTA 직전까지 모든 대사는 오직 이 1컨셉으로 수렴해야 합니다!
+- [단순 시설 나열 절대 금지]: 수영장, 침대, 라운지 등 시설을 백화점식으로 나열하지 마세요.
+- [비전-스토리 맥락화 (Contextual Bridging)]: 사진 속 공간들을 이 코어 컨셉을 경험하는 감성적 무대와 배경으로 자연스럽게 맥락화하세요!
+  (각 사진 공간의 분위기를 살려, 그곳에서 코어 컨셉의 핵심 가치를 어떻게 체감하는지 자연스럽게 연결하세요)
+"""
 
         prompt = f"""
 [여행/숙소 콘텐츠 타깃 정보]
@@ -597,6 +650,8 @@ def plan_storyboard(
 - 포맷: 9:16 세로형 풀스크린 숏폼 영상 (TikTok, Reels, Shorts)
 - 오디오 모드: {audio_mode}
 
+{concept_prompt_block}
+
 [대본 선기획 작성 요구사항]
 1. 반드시 아래 지정된 JSON 오브젝트 포맷({{"title": "...", "story": "...", "scenes": [...]}})으로 정확히 출력하세요.
 2. [대본 = 3자 큐레이터의 25~30초 숏폼 하나를 씬별로 자른 것]:
@@ -605,29 +660,25 @@ def plan_storyboard(
      voiceover를 이어 붙이면 story와 같아야 하고, 각 voiceover는 해요체 완결 문장(~예요, ~어요, ~죠, ~네요, ~까요?)이어야 합니다.
      문장 중간('~할 수', '~는데,', '~좋고,')에서 씬을 끊지 마세요.
    - 시설을 순서대로 나열하지 말고, 씬마다 방문 상황(TPO: 언제·누구와·어떤 기분일 때)을 하나씩 그리고 그 씬 화면 공간이 왜 답인지 말하세요.
-   - 리듬: 질문형('~할 때 어디 가요?'), 단언형('정답은 여기예요.'), 감탄형('이 뷰, 반칙이에요!')을 섞어 같은 어미가 두 씬 연속되지 않게.
+   - 어미: 해요체 평서문을 기본으로 하고, 질문형·감탄형은 내용상 어울릴 때만 쓰세요(문장 모양을 맞추려 억지로 의문문을 만들지 말 것).
    - 예 (구조만 참고): "바다 보면서 아무것도 안 하고 싶은 주말 있죠?" → "체크인 직후 수영장으로 직행하면 답이 나와요."
      → "쌀쌀한 날엔 통유리 실내 풀이 정답이에요."
    - 엄격 금지: '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데'. 지어낸 체험담('제가 가 봤는데', '먹어 보니').
    - 금지: 사진 낭독체('~가 보여요', '~도 있어서', '고급스러운·세련된 ~'), '~해보세요/~마세요/~딱!' 홍보 어미, '~가능함/~보임/~됨/~임' 개조식,
      '~입니다/~습니다/~아닙니다' 합쇼체.
-3. [씬별 시각 역할은 아래 배정을 그대로 사용 (변경 금지)]:
+3. [씬별 시각 역할 맥락화 (Contextual Bridging)]:
 {scene_role_lines}
-   - 각 씬의 voiceover는 그 씬 화면에 나오는 공간에 대한 이야기여야 합니다 (화면과 엉뚱한 공간 얘기 금지, 사진 나열 낭독도 금지).
-   - '이 씬에 실제로 나갈 사진' 설명이 있는 씬은 그 설명의 공간을 기준으로 이야기하세요. 슬롯 이름보다 실제 사진 설명이 우선입니다.
-     (예: 슬롯이 '자쿠지·스파'여도 실제 사진이 '실내 수영장'이면 실내 수영장 이야기)
-   - 사진 설명과 특장점(USP)에 없는 시설·경관·속성(자쿠지, 온수, 인피니티, 호수, 바다, 조식 등)은 절대 지어내거나 단정하지 마세요.
-   - 특장점(USP)·숙소 정보에 있더라도 그 씬 화면에 안 보이는 주제(반려견 용품, 조식, 키즈, 바베큐, 셔틀 등)는 그 씬 대사에 넣지 마세요.
-     (예: 일반 침실 사진에 '댕댕이 전용 용품' 멘트 금지 - 시청자 몰입이 깨집니다)
+   - 각 씬의 voiceover는 그 씬 화면에 나오는 공간을 코어 컨셉('{concept_clean or "특별한 혜택"}')과 연결하여 이야기해야 합니다 (화면과 엉뚱한 동떨어진 멘트 금지, 사진 나열 낭독도 금지).
+   - [비전-스토리 맥락화]: 사진에 특정 주제(음식, 뷔페, 조식 등)가 직접 없더라도, 그 공간(호수, 테라스, 라운지, 객실 등)을 코어 컨셉을 만끽하는 감각적인 배경으로 맥락화하세요.
 4. [정보 은닉 (Curiosity Gap) 강제]:
    - 크롤링된 숙소명('{product_name}')을 대본 나레이션 및 자막에 직접 언급하는 것을 엄격히 금지합니다.
 5. 씬 1 (Hook): 반드시 'hook_title'에 스크롤을 즉시 멈추게 하는 강력한 헤드라인(공백 포함 8~12자, 읽는 데 2초 이내)을 포함하세요!
-   (예: '여기 진짜 한국 맞아요?', '나만 알고 싶은 비밀 숙소') 헤드라인은 첫 1.5~2초 동안 단독으로 읽히고 보이므로 짧고 강해야 합니다.
+   - 코어 컨셉('{concept_clean or "특별한 매력"}')에 직결되는 강렬한 질문이나 호기심을 유발하는 헤드라인으로 작성하세요.
+     (예: 조식 뷔페 컨셉인 경우: "호수 뷰 보며 먹는 조식?", "아침부터 힐링 뷔페?")
+   - 헤드라인은 첫 1.5~2초 동안 단독으로 읽히고 보이므로 짧고 강해야 합니다.
    - 씬 1은 나레이터가 hook_title을 먼저 읽고(이때 화면엔 헤드라인만), 이어서 voiceover를 읽습니다(이때 화면엔 voiceover 자막만).
-     voiceover는 헤드라인을 받아 이야기를 시작하는 첫 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해')는 쓰지 마세요.
+     voiceover는 헤드라인을 받아 코어 컨셉의 이야기를 시작하는 첫 문장으로 쓰고, 헤드라인과 무관한 상투 경고('모르면 평생 손해')는 쓰지 마세요.
    - 씬 1 voiceover에서 헤드라인 단어를 앵무새처럼 반복하지 마세요. 헤드라인이 던진 말을 바로 구체적인 감탄·이유로 받으세요.
-     (예: 헤드라인 "국내 손꼽히는 역대급 풀" → voiceover "수영장이 바다랑 그대로 맞닿은 장면, 상상해 봤어요?"
-      나쁜 예: "우리나라에서 손꼽히는 역대급 오션뷰 풀이에요.")
 {hook_hint_block}
 6. 마지막 씬 {num_scenes} (엔딩 CTA 강제):
    - 마지막 씬 voiceover는 반드시 정확히: "{TRAVEL_CTA_VOICEOVER}"
@@ -718,11 +769,17 @@ JSON 출력 스키마 예시:
 
     # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py). 레퍼런스 영상(Gemini 업로드 파일)이 있으면 Gemini만
     from core.llm import generate_json, repair_scene_lines
-    from core.script_guard import STYLE_REPAIR_RULES, find_banned_style
+    from core.script_guard import find_banned_style
     data, script_engine = generate_json(contents, system_instruction, temperature=0.7, gemini_api_key=api_key, purpose="숙소 대본")
-    data, fixes = repair_scene_lines(data, find_banned_style, system_instruction, STYLE_REPAIR_RULES, gemini_api_key=api_key)
+    _t_scenes = (data.get("scenes") if isinstance(data, dict) else data) or []
+    _t_lines = [str(x.get("voiceover") or "") for x in _t_scenes[:-1] if isinstance(x, dict)]
+    _t_hook = str((_t_scenes[0] or {}).get("hook_title") or "") if _t_scenes and isinstance(_t_scenes[0], dict) else ""
+    from core.script_guard import script_violation_finder as _svf
+    travel_violation_checker = create_length_violation_checker(
+        TRAVEL_POLICY, _svf(_t_lines, core_concept=(core_concept or "").strip(), hook=_t_hook))
+    data, fixes = repair_scene_lines(data, travel_violation_checker, system_instruction, TRAVEL_POLICY.repair_instruction, gemini_api_key=api_key)
     for f in fixes:
-        logger.info(f"[대본 규칙 보정] {f}")
+        logger.info(f"[travel 대본 규칙 보정] {f}")
     response = type("LLMText", (), {"text": json.dumps(data, ensure_ascii=False)})()
 
     try:
@@ -842,7 +899,8 @@ JSON 출력 스키마 예시:
                         logger.info(f"[화면 무관 주제 차단] 씬 {idx + 1}: '{off}' (대사: {vo}, 사진: {note}) → 사진 중립 문구로 교체")
                         vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
                         replaced += 1
-                    hook = sc.get("hook_title") or ""
+                    hook = to_haeyo(sc.get("hook_title") or "")      # 훅도 합쇼체 금지
+                    sc["hook_title"] = hook
                     if idx == 0 and hook and find_unsupported_claim(hook, [note], usp):
                         sc["hook_title"] = "여기 진짜 한국 맞아요?"
                     promo = find_promo_tone(vo)
@@ -868,14 +926,11 @@ JSON 출력 스키마 예시:
                         vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
                         replaced += 1
 
-                # 3. 템플릿 길이 준수: 나레이션은 어절 경계에서 VO_LIMIT자 이내로 (실제 길이는 TTS 길이 기준)
-                sc["duration_sec"] = 2.5
+                # 3. 템플릿 길이 준수: 감성 구어체 15~20자 Hard Limit 준수 (TRAVEL_POLICY)
+                sc["duration_sec"] = TRAVEL_POLICY.default_scene_sec
                 if idx < len(scenes) - 1:
-                    # 길이 때문에 문장을 자르지 않음 (영상 길이는 나레이션에 맞춰짐). 지나치게 긴 경우만 문장 경계에서 줄임
                     vo = strip_brochure_words(vo)
-                    if len(vo) > VO_HARD_MAX:
-                        vo = shorten_line(vo, VO_HARD_MAX - 3, VO_HARD_MAX)
-                    # 종결 어미 검증: 연결 어미 끝은 '요'를 붙여 종결, 잘린 문장('~할 수!', '~바다!')은 교체
+                    vo = clamp_line_to_policy(vo, TRAVEL_POLICY)
                     done = complete_sentence(vo)
                     if done is None:
                         logger.info(f"[미완성 문장 차단] 씬 {idx + 1}: '{vo}' → 사진 중립 문구로 교체")
@@ -887,7 +942,7 @@ JSON 출력 스키마 예시:
                         logger.info(f"[판에 박힌 패턴 차단] 씬 {idx + 1}: {find_banned_style(done)} (대사: {done}) → 사진 중립 문구로 교체")
                         done = safe_line_for(sc.get("target_visual_role", ""), note, replaced) + "."
                         replaced += 1
-                    vo = done
+                    vo = clamp_line_to_policy(done, TRAVEL_POLICY)
                 cap = vo   # 자막 = 나레이션 (앱에서도 동일하게 동기화)
 
                 sc["voiceover"] = vo
@@ -923,3 +978,434 @@ JSON 출력 스키마 예시:
     except Exception as e:
         logger.error(f"Gemini 응답 파싱 실패: {e}\n원본 응답:\n{response.text}")
         raise
+
+
+# ==============================================================================
+# 촬영 영상 원본 직가공 쇼츠 (Video Overlay Pipeline) 전용 분석 및 대본 생성
+# ==============================================================================
+
+def split_video_timeline(total_duration: float) -> List[Dict[str, Any]]:
+    """
+    영상 전체 길이에 맞춰 씬 타임라인(시작초~종료초)을 최적 분할합니다.
+    - Scene 1: 0~3.0초 (오프닝 & 후킹)
+    - Scene 2~N: 영상 중간 본문 (각 3.0~4.5초)
+    - Scene End: 마지막 3.0~4.0초 (CTA)
+    """
+    dur = max(float(total_duration or 10.0), 5.0)
+
+    if dur <= 7.0:
+        # 매우 짧은 영상: 2씬 (후킹 3초, CTA 나머지)
+        s1_dur = min(3.0, dur * 0.5)
+        return [
+            {"scene_index": 1, "role": "hook", "start_sec": 0.0, "end_sec": s1_dur, "duration": s1_dur},
+            {"scene_index": 2, "role": "cta", "start_sec": s1_dur, "end_sec": dur, "duration": dur - s1_dur},
+        ]
+
+    # 오프닝 훅: 3.0초 고정 (또는 전체의 25% 이내)
+    hook_sec = 3.0
+    # 엔딩 CTA: 3.5초 (또는 전체의 25% 이내)
+    cta_sec = 3.5 if dur >= 12.0 else max(2.5, dur * 0.3)
+    body_total = dur - hook_sec - cta_sec
+
+    # 중간 본문 씬 수 결정
+    if body_total <= 5.0:
+        num_body = 1
+    elif body_total <= 10.0:
+        num_body = 2
+    elif body_total <= 16.0:
+        num_body = 3
+    elif body_total <= 24.0:
+        num_body = 4
+    else:
+        num_body = min(6, int(body_total // 4.5))
+
+    body_slot_dur = round(body_total / num_body, 2)
+
+    slots: List[Dict[str, Any]] = []
+    # Scene 1: Hook
+    slots.append({
+        "scene_index": 1,
+        "role": "hook",
+        "start_sec": 0.0,
+        "end_sec": hook_sec,
+        "duration": hook_sec,
+    })
+
+    # Scene 2 ~ N: Body
+    curr_t = hook_sec
+    for i in range(num_body):
+        end_t = round(curr_t + body_slot_dur, 2) if i < num_body - 1 else round(dur - cta_sec, 2)
+        slots.append({
+            "scene_index": len(slots) + 1,
+            "role": "body",
+            "start_sec": curr_t,
+            "end_sec": end_t,
+            "duration": round(end_t - curr_t, 2),
+        })
+        curr_t = end_t
+
+    # Scene End: CTA
+    slots.append({
+        "scene_index": len(slots) + 1,
+        "role": "cta",
+        "start_sec": curr_t,
+        "end_sec": round(dur, 2),
+        "duration": round(dur - curr_t, 2),
+    })
+
+    return slots
+
+
+def extract_video_frames(video_path: str, num_frames: int = 4, work_dir: Optional[str] = None) -> List[str]:
+    """비디오에서 시각 분석용 주요 프레임 이미지를 균등 간격으로 추출합니다."""
+    from core.media.normalize import probe_media, _ffmpeg
+    info = probe_media(video_path)
+    dur = info.duration
+
+    if not work_dir:
+        work_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)), "_frames_tmp")
+    os.makedirs(work_dir, exist_ok=True)
+
+    # 0.5초, 25%, 50%, 75% 등 균등 지점 계산
+    timestamps = []
+    if num_frames == 1:
+        timestamps = [min(0.5, dur * 0.5)]
+    else:
+        step = (dur - 1.0) / max(1, num_frames - 1)
+        timestamps = [round(max(0.2, min(dur - 0.2, 0.5 + i * step)), 2) for i in range(num_frames)]
+
+    frame_paths = []
+    for idx, ts in enumerate(timestamps):
+        out_jpg = os.path.join(work_dir, f"frame_{idx:02d}_{ts:.1f}s.jpg")
+        cmd = [
+            _ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{ts:.3f}", "-i", video_path,
+            "-frames:v", "1", "-vf", "scale='min(720,iw)':-2", "-q:v", "3", out_jpg
+        ]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0 and os.path.exists(out_jpg) and os.path.getsize(out_jpg) > 0:
+            frame_paths.append(out_jpg)
+
+    return frame_paths
+
+
+def analyze_video_for_overlay(
+    video_path: str,
+    api_key: str = "",
+    mock: bool = False
+) -> Dict[str, Any]:
+    """
+    단일 비디오 클립의 시각적 맥락(피사체, 동작, 분위기)을 분석하고
+    '1컨셉 1메시지' 쇼츠용 추천 3대 떡상 컨셉을 도출합니다.
+    """
+    from core.media.normalize import probe_media
+    info = probe_media(video_path)
+
+    if mock or not api_key:
+        logger.info("[Mock/NoKey] 비디오 시각 분석 Mock 결과 반환")
+        return {
+            "duration": info.duration,
+            "width": info.width,
+            "height": info.height,
+            "visual_summary": "매장 내부와 시그니처 메뉴/서비스가 역동적으로 담긴 촬영 영상",
+            "detected_objects": ["매장 인테리어", "인기 메뉴", "직접 이용/제조 장면"],
+            "suggested_concepts": [
+                {
+                    "title": "압도적 비주얼 갓성비",
+                    "core_concept": "이 가격에 이 퀄리티 실화? 가성비 끝판왕",
+                    "hook_headline": "아직도 여기 모르면 손해!",
+                    "target_reason": "영상 속 풍성한 구성과 퀄리티를 직관적으로 전달"
+                },
+                {
+                    "title": "현지인 단골 찐맛집",
+                    "core_concept": "동네 주민들이 숨겨두고 가는 찐 로컬 핫플",
+                    "hook_headline": "웨이팅 없이 먹는 비밀?",
+                    "target_reason": "영상 속 자연스러운 매장 분위기와 신뢰감 강조"
+                },
+                {
+                    "title": "원픽 꿀조합 강추",
+                    "core_concept": "사장님이 몰래 알려주는 200% 맛있게 즐기는 법",
+                    "hook_headline": "무조건 이렇게 시키세요!",
+                    "target_reason": "영상 속 움직임과 디테일한 포인트를 즉각 후킹"
+                }
+            ]
+        }
+
+    # 프레임 추출
+    frames = extract_video_frames(video_path, num_frames=4)
+    if not frames:
+        return analyze_video_for_overlay(video_path, mock=True)
+
+    from PIL import Image
+    from google import genai
+    from core.guardrail import validate_model_access
+
+    validate_model_access("gemini-3.6-flash", "llm")
+    client = genai.Client(api_key=api_key)
+
+    pil_images = []
+    for fp in frames:
+        try:
+            pil_images.append(Image.open(fp).convert("RGB"))
+        except Exception:
+            pass
+
+    prompt = f"""
+당신은 대한민국 최고의 유튜브 쇼츠 / 틱톡 바이럴 영상 디렉터입니다.
+첨부된 {len(pil_images)}장의 스틸 프레임은 사용자가 직접 스마트폰으로 촬영한 영상(총 {info.duration:.1f}초)의 타임라인별 주요 순간입니다.
+
+[분석 요구사항]
+1. 영상의 시각적 피사체, 동작, 매장/상품 분위기(visual_summary)를 1~2문장으로 요약하세요.
+2. 이 영상을 100% 바이럴 떡상시킬 '1컨셉 1메시지' 추천 광고 전략 3가지를 도출하세요.
+   - 각 컨셉은 쇼츠 첫 2초에 시선을 낚아챌 킬러 훅(hook_headline, 8~12자)과 단 하나의 명확한 핵심 가치(core_concept)를 가져야 합니다.
+3. 반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "visual_summary": "...",
+  "detected_objects": ["...", "..."],
+  "suggested_concepts": [
+    {{
+      "title": "컨셉 1 제목 (예: 압도적 갓성비)",
+      "core_concept": "핵심 1컨셉 1메시지 한 줄",
+      "hook_headline": "첫 2초 강력 헤드라인",
+      "target_reason": "추천 이유"
+    }},
+    {{
+      "title": "컨셉 2 제목",
+      "core_concept": "...",
+      "hook_headline": "...",
+      "target_reason": "..."
+    }},
+    {{
+      "title": "컨셉 3 제목",
+      "core_concept": "...",
+      "hook_headline": "...",
+      "target_reason": "..."
+    }}
+  ]
+}}
+"""
+    try:
+        res = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=[*pil_images, prompt],
+        )
+        txt = (res.text or "").strip()
+        if "```json" in txt:
+            txt = txt.split("```json")[1].split("```")[0].strip()
+        elif "```" in txt:
+            txt = txt.split("```")[1].split("```")[0].strip()
+        data = json.loads(txt)
+        data["duration"] = info.duration
+        data["width"] = info.width
+        data["height"] = info.height
+        return data
+    except Exception as e:
+        logger.warning(f"[Video Analysis] Gemini 분석 실패 → Mock으로 대체: {e}")
+        return analyze_video_for_overlay(video_path, mock=True)
+
+
+# 직가공 mock/반복 차단 시 컨셉 문구와 번갈아 쓰는 중립 문구 (사실 주장 없음)
+_OVERLAY_REPAIR_RULES = ("[다시 쓰기 규칙] 영상에서 보이는 동작·결과를 해요체 완결 문장 한 줄로. 원래 뜻과 사실을 그대로 두고 새로운 사실·상황·"
+                         "용도(나들이, 선물, 가격 등)를 절대 더하지 마세요. 앞 문장과 다른 장면·근거로 말하고, 접속사·'한 땀 한 땀'·'정성껏'은 쓰지 마세요. "
+                         "공백 포함 20~30자.")
+_OVERLAY_NEUTRAL_LINES = ("지금 보시는 장면이 바로 그 순간이에요.", "눈으로 보면 설명이 필요 없어요.", "여기서 한 번 더 봐 주세요.")
+
+
+def plan_video_overlay_storyboard(
+    video_path: str,
+    core_concept: str = "",
+    store_name: str = "",
+    business_type: str = "",
+    usp: str = "",
+    script_style: str = "info",
+    tone_manner: str = "energetic",
+    api_key: str = "",
+    mock: bool = False,
+    total_sec: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """
+    업로드된 비디오의 전체 길이에 정확히 맞춰 씬별 시작초~종료초 타임라인 대본을 생성합니다.
+    - Scene 1 (0~3.0초): 시선 집중 후킹 타이틀 & 오프닝 나레이션
+    - Scene 2~N (중간 본문): 영상 실제 동작에 맞춘 가치 전달 멘트
+    - Scene End (마지막 3~5초): CTA 멘트 및 자막
+    """
+    if total_sec is None:                  # 롱폼 하이라이트는 창 길이(+CTA)를 직접 넘긴다 (원본 전체 길이가 아님)
+        from core.media.normalize import probe_media
+        total_sec = probe_media(video_path).duration
+
+    # 1. 타임라인 분할 슬롯 도출
+    slots = split_video_timeline(total_sec)
+    num_scenes = len(slots)
+
+    concept_clean = (core_concept or "").strip() or f"{store_name or '이곳'}의 특별한 킬러 혜택"
+    store_display = (store_name or "").strip() or "이곳"
+    from core.script_guard import (with_josa, concept_fallback_line, repeated_line_issues, find_banned_style,
+                                   script_violation_finder)
+    # 행동은 단 하나: 상호가 있으면 '검색', 없으면 '지도 저장' (조사는 받침에 맞춰 자동 보정)
+    video_cta_line = (f"네이버에서 {with_josa(store_name.strip(), '을/를')} 검색해 보세요!" if (store_name or "").strip()
+                      else "네이버 지도에 저장해 두세요!")
+
+    if mock or not api_key:
+        logger.info("[Mock/NoKey] Video Overlay 대본 Mock 생성")
+        out_scenes = []
+        for sl in slots:
+            idx = sl["scene_index"]
+            role = sl["role"]
+            dur = sl["duration"]
+            if role == "hook":
+                h_title = "끝까지 보면 알아요"
+                vo = concept_fallback_line(concept_clean, 0)
+            elif role == "cta":
+                h_title = ""
+                vo = video_cta_line
+            else:
+                h_title = ""
+                # 같은 문장을 되풀이하지 않도록 컨셉 문구와 중립 문구를 번갈아 사용
+                neutral = _OVERLAY_NEUTRAL_LINES[(idx // 2) % len(_OVERLAY_NEUTRAL_LINES)]
+                vo = concept_fallback_line(concept_clean, idx) if idx % 2 == 0 else neutral
+
+            sc = dict(sl)
+            sc["hook_title"] = h_title
+            sc["voiceover"] = vo
+            sc["caption"] = vo
+            sc["subtitle"] = vo
+            sc["script_engine"] = "mock"
+            sc["core_concept"] = (core_concept or "").strip()
+            out_scenes.append(sc)
+        return out_scenes
+
+    # 2. Gemini 대본 생성 (프롬프트 구성)
+    slot_desc_lines = []
+    for sl in slots:
+        idx = sl["scene_index"]
+        role = sl["role"]
+        st_t = sl["start_sec"]
+        ed_t = sl["end_sec"]
+        d = sl["duration"]
+        # 초당 한국어 약 3.2~3.8음절 권장
+        max_chars = int(d * 3.5)
+        role_label = "오프닝 후킹" if role == "hook" else ("엔딩 CTA" if role == "cta" else "본문 가치 전달")
+        slot_desc_lines.append(f"- Scene {idx} ({role_label}, {st_t:.1f}초~{ed_t:.1f}초, 길이 {d:.1f}초): 글자 수 공백 포함 {max(8, max_chars - 3)}~{max_chars + 2}자 이내")
+
+    slot_guide_text = "\n".join(slot_desc_lines)
+
+    system_instruction = (
+        "당신은 10~60초 단일 숏폼 영상에 딱 맞게 자막과 나레이션을 기획하는 쇼츠 전문 카피라이터입니다.\n"
+        "주어진 타임라인의 각 씬 길이(초)에 맞춰 음성이 절대 넘치지 않도록 글자 수를 철저히 통제하고,\n"
+        "선택된 '단 하나의 코어 컨셉'으로 처음부터 끝까지 집중 관통하세요."
+    )
+
+    user_prompt = f"""
+[촬영 영상 원본 직가공 쇼츠 대본 기획]
+- 영상 총 길이: {total_sec:.1f}초 (총 {num_scenes}개 씬)
+- 매장/브랜드명: {store_display}
+- 업종/분야: {business_type or '매장/핫플'}
+- 매장 특장점: {usp or '특별한 경험과 혜택'}
+- ★ 단 하나의 확정 코어 컨셉 (100% 절대 관통): "{concept_clean}"
+
+[씬별 타임라인 규격]:
+{slot_guide_text}
+
+[작성 규칙]:
+1. Scene 1 (0~3초, Hook):
+   - 'hook_title': 시청자의 시선을 사로잡을 핵심 헤드라인 (8~12자, 담백한 팩트와 궁금증 중심)
+   - 'voiceover': 헤드라인에 이어지는 담백하고 명확한 오프닝 한 문장
+2. Scene 2~{num_scenes - 1} (중간 본문):
+   - 영상의 실제 움직임과 장면을 코어 컨셉('{concept_clean}')과 직결시켜 가치를 전달하는 구어체 완결 문장
+3. Scene {num_scenes} (마지막 엔딩 CTA):
+   - 단 하나의 명확한 행동 유도 (정확히: "{video_cta_line}")
+4. 각 씬의 voiceover(음성 대본)와 caption(화면 자막)은 토씨 하나 틀리지 않고 100% 동일해야 합니다.
+5. 허위 과장 표현("SNS 난리 난", "200% 맛있게", "웨이팅 없이" 등)은 전면 금지하며, 현장의 진솔한 매력에 집중하세요.
+6. 씬마다 새로운 장면·근거를 말하세요. 앞 씬이나 헤드라인에 쓴 말을 바꿔 되풀이하면 안 됩니다.
+7. 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'. 해요체 구어체로 짧게 말하세요.
+8. 입력에 없는 사실(연차·수상·가격·고객 반응)을 지어내지 마세요. 컨셉과 영상에서 보이는 것만 말하세요.
+9. 반드시 아래 JSON 포맷으로 출력하세요:
+{{
+  "scenes": [
+    {{
+      "scene_index": 1,
+      "role": "hook",
+      "hook_title": "...",
+      "voiceover": "...",
+      "caption": "..."
+    }},
+    ...
+  ]
+}}
+"""
+    from core.llm import generate_json
+    from core.script_guard import to_haeyo, strip_brochure_words
+    from core.mode_policy import clamp_line_to_policy, OWNER_POLICY
+    contents = [user_prompt]
+
+    try:
+        data, script_engine = generate_json(
+            contents,
+            system_instruction,
+            temperature=0.7,
+            gemini_api_key=api_key,
+            purpose="촬영 영상 직가공 대본"
+        )
+        # 규칙 위반(판에 박힌 표현·씬 간 반복·컨셉 이탈) 줄은 같은 엔진으로 1회 재작성
+        if isinstance(data, dict):
+            try:
+                from core.llm import repair_scene_lines
+                scs = data.get("scenes") or []
+                body_lines = [str(x.get("voiceover") or "") for x in scs[:-1] if isinstance(x, dict)]
+                hook_line = str((scs[0] or {}).get("hook_title") or "") if scs else ""
+                data, fixes = repair_scene_lines(
+                    data, script_violation_finder(body_lines, core_concept=(core_concept or "").strip(), hook=hook_line, rhythm=False),
+                    system_instruction, _OVERLAY_REPAIR_RULES, gemini_api_key=api_key)
+                for f in fixes:
+                    logger.info(f"[video_overlay 대본 규칙 보정] {f}")
+            except Exception as re_err:
+                logger.warning(f"[video_overlay 대본 규칙 보정 건너뜀] {re_err}")
+        parsed_scenes = data.get("scenes", []) if isinstance(data, dict) else data
+
+        out_scenes = []
+        body_texts: List[str] = []
+        for i, sl in enumerate(slots):
+            ps = parsed_scenes[i] if i < len(parsed_scenes) else {}
+            sc = dict(sl)
+            is_last = sl["role"] == "cta"
+            raw_vo = (ps.get("voiceover") or ps.get("caption") or "").strip()
+            hk = to_haeyo((ps.get("hook_title") or "").strip()) if sl["role"] == "hook" else ""   # 훅도 합쇼체 금지
+
+            if is_last:
+                vo = video_cta_line
+            else:
+                if not raw_vo or find_banned_style(raw_vo):
+                    if raw_vo:
+                        logger.info(f"[video_overlay 판에 박힌 표현 차단] 씬 {i + 1}: {find_banned_style(raw_vo)} (대사: {raw_vo})")
+                    raw_vo = concept_fallback_line(concept_clean, i)
+                vo = strip_brochure_words(to_haeyo(raw_vo))
+                vo = clamp_line_to_policy(vo, OWNER_POLICY)
+                body_texts.append(vo)
+
+            if sl["role"] == "hook" and (not hk or find_banned_style(hk)):
+                hk = "끝까지 보면 알아요"
+
+            sc["hook_title"] = hk
+            sc["voiceover"] = vo
+            sc["caption"] = vo
+            sc["subtitle"] = vo
+            sc["script_engine"] = script_engine
+            sc["core_concept"] = (core_concept or "").strip()
+            out_scenes.append(sc)
+
+        # 씬 간 앵무새 반복(훅 포함) 차단 - 겹치는 씬은 컨셉 안전 문구/중립 문구로 교체
+        hook_text = next((x["hook_title"] for x in out_scenes if x.get("hook_title")), "")
+        body_scenes = [x for x in out_scenes if x["role"] != "cta"]
+        for j, why in repeated_line_issues([x["voiceover"] for x in body_scenes], hook_text).items():
+            new_line = concept_fallback_line(concept_clean, j) if j % 2 == 0 else _OVERLAY_NEUTRAL_LINES[j % len(_OVERLAY_NEUTRAL_LINES)]
+            logger.info(f"[video_overlay 씬 간 반복 차단] 씬 {body_scenes[j]['scene_index']}: {why}")
+            body_scenes[j]["voiceover"] = body_scenes[j]["caption"] = body_scenes[j]["subtitle"] = new_line
+
+        logger.info(f"[Video Overlay 대본 기획 완료] 총 {len(out_scenes)}개 씬 생성")
+        return out_scenes
+
+    except Exception as e:
+        logger.warning(f"[Video Overlay 대본 생성 실패] LLM 오류로 Mock 대체: {e}")
+        return plan_video_overlay_storyboard(video_path, core_concept, store_name, business_type, usp, mock=True,
+                                            total_sec=total_sec)
+

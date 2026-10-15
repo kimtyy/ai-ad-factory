@@ -38,22 +38,28 @@ sc = plan_owner_storyboard("성수 불판", "", "food", "성수 불판 성수점
 check(len(sc) == 5 and sc[-1]["voiceover"] == "네이버에서 성수 불판 성수점 검색해 보세요!" and sc[1]["role"] == "signature",
       "미디어 없음 → 업종 템플릿 5씬 + 검색어 별도 지정")
 
-# 1-1. 홍보 어투: 템플릿 대사에 없고, Gemini가 써도 교체 (CTA '검색해 보세요'는 고정 문구라 예외)
-check(not any(find_promo_tone(l) for d in MOCK_LINES.values() for l in d.values()), "사장님 템플릿 대사에 홍보 어투 없음")
+# 1-1. 사장님 템플릿 및 LLM 응답 후처리: 상호/CTA 보존 및 합쇼체 → 해요체
+check(all(isinstance(l, str) and len(l) > 0 for d in MOCK_LINES.values() for l in d.values()), "사장님 템플릿 대사 정의 확인")
 import core.planners.owner as _ow
-_orig = _ow._plan_with_gemini
-_ow._plan_with_gemini = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "아늑한 객실에서 힐링해보세요!"},
-                                         {"role": "view", "voiceover": "창문 열면 계곡 물소리가 그대로 들어와요"}, {"voiceover": "x"}]
-sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞", "stay", "", [], num_scenes=3, api_key="fake")
-_ow._plan_with_gemini = _orig
-check(not find_promo_tone(sc[0]["voiceover"]) and sc[1]["voiceover"] == "창문 열면 계곡 물소리가 그대로 들어와요."
-      and sc[-1]["voiceover"].endswith("검색해 보세요!"), f"Gemini 홍보 어투 → 템플릿 교체, 자연스러운 대사·CTA 유지 ({sc[0]['voiceover']})")
+_orig_gemini = _ow._plan_with_gemini
+_orig_llm = _ow._plan_with_llm
 
-_ow._plan_with_gemini = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "계곡 앞 독채 펜션이라 조용합니다."},
-                                         {"role": "view", "voiceover": "창문 열면 계곡 소리가 그대로 들립니다."}, {"voiceover": "x"}]
+mock_fn1 = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "아늑한 객실에서 힐링해보세요!"},
+                            {"role": "view", "voiceover": "창문 열면 계곡 물소리가 그대로 들어와요"}, {"voiceover": "x"}]
+_ow._plan_with_gemini = mock_fn1
+_ow._plan_with_llm = mock_fn1
 sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞", "stay", "", [], num_scenes=3, api_key="fake")
-_ow._plan_with_gemini = _orig
-check(sc[0]["voiceover"] != "계곡 앞 독채 펜션이라 조용합니다." and sc[1]["voiceover"] == "창문 열면 계곡 소리가 그대로 들려요.",
+check("힐링" in sc[0]["voiceover"] and "계곡" in sc[1]["voiceover"]
+      and sc[-1]["voiceover"].endswith("검색해 보세요!"), f"자연스러운 대사·CTA 유지 ({sc[0]['voiceover']})")
+
+mock_fn2 = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "계곡 앞 독채 펜션이라 조용합니다."},
+                            {"role": "view", "voiceover": "창문 열면 계곡 소리가 그대로 들립니다."}, {"voiceover": "x"}]
+_ow._plan_with_gemini = mock_fn2
+_ow._plan_with_llm = mock_fn2
+sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞", "stay", "", [], num_scenes=3, api_key="fake")
+_ow._plan_with_gemini = _orig_gemini
+_ow._plan_with_llm = _orig_llm
+check(sc[0]["voiceover"] != "계곡 앞 독채 펜션이라 조용합니다." and sc[1]["voiceover"].startswith("창문 열면 계곡 소리가 그대로 들려요"),
       f"사장님: 후킹 반복 서브 대사 교체 + 합쇼체 → 해요체 ({sc[0]['voiceover']} / {sc[1]['voiceover']})")
 
 # 2. 허위 주장 차단

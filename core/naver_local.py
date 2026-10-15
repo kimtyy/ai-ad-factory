@@ -120,9 +120,44 @@ class NaverLocalSearch:
         out = []
         for it in (resp.json().get("items") or []):
             category = _clean(it.get("category", ""))
+            desc = _clean(it.get("description", ""))
             out.append({
                 "name": _clean(it.get("title", "")), "category": category, "business_type": business_type_for(category),
+                "description": desc,
                 "address": _clean(it.get("address", "")), "road_address": _clean(it.get("roadAddress", "")),
                 "phone": _clean(it.get("telephone", "")), "link": it.get("link", ""),
             })
         return out
+
+
+def fetch_place_description(place_id: str) -> str:
+    """
+    네이버 플레이스 ID 또는 링크가 있을 때, 플레이스 모바일 페이지 메타데이터(og:description)에서
+    소개글/특징을 가져와 '우리가게 자랑(USP)' 기본값으로 활용
+    """
+    pid = (place_id or "").strip()
+    if not pid:
+        return ""
+    from bs4 import BeautifulSoup
+    urls = [
+        f"https://m.place.naver.com/restaurant/{pid}/home",
+        f"https://m.place.naver.com/place/{pid}/home",
+        f"https://m.place.naver.com/accommodation/{pid}/home",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+    for u in urls:
+        try:
+            r = requests.get(u, headers=headers, timeout=3)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                og = soup.find("meta", property="og:description")
+                if og and og.get("content"):
+                    c = html.unescape(og["content"]).strip()
+                    if c and not c.startswith("네이버 지도"):
+                        return c
+        except Exception:
+            pass
+    return ""

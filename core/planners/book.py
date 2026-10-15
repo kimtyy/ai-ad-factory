@@ -21,6 +21,8 @@ from core.planners.commerce import _claim
 from core.script_guard import (COPY_TONE_RULES, complete_sentence, diversify_exclamations, ending_kind, find_banned_style,
                                find_promo_tone, shorten_line, strip_brochure_words, to_haeyo)
 
+from core.script_guard import RHYTHM_ENFORCE  # noqa: E402
+
 logger = logging.getLogger("ad_factory.planners.book")
 
 BOOK_CAPTION_CY = 0.250          # 표지 카드 씬 자막 위치 (compositor.BOOK_CAPTION_CY와 같음)
@@ -97,6 +99,7 @@ def plan_book_storyboard(
     thumb_dir: Optional[str] = None,
     output_plan_path: Optional[str] = None,
     template: str = "basic",
+    core_concept: str = "",
 ) -> List[Dict[str, Any]]:
     """
     template: basic(한 권 큐레이션, 약 30~35초) / fable(우화·사유: 고민 → 원문 낭독 카드 여러 장 → 위로 → 마지막에 책 공개, 50~75초)
@@ -132,11 +135,11 @@ def plan_book_storyboard(
         from core.planners.book_reflect import plan_reflect
         scenes = plan_reflect(store_name, book_title, author, book_info, book_photos, store_photos, llm, _scene,
                               lambda t: book_hype(t, book_info) or _claim(t, book_info))
-        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
+        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path, core_concept=core_concept)
     if template == "fable":
         scenes = book_fable.plan_fable(store_name, book_title, author, book_info, q, book_photos, store_photos, llm, _scene,
                                        lambda t: book_hype(t, book_info) or _claim(t, book_info))
-        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
+        return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path, core_concept=core_concept)
     lines = [str((s or {}).get("voiceover") or "") for s in ((llm or {}).get("scenes") or []) if isinstance(s, dict)]
 
     templated: set = set()
@@ -189,7 +192,7 @@ def plan_book_storyboard(
         s["voiceover"] = s["subtitle"] = s["caption"] = vo
     # 템플릿이 끼어 평서 '~요.'가 이어지면 그 템플릿 줄을 감탄형으로 (질문형 강제 변환은 비문 위험)
     kinds = [ending_kind(s["voiceover"]) for s in body]
-    for j, s in enumerate(body):
+    for j, s in enumerate(body if RHYTHM_ENFORCE else ()):
         near_plain = (j > 0 and kinds[j - 1] == "plain") or (j + 1 < len(kinds) and kinds[j + 1] == "plain")
         if s["scene_index"] - 1 in templated and kinds[j] == "plain" and near_plain and s["voiceover"].endswith("요."):
             s["voiceover"] = s["subtitle"] = s["caption"] = s["voiceover"][:-1] + "!"
@@ -197,13 +200,15 @@ def plan_book_storyboard(
     for c in changes:
         logger.info(f"[감탄사 중복 분산] {c}")
 
-    return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path)
+    return _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path, core_concept=core_concept)
 
 
-def _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path) -> List[Dict[str, Any]]:
+def _finish(scenes, llm, book_title, author, store_name, q, template, output_plan_path, core_concept: str = "") -> List[Dict[str, Any]]:
     scenes[0].update({"script_engine": (llm or {}).get("_engine") or "template",
                       "book": {"title": book_title, "author": author, "store": store_name, "template": template,
                                "label": LABEL_TEMPLATE.format(store=store_name), "quote": q}})
+    if core_concept:
+        scenes[0]["core_concept"] = core_concept.strip()
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)

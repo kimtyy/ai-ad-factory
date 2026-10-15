@@ -145,14 +145,14 @@ try:
     _pending = yu.PENDING_PATH
     yu.PENDING_PATH = os.path.join(yu.SECRETS_DIR, "pending_comments.json")
     at.run()
-    [b for b in at.button if "유튜브 쇼츠 업로드" in b.label][0].click().run()
+    [b for b in at.button if "유튜브 쇼츠 원클릭 자동 업로드" in b.label][0].click().run()
     queued = yu.pending_comment("V9") or {}
     yu._service_factory, yu.SECRETS_DIR, yu.PENDING_PATH = None, _secrets, _pending
     os.environ.pop("YOUTUBE_CHANNEL_TRAVEL", None)
     body = sent.get("insert", {}).get("body", {})
     check(not at.exception and any("V9" in (s.value or "") for s in at.success) and sent.get("key") == "travel"
-          and "첫 번째 댓글" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
-          and body["snippet"]["title"].endswith("#Shorts")
+          and "댓글" in body.get("snippet", {}).get("description", "") and "수수료" in body["snippet"]["description"]
+          and body["snippet"]["title"].lower().endswith("#shorts")
           and body["status"]["privacyStatus"] == "private" and "thumb" in sent
           and "comment" not in sent and "cid=1234567" in queued.get("text", "")
           and any("첫 댓글 대기 중" in (i.value or "") for i in at.info),

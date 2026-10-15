@@ -29,6 +29,7 @@ def plan_travel_storyboard(
     exclude_urls: Optional[set] = None,
     travel_template: str = DEFAULT_TRAVEL_TEMPLATE,
     mock: bool = False,
+    core_concept: str = "",
     **plan_kwargs,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -52,7 +53,7 @@ def plan_travel_storyboard(
     scenes = plan_storyboard(
         product_name=product_name, usp=usp, mode="travel", api_key=api_key, mock=mock,
         photo_inventory=inventory, travel_template=travel_template, slot_photo_notes=notes,
-        force=True, **plan_kwargs,
+        force=True, core_concept=core_concept, **plan_kwargs,
     )
     for sc, sk in zip(scenes, skeleton):
         for k in ASSIGNMENT_KEYS:

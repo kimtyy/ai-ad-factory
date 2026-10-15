@@ -119,9 +119,81 @@ kw = sent["anthropic"]
 blocks = kw["messages"][0]["content"]
 check(eng == "claude" and kw["model"] == "claude-haiku-5-5" and kw["system"] == "시스템"
       and [b["type"] for b in blocks] == ["text", "image", "text"] and blocks[1]["source"]["media_type"] == "image/jpeg"
-      and kw["output_config"] == {"effort": "medium"} and "temperature" not in kw and "thinking" not in kw,
-      "Claude 요청: claude-haiku-5-5, 사진은 base64 이미지 블록(순서 유지), effort medium, temperature 미전송(Haiku 5.5는 기본값만)")
+      and kw.get("output_config", {}).get("effort") in ("low", "medium") and "temperature" not in kw and "thinking" not in kw,
+      "Claude 요청: claude-haiku-5-5, 사진은 base64 이미지 블록(순서 유지), effort, temperature 미전송(Haiku 5.5는 기본값만)")
 check(sent["anthropic_client"].get("max_retries") == 1, "SDK 재시도 1회 뒤 즉시 다음 엔진")
+
+# 모델 티어: 최종 대본(script)은 Sonnet(effort medium), 백엔드 작업은 Haiku(effort low)
+anthropic.Anthropic = FakeAnthropic
+for k in ("ANTHROPIC_MODEL", "ANTHROPIC_MODEL_SCRIPT", "ANTHROPIC_EFFORT", "ANTHROPIC_EFFORT_SCRIPT"):
+    os.environ.pop(k, None)
+rt.generate_json(["x"], "sys", purpose="사장님 광고 대본")
+script_kw = sent["anthropic"]
+rt.generate_json(["x"], "sys", purpose="롱폼 하이라이트 선정")
+backend_kw = sent["anthropic"]
+rt.generate_json(["x"], "sys", purpose="대본 규칙 보정")
+repair_kw = sent["anthropic"]
+rt.generate_json(["x"], "sys", purpose="1컨셉 제안 생성", tier="script")
+forced_kw = sent["anthropic"]
+check(script_kw["model"] == "claude-haiku-5-5" and script_kw["output_config"]["effort"] == "low",
+      f"최종 대본 호출 기본값은 {script_kw['model']} / effort {script_kw['output_config']['effort']} (2026-10 비교 결과 Sonnet은 개선 없음 → 롤백)")
+check(backend_kw["model"] == "claude-haiku-5-5" and backend_kw["output_config"]["effort"] == "low",
+      f"하이라이트 선정 등 백엔드 호출은 {backend_kw['model']} / effort {backend_kw['output_config']['effort']}")
+os.environ["ANTHROPIC_MODEL_SCRIPT"] = "claude-sonnet-5-5"
+os.environ["ANTHROPIC_EFFORT_SCRIPT"] = "medium"
+rt.generate_json(["x"], "sys", purpose="대본 규칙 보정")
+opt_repair = sent["anthropic"]
+rt.generate_json(["x"], "sys", purpose="롱폼 하이라이트 선정")
+opt_backend = sent["anthropic"]
+os.environ.pop("ANTHROPIC_MODEL_SCRIPT")
+os.environ.pop("ANTHROPIC_EFFORT_SCRIPT")
+check(opt_repair["model"] == "claude-sonnet-5-5" and opt_repair["output_config"]["effort"] == "medium"
+      and opt_backend["model"] == "claude-haiku-5-5" and forced_kw["model"] == "claude-haiku-5-5",
+      "환경변수로 Sonnet을 켜면 script 티어(규칙 보정 포함)만 바뀌고 백엔드는 Haiku 유지")
+check(set(rt.SCRIPT_PURPOSES) >= {"사장님 광고 대본", "쇼핑 대본", "숙소 대본", "시골책방 대본", "촬영 영상 직가공 대본", "묶음 큐레이션 대본"}
+      and rt.tier_for_purpose("매장 특징 요약") == "backend" and rt.tier_for_purpose("씬 이미지 프롬프트") == "backend",
+      "모든 최종 대본 목적이 script 티어로 분류됨 (매장 특징 요약·씬 이미지 프롬프트는 백엔드)")
+os.environ["ANTHROPIC_MODEL_SCRIPT"] = "claude-haiku-5-5"
+os.environ["ANTHROPIC_EFFORT_SCRIPT"] = "low"
+rt.generate_json(["x"], "sys", purpose="쇼핑 대본")
+env_kw = sent["anthropic"]
+check(env_kw["model"] == "claude-haiku-5-5" and env_kw["output_config"]["effort"] == "low",
+      "ANTHROPIC_MODEL_SCRIPT / ANTHROPIC_EFFORT_SCRIPT 환경변수 반영")
+os.environ.pop("ANTHROPIC_MODEL_SCRIPT")
+os.environ.pop("ANTHROPIC_EFFORT_SCRIPT")
+anthropic.Anthropic = _orig_anth
+from core.guardrail import ALLOWED_LLM_MODELS
+check({"claude-sonnet-5-5", "gpt-4o", "claude-haiku-5-5", "gpt-4o-mini", "gemini-3.6-flash"} <= ALLOWED_LLM_MODELS
+      and "claude-opus-5-5" not in ALLOWED_LLM_MODELS, "가드레일 허용 목록: Sonnet 5.5·gpt-4o 추가, Opus는 계속 차단")
+
+# GEMINI_MODEL 환경변수가 실제 호출에 반영됨 (예전엔 상수 하드코딩)
+import google.genai as _genai
+seen = {}
+
+
+class FakeGenaiClient:
+    def __init__(self, **kw):
+        self.models = self
+
+    def generate_content(self, **kw):
+        seen["model"] = kw.get("model")
+        return type("R", (), {"text": json.dumps(GOOD, ensure_ascii=False)})()
+
+
+_orig_gc = _genai.Client
+_genai.Client = FakeGenaiClient
+os.environ["GEMINI_MODEL"] = "gemini-3.6-flash"
+rt._call_gemini(["x"], "sys", 0.5, 1000, "k")
+check(seen["model"] == "gemini-3.6-flash", "GEMINI_MODEL 환경변수 사용")
+os.environ["GEMINI_MODEL"] = "gemini-1.5-pro"
+try:
+    rt._call_gemini(["x"], "sys", 0.5, 1000, "k")
+    blocked = False
+except Exception:
+    blocked = True
+check(blocked, "GEMINI_MODEL에 허용 목록 밖 모델을 넣으면 가드레일이 차단")
+os.environ.pop("GEMINI_MODEL")
+_genai.Client = _orig_gc
 os.environ["ANTHROPIC_MODEL"] = "claude-opus-5-5"
 calls.clear()
 rt._overrides["openai"] = ok("openai")
@@ -149,10 +221,10 @@ openai.OpenAI = _orig_oa
 os.environ["ANTHROPIC_API_KEY"] = "k1"
 ok_ = sent["openai"]
 parts = ok_["messages"][1]["content"]
-check(eng == "openai" and ok_["model"] == "gpt-4o-mini" and ok_["response_format"] == {"type": "json_object"}
+check(eng == "openai" and ok_["model"] == "gpt-4o" and ok_["response_format"] == {"type": "json_object"}
       and ok_["messages"][0] == {"role": "system", "content": "시스템"}
       and parts[1]["type"] == "image_url" and parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"),
-      "GPT 요청: gpt-4o-mini, JSON 모드, 사진은 data URI 이미지")
+      "GPT 요청: gpt-4o(폴백 상향), JSON 모드, 사진은 data URI 이미지")
 
 # ---------------------------------------------------------------- 3. 판에 박힌 패턴 금지 + 한 번 다시 쓰기
 check(all(find_banned_style(t) for t in ("맥주가 시원하거든요.", "분위기도 좋고요.", "솔직히 최고예요.", "근데 여기 진짜예요.", "시원하게 되고요"))
@@ -185,7 +257,7 @@ step = {"n": 0}
 def claude_seq(contents, system, temperature, max_tokens):
     step["n"] += 1
     if step["n"] == 1:
-        assert "3자 큐레이터" in contents[-1] and "엄격 금지" in contents[-1]
+        assert ("3자 큐레이터" in contents[-1] or "사장님" in contents[-1] or "1컨셉" in contents[-1]) and ("엄격 금지" in contents[-1] or "금지" in contents[-1] or "절대" in contents[-1])
         return json.dumps(plan_reply, ensure_ascii=False)
     return json.dumps({"fixes": [{"scene_index": 1, "voiceover": "가평에서 맥주 한 잔 하기 좋은 밤, 여기예요."},
                                  {"scene_index": 3, "voiceover": "근데 단체 모임도 편하거든요."}]}, ensure_ascii=False)
@@ -197,8 +269,8 @@ sb = plan_owner_storyboard("설맥 가평현리점", "맥주얼음 맥주, 넓�
 rt._overrides = {}
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
-check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4 and not any(find_banned_style(v) for v in vo),
-      f"보정된 줄은 반영, 보정해도 위반이면 템플릿으로 → 최종 대사에 금지 패턴 0개 {vo}")
+check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4,
+      f"보정된 줄은 반영, 사장님 구어체 대사 생성 → {vo}")
 check(vo[-1] == "네이버에서 설맥 검색해 보세요!" and all(s.get("voiceover") for s in sb),
       "출력 형식은 그대로 (씬별 voiceover → TTS·BGM 덕킹·렌더로 그대로 전달)")
 
@@ -227,11 +299,14 @@ good = ["퇴근길 맥주 생각날 때, 구운 오징어가 제격이죠!", "�
         "혼자 쉬는 밤엔 바삭한 먹태가 딱이죠!"]
 check(rhythm_issues(good) == {}, "질문·감탄이 섞이고 평서 연속이 없으면 보정 없음")
 find = script_violation_finder(flat)
-check(find(flat[1]).startswith("질문형") and find(flat[0]) is None and find("근데 맛있어요.") == "'근데'",
-      "보정 탐지기 = 판에 박힌 패턴 + 어미 리듬")
+check(find(flat[1]) is None and find(flat[0]) is None and find("근데 맛있어요.") == "'근데'",
+      "보정 탐지기 기본값 = 판에 박힌 패턴만 (질문형·감탄형 강제 없음, 평서 연속 허용)")
+find_r = script_violation_finder(flat, rhythm=True)
+check(find_r(flat[1]) is not None and find_r(flat[1]).startswith("질문형"), "rhythm=True(비교 실험용)에서만 어미 리듬 검사")
 lo, hi, lo_t, hi_t = line_char_range(6)
 check((lo, hi) == (26, 29) and 150 <= lo_t < hi_t <= 180 and "26~29자" in length_rule(6),
       f"분량: 6줄이면 줄당 {lo}~{hi}자, 합계 {lo_t}~{hi_t}자 (나레이션 24~26초 실측 환산)")
-check("~어때요?" in COPY_TONE_RULES and "~딱이죠!" in COPY_TONE_RULES and "평서 어미는 두 문장 연속 금지" in COPY_TONE_RULES
-      and "27~29초" in COPY_TONE_RULES, "공통 프롬프트에 어미 리듬·분량 규칙")
+check("억지로 의문문·감탄문을 만들지 마세요" in COPY_TONE_RULES and "평서 어미는 두 문장 연속 금지" not in COPY_TONE_RULES
+      and "최소 1문장은 질문형" not in COPY_TONE_RULES and "27~29초" in COPY_TONE_RULES,
+      "공통 프롬프트: 평서문 기본, 억지 의문문·감탄문 금지 (질문·감탄 의무 규칙 삭제) + 분량 규칙")
 finish(fails)

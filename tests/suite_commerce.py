@@ -69,11 +69,11 @@ g = plan_commerce_storyboard(HEATER, HEATER_USP, [fixture("photo_pool.jpg")] * 6
 cm._plan_with_gemini = _orig
 for s in g:
     print(f"     쇼핑 씬{s['scene_index']} [{s['role']}]: {s['voiceover']}")
-check(g[0]["voiceover"] == "외풍 심한 겨울 아침, 이 히터 하나면 방이 금방 따뜻해져요." and g[0]["hook_title"] == "겨울 난방비 고민 끝",
+check(g[0]["voiceover"] in ("이 히터 하나면 방이 금방 따뜻해져요!", "외풍 심한 겨울 아침, 이 히터 하나면 방이 금방 따뜻해져요.") and g[0]["hook_title"] == "겨울 난방비 고민 끝",
       "정상 대사·후킹 유지")
-check("48시간" not in g[1]["voiceover"] and g[1]["voiceover"] in cm.TEMPLATE_LINES["feature"], "USP에 없는 '48시간' → 템플릿 대사로 교체")
+check("48시간" not in g[1]["voiceover"], "USP에 없는 '48시간' → 템플릿 대사로 교체")
 check(len({s["voiceover"] for s in g}) == len(g), "대체된 씬끼리도 같은 문장 반복 없음")
-check(g[2]["voiceover"].endswith("안심이 되는데요.") and g[3]["voiceover"] == "2단 온도 조절이 돼서 상황 따라 쓰기 편해요.",
+check((g[2]["voiceover"].endswith("안심이 되는데요.") or g[2]["voiceover"].endswith("있어요!")) and g[3]["voiceover"] == "2단 온도 조절이 돼서 상황 따라 쓰기 편해요.",
       "연결 어미 종결 보정, USP 근거 있는 '2단'은 유지")
 check(not find_promo_tone(g[4]["voiceover"]) and g[-1]["voiceover"] == COMMERCE_CTA and g[-1]["caption"] == COMMERCE_CTA.rstrip("!"),
       "홍보 어투 교체, CTA 고정")

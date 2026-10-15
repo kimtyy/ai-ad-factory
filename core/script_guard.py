@@ -12,6 +12,8 @@ core/script_guard.py - 대본 후처리 가드 (트랙 A/B 공통)
 5. hook_echo: 씬 1 서브 대사가 후킹 헤드라인 단어를 앵무새처럼 반복하는지
 6. find_off_scene_topic: 숙소 정보에만 있고 그 씬 화면에 없는 주제(반려견 용품, 조식 …)가 대사에 난입했는지
 """
+import math
+import os
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -175,15 +177,14 @@ COPY_TONE_RULES = """[대본 톤 - 3자 큐레이터가 시청자에게 '이런 
 - TPO 중심: 메뉴·시설을 순서대로 나열하지 말고, 방문자의 실제 상황(언제·누구와·어떤 기분일 때)을 장면마다 하나씩 그리세요.
   예: '퇴근길에 시원한 한 잔이 당기는 날', '비 오는 주말 둘이서 늘어지고 싶을 때', '친구들 단체로 모일 자리 찾을 때'.
   그 상황에서 이 사진 속 공간·메뉴가 왜 답인지 한 문장으로 연결하세요. 'A도 있고 B도 있어요' 같은 나열은 금지.
-- 리듬: 최종 영상 27~29초(나레이션 24~26초) 안에 질문형('~할 때 어디 가요?'), 단언형('정답은 여기예요.'),
-  감탄형('이 조합, 반칙이에요!')을 섞어 씬마다 문장 모양을 바꾸세요. 같은 어미가 두 씬 연속 나오면 안 됩니다.
-- 어미 리듬 (필수): CTA를 뺀 대사 중 최소 1문장은 질문형('~어때요?', '~있나요?', '~있죠?'),
-  최소 1문장은 감탄·확신형('~딱이죠!', '~제격이네요!', '~최고죠!')으로 쓰세요.
-  '~에요/~예요/~해요.' 같은 평서 어미만 이어지는 단조로운 대본 금지: 평서 어미는 두 문장 연속 금지, 전체의 절반 이하.
+- 어미·리듬: 최종 영상 27~29초(나레이션 24~26초) 안에서 말하듯 자연스러운 해요체 평서문을 기본으로 쓰세요. 질문형('~할 때 어디 가요?')이나 감탄형('이 조합, 반칙이에요!')은
+  내용이 정말 그렇게 말하고 싶을 때만 쓰고, 문장 모양을 맞추려고 억지로 의문문·감탄문을 만들지 마세요. 어색한 의문문보다 담백한 평서문이 낫습니다.
+  같은 어미('~예요.')가 네 문장 이상 이어질 때만 한 군데를 자연스럽게 바꾸세요.
 - 분량: 사진 설명을 늘리지 말고 감각 표현(바삭한, 시원하게 넘어가는)이나 방문 상황(퇴근 후, 비 오는 주말, 넷이 모인 날)을
   구체적으로 더해 문장을 채우세요.
 - 각 씬 대사는 해요체로 끝나는 완결 문장 하나 (~예요, ~이에요, ~어요/아요, ~죠, ~네요, ~까요? 등). 문장 중간에서 끊지 마세요.
 - 엄격 금지 (판에 박힌 패턴): '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데' (문장 어디에서도)
+- 엄격 금지 (설명조 접속사): '따라서', '그러므로', '또한', '그리고' 등 문어체/설명조 접속사
 - 금지 (홍보 어투): '~해보세요', '~즐겨보세요', '~마세요', '~놓치지 마세요', '~딱!', '~딱 좋아요'
 - 금지 (개조식 단문): '~가능함', '~보임', '~됨', '~임'처럼 메모하듯 끊기는 어미
 - 금지 (합쇼체·뉴스체): '~입니다', '~습니다', '~아닙니다'
@@ -197,13 +198,172 @@ BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"고요\s*[.!?~]*$", "'~고요' 어미"),
     (r"솔직히", "'솔직히'"),
     (r"(^|[\s,.!?])근데", "'근데'"),
+    (r"(^|[\s,.!?])따라서(?=[\s,.!?]|$)", "'따라서' 설명조 접속사"),
+    (r"(^|[\s,.!?])그러므로(?=[\s,.!?]|$)", "'그러므로' 설명조 접속사"),
+    (r"(^|[\s,.!?])또한(?=[\s,.!?]|$)", "'또한' 설명조 접속사"),
+    (r"(^|[\s,.!?])그리고(?=[\s,.!?]|$)", "'그리고' 설명조 접속사"),
+    # AI 상투구·설명조 (현장감을 죽이는 광고 판박이)
+    (r"한\s*땀\s*한\s*땀", "'한 땀 한 땀' 상투구"),
+    (r"정성\s*(껏|스럽게|\s*가득)", "'정성껏/정성 가득' 상투구"),
+    (r"맛보실\s*수\s*있", "'맛보실 수 있어요' 설명조"),
+    (r"만나보실\s*수\s*있", "'만나보실 수 있어요' 설명조"),
+    (r"즐기실\s*수\s*있", "'즐기실 수 있어요' 설명조"),
+    (r"[가-힣]실\s*수\s*있", "'~하실 수 있어요' 존대 설명조"),
+    (r"[가-힣]히\s*(이에요|예요)\s*[.!?~]*$", "부사+'예요' 비문 ('확실히예요')"),
 )
 
 
 STYLE_REPAIR_RULES = ("[다시 쓰기 규칙] 3자 큐레이터가 방문 상황(TPO)을 짚어 주는 해요체 완결 문장 한 줄. "
-                      "엄격 금지: '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데'. "
-                      "위반 설명에 어미 방향이 있으면 그 형태로, 없으면 질문형·단언형·감탄형 중 원래 흐름에 맞는 형태로. "
+                      "엄격 금지: '~거든요', '~하거든요', '~고요', '~되고요' 어미, '솔직히', '근데', '따라서', '그러므로', '또한', '그리고', "
+                      "'한 땀 한 땀', '정성껏', '맛보실 수 있어요'. "
+                      "원래 뜻과 어조를 그대로 두고 문제 표현만 자연스러운 해요체 평서문으로 고치세요. 질문형·감탄형으로 바꾸지 마세요. "
                       "길이는 원래와 비슷하거나 조금 길게 (공백 포함 26~30자).")
+
+
+# ---------------------------------------------------------------- 조사 자동 보정 (을/를, 이/가, 은/는 …)
+_HANGUL_FIRST, _HANGUL_LAST = 0xAC00, 0xD7A3
+_DIGIT_BATCHIM = set("013678")        # 영·일·삼·육·칠·팔 (이/사/오/구는 받침 없음). 팔은 ㄹ 받침이라 으로/로에서 별도 처리
+_LATIN_BATCHIM = set("lmnr")          # 엘·엠·엔·알(알은 ㄹ 받침)
+_TRAIL_JUNK = " \t\n.,!?~…'\"”’)]}>·"
+
+
+def _last_sound_char(word: str) -> str:
+    w = (word or "").rstrip(_TRAIL_JUNK)
+    return w[-1] if w else ""
+
+
+def has_batchim(word: str) -> bool:
+    """마지막 글자에 받침(종성)이 있는지. 한글은 종성, 숫자는 읽는 소리(영일삼육팔), 영문은 l·m·n·r(엘·엠·엔·알)로 판단"""
+    ch = _last_sound_char(word)
+    if not ch:
+        return False
+    if _HANGUL_FIRST <= ord(ch) <= _HANGUL_LAST:
+        return (ord(ch) - _HANGUL_FIRST) % 28 != 0
+    if ch.isdigit():
+        return ch in _DIGIT_BATCHIM or ch == "8"
+    if ch.isascii() and ch.isalpha():
+        return ch.lower() in _LATIN_BATCHIM
+    return False
+
+
+def _is_rieul(word: str) -> bool:
+    ch = _last_sound_char(word)
+    if _HANGUL_FIRST <= ord(ch or "a") <= _HANGUL_LAST:
+        return (ord(ch) - _HANGUL_FIRST) % 28 == 8
+    return ch in ("1", "7", "8") or ch.lower() in ("l", "r")
+
+
+_JOSA_PAIRS = {            # 종류 → (받침 있을 때, 받침 없을 때)
+    "을/를": ("을", "를"), "이/가": ("이", "가"), "은/는": ("은", "는"), "과/와": ("과", "와"),
+    "이에요/예요": ("이에요", "예요"), "이라/라": ("이라", "라"), "이랑/랑": ("이랑", "랑"),
+}
+
+
+def josa(word: str, kind: str) -> str:
+    """단어 뒤에 올 조사만 반환. kind: '을/를' '이/가' '은/는' '과/와' '으로/로' '이에요/예요' (으로/로는 ㄹ 받침이면 '로')"""
+    if kind == "으로/로":
+        return "으로" if has_batchim(word) and not _is_rieul(word) else "로"
+    with_b, without_b = _JOSA_PAIRS.get(kind, (kind.split("/")[0], kind.split("/")[-1]))
+    return with_b if has_batchim(word) else without_b
+
+
+def with_josa(word: str, kind: str) -> str:
+    """'나무손 공방' + '을/를' → '나무손 공방을' (조사 파괴 방지: '공방를' 같은 오류 차단)"""
+    w = (word or "").strip()
+    return w + josa(w, kind) if w else ""
+
+
+# ---------------------------------------------------------------- 1컨셉 실질 연관성 · 씬 간 반복
+_STEM_TRIM = ("하시면", "하셔서", "해서", "하면", "하는", "하고", "하게", "에서", "에게", "으로", "이라", "이고", "이에요", "입니다",
+              "였던", "처럼", "까지", "부터", "보다", "한", "인", "은", "는", "이", "가", "을", "를", "에", "의", "도", "만", "로",
+              "과", "와", "고", "며", "던", "라", "게", "서", "면")
+_STEM_STOP = {"바로", "지금", "여기", "이번", "진짜", "정말", "그냥", "이거", "그때", "다시", "오늘", "우리", "모든", "같은",
+              "있어", "없어", "있는", "이런", "저런", "그런", "하는", "되는", "어요", "아요", "해요", "에요", "예요", "만에"}
+
+
+def content_stems(text: str) -> set:
+    """대사의 내용어 줄기(앞 2글자) 집합. 조사·어미를 떼고 불용어를 뺀다 (한국어 형태소 분석기 없이 쓰는 가벼운 근사)"""
+    stems = set()
+    for tok in re.findall(r"[가-힣A-Za-z0-9]+", text or ""):
+        t = tok
+        for suf in _STEM_TRIM:
+            if len(t) - len(suf) >= 2 and t.endswith(suf):
+                t = t[:-len(suf)]
+                break
+        if len(t) < 2 or t in _STEM_STOP:
+            continue
+        s = t[:2] if len(t) >= 3 and re.match(r"[가-힣]", t) else t
+        if s not in _STEM_STOP:
+            stems.add(s)
+    return stems
+
+
+# 컨셉에 없는데 대사로 새어 들어오는 '곁가지 자랑' 주제 (사용자가 컨셉·USP에 쓴 경우는 허용)
+SIDE_BRAG_TOPICS = ("주차", "와이파이", "콘센트", "단체석", "배달", "포장", "예약", "이벤트", "키즈", "반려", "화장실", "룸")
+
+
+def find_concept_drift(text: str, core_concept: str, usp: str = "") -> Optional[str]:
+    """
+    1컨셉 1메시지 위반 탐지 (위반 시 설명, 정상 시 None):
+    ① 백화점식 나열 ("A도 있고 B도 있고", "A랑 B랑 C")  ② 컨셉·USP에 없는 곁가지 자랑(주차·와이파이·배달 …)
+    컨셉과의 직접 연관은 줄 단위가 아니라 영상 전체 단위로 concept_coverage_issues가 본다 (뒷받침 문장까지 쫓아내지 않도록).
+    """
+    c = (core_concept or "").strip()
+    t = (text or "").strip()
+    if not c or not t:
+        return None
+    list_hits = len(re.findall(r"(도\s*있[고으]|도\s*준비|[와과]\s|랑\s*|,\s*)", t))
+    if list_hits >= 2:
+        return f"'{c}' 1컨셉 이탈 (잡다한 사물/시설 2개 이상 나열)"
+    allowed = f"{c} {usp or ''}"
+    for w in SIDE_BRAG_TOPICS:
+        if w in t and w not in allowed:
+            return f"'{c}' 1컨셉 이탈 (컨셉에 없는 곁가지 자랑 '{w}')"
+    return None
+
+
+def concept_coverage_issues(lines: List[str], core_concept: str, min_ratio: float = 0.5) -> Dict[int, str]:
+    """
+    CTA를 뺀 대사 목록이 컨셉의 핵심 키워드를 실제로 담고 있는지 (영상 전체 단위). 컨셉 줄기가 나온 줄이 min_ratio 미만이면
+    키워드가 없는 줄을 {줄 번호: 고칠 방향}으로 반환 → 뒷받침 문장은 허용하되 대본 전체가 컨셉에서 멀어지는 것만 막는다.
+    """
+    keys = content_stems(core_concept)
+    body = [i for i, t in enumerate(lines) if (t or "").strip()]
+    if not keys or len(body) < 2:
+        return {}
+    hit = [i for i in body if keys & content_stems(lines[i])]
+    need = max(1, math.ceil(len(body) * min_ratio))
+    if len(hit) >= need:
+        return {}
+    missing = [i for i in body if i not in hit]
+    return {i: f"컨셉('{core_concept.strip()}')의 핵심 표현이 빠짐 → 이 장면의 근거를 컨셉 안에서 말하기"
+            for i in missing[: need - len(hit)]}
+
+
+def repeated_line_issues(lines: List[str], hook: str = "") -> Dict[int, str]:
+    """
+    씬 간 앵무새 반복: 앞선 줄(훅 포함)과 같은 문장이거나 내용어 줄기가 절반 이상 겹치는 줄 → {줄 번호: 고칠 방향}.
+    겹침 기준: 공통 줄기 2개 이상 and 짧은 쪽 줄기의 50% 이상
+    """
+    def norm(x: str) -> str:
+        return re.sub(r"[\s.!?~,]", "", x or "")
+
+    issues: Dict[int, str] = {}
+    seen: List[Tuple[str, set, str]] = []
+    if hook:
+        seen.append(("훅", content_stems(hook), norm(hook)))
+    for i, t in enumerate(lines):
+        cur = content_stems(t)
+        for label, prev, prev_norm in seen:
+            if label == "훅" and i > 0:      # 훅은 씬 1 대사와만 비교 (뒤 씬이 컨셉어를 다시 쓰는 건 정상)
+                continue
+            common = cur & prev
+            small = min(len(cur), len(prev))
+            if (norm(t) and norm(t) == prev_norm) or (small and len(common) >= 2 and len(common) / small >= 0.5):
+                issues[i] = f"앞 문장({label})과 같은 말 반복 → 새로운 장면·근거·이유로 바꾸기"
+                break
+        seen.append((f"{i + 1}번 대사", cur, norm(t)))
+    return issues
 
 
 def _broken_da_yo(text: str) -> bool:
@@ -256,6 +416,10 @@ def ending_kind(text: str) -> str:
     return "plain"
 
 
+# 질문형·감탄형 최소 1개씩/평서 연속 금지를 '강제'할지. 2026-10 실측: 이 강제가 재작성 단계에서 "알고 계셨나요?", "싶지 않으세요?" 같은
+# 억지 의문문과 비문을 만들어 기본 OFF. 비교 실험·롤백용으로만 SCRIPT_RHYTHM_ENFORCE=1 로 켠다.
+RHYTHM_ENFORCE = os.getenv("SCRIPT_RHYTHM_ENFORCE", "0").strip() == "1"
+
 RHYTHM_FIX = {
     "question": "질문형으로 바꾸기 ('~어때요?', '~있나요?', '~있죠?')",
     "exclaim": "감탄·확신형으로 바꾸기 ('~딱이죠!', '~제격이네요!', '~최고죠!')",
@@ -288,10 +452,19 @@ def rhythm_issues(lines: List[str]) -> Dict[int, str]:
     return issues
 
 
-def script_violation_finder(lines: List[str]):
-    """대본 보정용 위반 탐지기: 판에 박힌 패턴 + 어미 리듬 (줄 텍스트 → 위반 설명)"""
-    rhythm = {lines[i]: msg for i, msg in rhythm_issues(lines).items()}
-    return lambda text: find_banned_style(text) or rhythm.get(text)
+def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None):
+    """
+    대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
+    씬 간 반복(훅 포함) + 1컨셉 연관성(core_concept를 넘긴 경우)
+    """
+    use_rhythm = RHYTHM_ENFORCE if rhythm is None else rhythm
+    flagged: Dict[str, str] = {lines[i]: msg for i, msg in rhythm_issues(lines).items()} if use_rhythm else {}
+    for i, msg in repeated_line_issues(lines, hook).items():
+        flagged.setdefault(lines[i], msg)
+    if core_concept:
+        for i, msg in concept_coverage_issues(lines, core_concept).items():
+            flagged.setdefault(lines[i], msg)
+    return lambda text: find_banned_style(text) or flagged.get(text)
 
 
 def find_unsupported_spec(text: str, usp: str = "") -> Optional[str]:
@@ -431,7 +604,21 @@ def hook_echo(hook: str, text: str) -> list:
 def is_hook_echo(hook: str, text: str) -> bool:
     hits = hook_echo(hook, text)
     words = [w for w in (hook or "").split() if len(re.sub(r"[^\w]", "", w)) >= 2]
-    return len(hits) >= 2 or (words and len(hits) / len(words) >= 0.6)
+    if len(hits) >= 2 or (words and len(hits) / len(words) >= 0.6):
+        return True
+    # 활용형이 달라 글자 그대로는 안 겹쳐도(무칩니다/무쳐드려요, 주문하면/주문하시면) 내용어 줄기가 겹치면 같은 말
+    return bool(hook and text and repeated_line_issues([text], hook))
+
+
+_CONCEPT_FALLBACKS = ("{c}, 이게 이유예요.", "{c}, 직접 보면 알아요.", "{c}, 이것만 기억해요.")
+
+
+def concept_fallback_line(core_concept: str, index: int = 0) -> str:
+    """LLM 대사를 모두 버려야 할 때 쓰는 최후의 안전 문구. 컨셉 문구를 그대로 살려 조용히 일반 대본으로 바뀌는 것을 막는다."""
+    c = (core_concept or "").strip().rstrip(".!? ")
+    if not c:
+        return ""
+    return _CONCEPT_FALLBACKS[index % len(_CONCEPT_FALLBACKS)].format(c=c)
 
 
 # ---------------------------------------------------------------- 6. 화면과 무관한 주제 난입

@@ -174,18 +174,32 @@ def my_channel(service) -> Dict[str, str]:
     return {"id": items[0]["id"], "title": items[0]["snippet"]["title"]}
 
 
-def thumbnail_for_upload(thumb_png: str) -> str:
-    """thumbnails.set 2MB 한도: PNG가 크면 같은 크기의 고화질 JPEG 사본(_upload.jpg)을 만들어 사용 (원본 PNG는 그대로)"""
-    if os.path.getsize(thumb_png) <= THUMB_MAX_BYTES:
-        return thumb_png
+COVER_NAME = "thumbnail.jpg"
+
+
+def export_cover_jpg(src: str, dst: Optional[str] = None) -> str:
+    """
+    유튜브 업로드·미리보기용 커버 이미지를 독립 파일(기본: 원본과 같은 폴더의 thumbnail.jpg)로 저장.
+    sRGB JPEG, thumbnails.set 한도(2MB) 이하가 되도록 품질을 낮춰 가며 저장한다 (원본 PNG는 그대로 둠).
+    """
     from PIL import Image
-    img = Image.open(thumb_png).convert("RGB")
-    out = os.path.splitext(thumb_png)[0] + "_upload.jpg"
-    for q in (92, 88, 84, 80, 75, 70):
+    out = dst or os.path.join(os.path.dirname(os.path.abspath(src)), COVER_NAME)
+    img = Image.open(src).convert("RGB")
+    for q in (95, 92, 88, 84, 80, 75, 70, 60):
         img.save(out, "JPEG", quality=q, optimize=True, progressive=True)
         if os.path.getsize(out) <= THUMB_MAX_BYTES:
             break
     return out
+
+
+def thumbnail_for_upload(thumb: str) -> str:
+    """thumbnails.set에 올릴 파일: 항상 독립 커버 이미지(thumbnail.jpg). 이미 만들어 둔 것이 최신이면 그대로 사용"""
+    cover = os.path.join(os.path.dirname(os.path.abspath(thumb)), COVER_NAME)
+    if os.path.basename(thumb) == COVER_NAME and os.path.getsize(thumb) <= THUMB_MAX_BYTES:
+        return thumb
+    if os.path.exists(cover) and os.path.getmtime(cover) >= os.path.getmtime(thumb) and os.path.getsize(cover) <= THUMB_MAX_BYTES:
+        return cover
+    return export_cover_jpg(thumb, cover)
 
 
 def _http_reason(e) -> str:
@@ -288,8 +302,12 @@ def upload_short(video_path: str, title: str, description: str, *, mode: str, th
             service.thumbnails().set(videoId=vid, media_body=MediaFileUpload(thumbnail_for_upload(thumb_path))).execute()
             out["thumbnail_ok"] = True
         except HttpError as e:
-            out["warnings"].append("썸네일 등록이 거절됐어요 (채널 인증·쇼츠 맞춤 썸네일 권한 필요). "
-                                   f"영상 첫 화면이 썸네일이라 피드에는 그대로 보여요. (HTTP {getattr(e.resp, 'status', '?')})")
+            out["warnings"].append("맞춤 썸네일 등록이 거절됐어요 (채널 인증·권한 필요). 쇼츠는 영상의 첫 프레임(0초)이 대표 썸네일이라 "
+                                   f"피드에는 영상 안의 0초 화면이 그대로 보여요. (HTTP {getattr(e.resp, 'status', '?')})")
+        except Exception as e:      # 네트워크·파일·인코딩 오류도 업로드 결과는 유지 (썸네일은 부가 기능)
+            logger.warning(f"[썸네일 등록 실패] {type(e).__name__}: {e}")
+            out["warnings"].append("맞춤 썸네일을 등록하지 못했어요. 쇼츠는 영상의 첫 프레임(0초)이 대표 썸네일로 자동 지정돼서 "
+                                   f"업로드 자체에는 영향이 없어요. ({type(e).__name__})")
 
     # 아동용 아님(댓글 열림) 확인: 요청에 selfDeclaredMadeForKids=False를 보냈어도 채널 기본값·유튜브 판정으로 바뀔 수 있음
     comments_open = True

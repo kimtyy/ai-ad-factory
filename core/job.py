@@ -138,6 +138,50 @@ class JobContext:
         with open(self.plan_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    @property
+    def metadata_path(self) -> str:
+        return os.path.join(self.workdir, "metadata.json")
+
+    def save_metadata(self, metadata: Dict[str, Any]):
+        """쇼츠 최적화 SEO 메타데이터(metadata.json) 저장"""
+        self._materialize()
+        tmp = self.metadata_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"job_id": self.job_id, **metadata}, f, ensure_ascii=False, indent=2, default=str)
+        os.replace(tmp, self.metadata_path)
+
+    def load_metadata(self) -> Optional[Dict[str, Any]]:
+        """저장된 SEO 메타데이터(metadata.json) 로드"""
+        if not os.path.exists(self.metadata_path):
+            return None
+        try:
+            with open(self.metadata_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"metadata.json 로드 실패 ({self.metadata_path}): {e}")
+            return None
+
+    def clean_audio_assets(self):
+        """렌더링 시 이전 작업의 잔여 오디오 파일이나 프리뷰 오디오가 중복 믹싱되지 않도록
+        assets 폴더 내 오디오 관련 파일(*.mp3, *.wav, *.m4a, *.aac, *.voice.json)을 깔끔히 삭제"""
+        if not os.path.isdir(self.assets_dir):
+            return
+        audio_exts = {".mp3", ".wav", ".m4a", ".aac"}
+        removed = 0
+        for f in os.listdir(self.assets_dir):
+            fp = os.path.join(self.assets_dir, f)
+            if not os.path.isfile(fp):
+                continue
+            ext = os.path.splitext(f)[1].lower()
+            if ext in audio_exts or f.endswith(".voice.json"):
+                try:
+                    os.remove(fp)
+                    removed += 1
+                except Exception as e:
+                    logger.warning(f"잔여 오디오 파일 삭제 실패 ({fp}): {e}")
+        if removed:
+            logger.info(f"이전 작업 잔여 오디오 파일 {removed}개 정리 완료")
+
     def save_meta(self):
         os.makedirs(self.workdir, exist_ok=True)
         with open(self.meta_path, "w", encoding="utf-8") as f:

@@ -70,7 +70,7 @@ THUMB_TEMPLATES = {
 WHERE_FALLBACK = {"travel": "국내", "commerce": "", "owner": "동네", "book": "동네"}
 # 진부한 후킹 (모델이 써도 버리고 템플릿·다른 필드로): '여길 아직도 안 가봤다고?', '여길 모른다고?', '여길 안 간다고?' 계열
 STALE_HOOKS = (r"여길\s*(아직도\s*)?(안\s*가|안\s*간|모르|모른|몰라|몰랐)", r"아직도\s*안\s*가\s*봤", r"여기\s*아직도\s*모르")
-KW_FALLBACK = {"travel": "숙소", "commerce": "꿀템", "owner": "가게", "book": "책"}
+KW_FALLBACK = {"travel": "숙소", "commerce": "꿀템", "owner": "", "book": "책"}
 # 첫 댓글 참여 유도 질문 (답하기 쉬운 선택·경험 질문, 사실 주장 없음). AI 질문이 없거나 검증에서 걸리면 사용
 COMMENT_QUESTIONS = {
     "owner": ["여기 가면 제일 먼저 시킬 메뉴는? 댓글로 골라 주세요 👇", "{kw}, 누구랑 같이 오고 싶어요? 친구 태그 👇",
@@ -79,6 +79,25 @@ COMMENT_QUESTIONS = {
     "commerce": ["여러분은 이거 어디에 제일 먼저 쓰고 싶어요? 👇", "{kw} 고를 때 제일 중요하게 보는 건? 👇"],
     "book": ["이 책, 어떤 밤에 읽고 싶어요? 👇", "요즘 읽고 있는 책도 댓글로 알려 주세요 👇"],
 }
+
+# 편의점 / 마트 / 소매점 전용 첫 댓글 참여 유도 질문
+RETAIL_COMMENT_QUESTIONS = [
+    "여기 가면 장바구니에 제일 먼저 담을 꿀템은? 댓글로 골라 주세요 👇",
+    "원픽 1+1 행사 상품은? 댓글로 알려 주세요 👇",
+    "{kw}, 장바구니에 꼭 담을 꿀템은? 댓글로 골라 주세요 👇",
+]
+
+RETAIL_KEYWORDS = (
+    "편의점", "마트", "슈퍼", "소매", "스토어", "무인", "문구", "팬시", "잡화", "식료품", "할인점",
+    "셀렉트샵", "소품샵", "이마트24", "gs25", "cu", "세븐일레븐", "미니스톱", "다이소", "올리브영",
+    "1+1", "2+1", "행사"
+)
+
+
+def is_retail(business_type: str = "", name: str = "", usp: str = "", core_concept: str = "") -> bool:
+    """편의점 / 마트 / 소매점 여부 판별"""
+    combined = f"{business_type} {name} {usp} {core_concept}".lower()
+    return any(k.lower() in combined for k in RETAIL_KEYWORDS)
 COMMENT_QUESTION_MAX = 45
 COMMENT_TAGS = 3
 NAVER_MAP_SEARCH = "https://map.naver.com/p/search/{q}"     # 네이버 지도 검색 결과 링크 (페이지 접속·크롤링 없음, 링크만 만듦)
@@ -106,16 +125,48 @@ def find_hype_claim(text: str, usp: str = "") -> Optional[str]:
     return find_unsupported_claim(t, usp=usp or "", check_amenities=False) or find_unsupported_spec(t, usp or "")
 
 
-def pick_keyword(mode: str, usp: str = "", product_name: str = "") -> str:
-    """제목·썸네일 서브 카피용 짧은 키워드 (USP 첫 구절, 너무 길면 상품 종류 단어)"""
+def pick_keyword(mode: str, usp: str = "", product_name: str = "", core_concept: str = "", business_type: str = "") -> str:
+    """제목·썸네일 서브 카피(중앙 뱃지)용 짧은 키워드
+    1순위: 선택된 1컨셉 핵심 키워드 (core_concept, 예: '양주사랑카드 1+1')
+    2순위: 등록된 정식 매장명 / 상품명 (product_name, 예: '이마트24 덕계메디프라자점')
+    3순위: USP 첫 구절 (사실만)
+    4순위: 키워드 태그 매칭
+    5순위: 업종명 (business_type, 예: '편의점', '맛집')
+    Fallback: 모드별 안전 키워드 (owner는 무의미한 '가게' 대신 빈 문자열로 미노출 처리)
+    """
+    # 1순위: 선택된 1컨셉 핵심 키워드
+    if core_concept and core_concept.strip():
+        c = core_concept.strip()
+        if len(c) <= THUMB_SUB_MAX:
+            return c
+        parts = re.split(r"[,/·\n]| 및 ", c)
+        if parts and parts[0].strip():
+            return parts[0].strip()[:THUMB_SUB_MAX]
+
+    # 2순위: USP 첫 구절 (대표 메뉴, 특징 등 2~12자 사실)
     for part in re.split(r"[,/·\n]| 및 ", usp or ""):
         p = part.strip()
         if 2 <= len(p) <= 12 and not find_hype_claim(p, usp):
             return p
+
+    # 3순위: KEYWORD_TAGS 매칭
     for words, tag in KEYWORD_TAGS:
-        if any(w.strip() in f"{usp} {product_name}" for w in words):
+        if any(w.strip() in f"{usp} {product_name} {core_concept}" for w in words):
             return tag.lstrip("#").replace("추천", "")
-    return KW_FALLBACK.get(mode, "여기")
+
+    # 4순위: 등록된 정식 매장명 / 상품명
+    if product_name and product_name.strip() and mode != "travel":
+        return product_name.strip()[:THUMB_SUB_MAX]
+
+    # 5순위: 업종명 (business_type)
+    if business_type and business_type.strip():
+        b_type = business_type.strip()
+        if b_type not in ("기타", "가게", "매장"):
+            return b_type[:THUMB_SUB_MAX]
+
+    # Fallback: owner는 무의미한 '가게' 대신 빈 문자열 (None/미노출 처리)
+    fb = KW_FALLBACK.get(mode, "")
+    return fb if fb != "가게" else ""
 
 
 def hashtags_for(mode: str, usp: str = "", product_name: str = "", extra: Optional[List[str]] = None) -> List[str]:
@@ -141,27 +192,49 @@ def ensure_shorts(title: str) -> str:
     return f"{body[:TITLE_BODY_MAX].rstrip()} #Shorts"
 
 
+def fit_copy(text: str, limit: int) -> str:
+    """글자 수 제한을 넘으면 단어·구분자(공백 , · /) 경계에서 잘라 '같은 값에 두 개, 1+1·2' 같은 반쪽 문구가 커버에 박히지 않게 한다."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit + 1]
+    for i in range(len(cut) - 1, 0, -1):
+        if cut[i] in " ,·/" and i >= 3:
+            return cut[:i].rstrip(" ,·/")
+    return text[:limit]
+
+
 def _clean_accent(a: str) -> str:
     a = (a or "").strip()
     return a if a in ACCENTS else ""
 
 
 def _template_copy(mode: str, usp: str, product_name: str, hook: str, seed: Optional[int] = None,
-                   region: str = "", signature: str = "") -> Dict[str, Any]:
+                   region: str = "", signature: str = "", core_concept: str = "", business_type: str = "") -> Dict[str, Any]:
     rnd = random.Random(seed if seed is not None else hash((mode, usp, product_name)) & 0xFFFF)
-    kw = (signature or pick_keyword(mode, usp, product_name)).strip()
+    kw = (signature or pick_keyword(mode, usp, product_name, core_concept=core_concept, business_type=business_type)).strip()
+    if kw == "가게":
+        kw = ""
     where = (region.split()[-1] if region and region.split() else "") or WHERE_FALLBACK.get(mode, "")
     where = re.sub(r"(특별시|광역시|특별자치시|특별자치도)$", "", where)
     if len(where) > 2:
         where = re.sub(r"[시군구]$", "", where)          # '가평군' → '가평' (제목에선 짧은 지명이 자연스러움)
-    title = rnd.choice(TITLE_TEMPLATES.get(mode, TITLE_TEMPLATES["travel"])).format(kw=kw, where=where, iga=_iga(kw))
+    title_kw = kw or (product_name if mode == "owner" and product_name else WHERE_FALLBACK.get(mode, "이곳"))
+    title = rnd.choice(TITLE_TEMPLATES.get(mode, TITLE_TEMPLATES["travel"])).format(kw=title_kw, where=where, iga=_iga(title_kw))
     title = re.sub(r"\s+", " ", title).strip()
     main, sub = rnd.choice(THUMB_TEMPLATES.get(mode, THUMB_TEMPLATES["travel"]))
     if hook and len(hook) <= THUMB_MAIN_MAX and not is_stale_hook(hook):
         main = hook                       # 씬 1 후킹이 짧으면 썸네일과 영상 첫 문장을 맞춤
     accent = "😱" if main.endswith("?") else "🔥"
-    question = rnd.choice(COMMENT_QUESTIONS.get(mode, COMMENT_QUESTIONS["travel"])).format(kw=kw)
-    return {"title": ensure_shorts(title), "thumb_main": main, "thumb_sub": sub.format(kw=kw)[:THUMB_SUB_MAX],
+    question_kw = kw or title_kw
+    if mode == "owner" and is_retail(business_type, product_name, usp, core_concept):
+        q_pool = RETAIL_COMMENT_QUESTIONS
+    else:
+        q_pool = COMMENT_QUESTIONS.get(mode, COMMENT_QUESTIONS["travel"])
+    question = rnd.choice(q_pool).format(kw=question_kw)
+    # 뱃지 텍스트: kw가 없거나 무의미한 경우 빈 문자열 (None/미노출 처리)
+    thumb_sub = fit_copy(sub.format(kw=kw), THUMB_SUB_MAX) if kw else ""
+    return {"title": ensure_shorts(title), "thumb_main": main, "thumb_sub": thumb_sub,
             "accent": accent, "comment_question": question, "source": "template"}
 
 
@@ -245,7 +318,8 @@ def radar_summary(trend: Optional[Dict[str, Any]], pattern: Optional[Dict[str, A
 
 def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str = "", api_key: Optional[str] = None,
                      mock: bool = False, seed: Optional[int] = None, trend: Optional[Dict[str, Any]] = None,
-                     region: str = "", signature: str = "", hidden_terms: Optional[List[str]] = None) -> Dict[str, Any]:
+                     region: str = "", signature: str = "", hidden_terms: Optional[List[str]] = None,
+                     core_concept: str = "", business_type: str = "") -> Dict[str, Any]:
     """
     → {title('… #Shorts'), thumb_main, thumb_sub, accent, hashtags[5~7], source('gemini'|'template'), rejected[], radar}
     trend: 떡상 레이더 다이제스트(core/radar/trends.py) → 프롬프트 필수 맥락 (제목 패턴·감정어·해시태그 풀)
@@ -253,10 +327,17 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
     숙소 모드는 상품명(숙소명)을 제목·썸네일에 넣지 않음 (대본에서 숨기는 원칙과 같음: 댓글 링크로 유도)
     """
     mode = mode if mode in TITLE_TEMPLATES else "travel"
-    signature = (signature or pick_keyword(mode, usp, product_name)).strip()
-    base = _template_copy(mode, usp, product_name, hook, seed, region=region, signature=signature)
+    signature = (signature or pick_keyword(mode, usp, product_name, core_concept=core_concept, business_type=business_type)).strip()
+    if signature == "가게":
+        signature = ""
+    base = _template_copy(mode, usp, product_name, hook, seed, region=region, signature=signature,
+                          core_concept=core_concept, business_type=business_type)
     radar_tags = _radar_tags(trend, mode, usp, product_name, RADAR_TAGS_MIN + 1)
-    base["hashtags"] = hashtags_for(mode, usp, product_name, extra=radar_tags)
+    from core.hashtags import build_tag_set
+    ts = build_tag_set(mode, business_type=business_type, name=product_name, usp=usp, concept=core_concept, region=region,
+                       search_keyword=signature, trend_tags=radar_tags)
+    base["hashtags"] = list(ts.core)                  # 설명란·첫 댓글·검색 태그가 모두 이 풀을 쓴다 (core/hashtags.py)
+    base["tag_set"] = ts.to_dict()
     base["rejected"] = []
     chosen = None   # 레이더 제목 패턴은 Gemini가 사실로 새 문장을 쓸 때만 사용 (자리표시자 기계적 치환은 어색한 문장이 됨)
     base["radar"] = radar_summary(trend, chosen, [t for t in base["hashtags"] if t in radar_tags])
@@ -266,6 +347,10 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
     name_rule = ("이 단어들은 쓰지 마세요 (영상 마지막에 공개): " + ", ".join(hidden) if hidden
                  else "숙소 이름은 쓰지 마세요 (궁금증으로 댓글 링크를 누르게)" if mode == "travel"
                  else f"이름이 필요하면 '{product_name}'만 그대로" if product_name else "")
+    if mode == "owner" and is_retail(business_type, product_name, usp, core_concept):
+        q_example = '"여기 가면 장바구니에 제일 먼저 담을 꿀템은? 👇", "원픽 1+1 행사 상품은? 👇"'
+    else:
+        q_example = '"여기 가면 제일 먼저 시킬 메뉴는? 👇", "누구랑 오고 싶어요? 친구 태그 👇"'
     prompt = f"""
 유튜브 쇼츠 업로드용 카피를 만드세요. 모드: {dict(travel='숙소 소개', commerce='제품 리뷰', owner='동네 가게 소개', book='동네 책방의 도서 큐레이션')[mode]}
 영상 첫 문장(후킹): {hook or '(없음)'}
@@ -281,7 +366,7 @@ def make_shorts_copy(mode: str, hook: str = "", usp: str = "", product_name: str
 4) accent: {list(ACCENTS)} 중 하나 (메인 카피 끝에 붙일 포인트)
 5) hashtags: 핵심 키워드 해시태그 5~7개 (#숙소추천 #감성숙소 #풀빌라 처럼, 띄어쓰기 없이)
 6) comment_question: 업로드 직후 채널이 다는 첫 댓글의 참여 유도 질문 한 줄 ({COMMENT_QUESTION_MAX}자 이내, 물음표 포함, 끝에 👇 가능).
-   시청자가 한 단어로 답하기 쉬운 선택·경험 질문 (예: "여기 가면 제일 먼저 시킬 메뉴는? 👇", "누구랑 오고 싶어요? 친구 태그 👇").
+   시청자가 한 단어로 답하기 쉬운 선택·경험 질문 (예: {q_example}).
    가격·순위·인기 같은 사실 주장 금지
 규칙: 예약 폭주·품절·완판·마감 임박·1위·최저가·할인율·인원·시간 같은 사실 주장은 USP에 적힌 것만. 없으면 쓰지 마세요.
 '끝판왕', '인생 숙소', 'ㄷㄷ', '미쳤다' 같은 감탄은 괜찮아요. {name_rule}
@@ -303,6 +388,8 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
     out["source"] = "gemini"
     for field, limit in (("title", TITLE_BODY_MAX), ("thumb_main", THUMB_MAIN_MAX), ("thumb_sub", THUMB_SUB_MAX)):
         val = re.sub(r"\s*#shorts\b", "", str(raw.get(field) or ""), flags=re.I).strip()
+        if field == "thumb_sub" and val in ("가게", "상점", "매장"):
+            val = signature or (product_name[:limit] if mode == "owner" and product_name else "")
         bad = find_hype_claim(val, usp) if val else "빈 값"
         if not bad and is_stale_hook(val):
             bad = "진부한 후킹"
@@ -313,7 +400,7 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
         if bad or len(val) > limit + 4:
             out["rejected"].append(f"{field}: '{val}' ({bad or '너무 김'})")
             continue
-        out[field] = ensure_shorts(val) if field == "title" else val[:limit]
+        out[field] = ensure_shorts(val) if field == "title" else fit_copy(val, limit)
     q = str(raw.get("comment_question") or "").strip()
     q_bad = (None if not q else find_hype_claim(q, usp) or ("물음표 없음" if "?" not in q else None)
              or ("너무 김" if len(q) > COMMENT_QUESTION_MAX + 5 else None)
@@ -333,7 +420,10 @@ JSON만 출력: {{"title": "...", "thumb_main": "...", "thumb_sub": "...", "acce
     from_pool = [("#" + t.lstrip("#")) for t in tags if ("#" + t.lstrip("#")) in pool]
     if pool and len(from_pool) < RADAR_TAGS_MIN:           # 레이더 태그가 부족하면 풀 상위에서 보충
         tags = list(dict.fromkeys(tags + [t for t in radar_tags if t not in tags]))[:HASHTAG_MAX]
-    out["hashtags"] = hashtags_for(mode, usp, product_name, extra=tags)
+    ts2 = build_tag_set(mode, business_type=business_type, name=product_name, usp=usp, concept=core_concept, region=region,
+                        search_keyword=signature, extra=tags, trend_tags=radar_tags)
+    out["hashtags"] = list(ts2.core)
+    out["tag_set"] = ts2.to_dict()
     pats = usable_patterns(trend, usp)          # 프롬프트에 보여 준 것과 같은 목록으로 번호 해석
     try:
         k = int(raw.get("pattern_used") or 0)
@@ -402,8 +492,26 @@ def shop_disclosures(links: List[str]) -> List[str]:
     return [SHOP_DISCLOSURES[k] for k in kinds]
 
 
+def map_search_guide(keyword: str, address: str = "", retail: bool = False, book: bool = False) -> str:
+    """
+    첫 댓글의 위치 안내. 유튜브 댓글의 외부 링크는 쇼츠에서 클릭되지 않고 긴 URL만 지저분하게 남으므로 링크 대신
+    '네이버 지도나 카카오맵에서 상호를 검색' 문구와 주소 텍스트로 안내한다.
+    """
+    from core.script_guard import with_josa
+    kw = (keyword or "").strip()
+    if not kw:
+        return ""
+    what = "책방 위치·영업시간" if book else ("위치·영업시간·행사 혜택" if retail else "위치·영업시간·메뉴")
+    josa = with_josa(kw, "을/를")[len(kw):]
+    lines = [f"📍 네이버 지도나 카카오맵에서 '{kw}'{josa} 검색해 보세요! ({with_josa(what, '을/를')} 바로 볼 수 있어요)"]
+    if (address or "").strip():
+        lines.append(f"🏠 주소: {address.strip()}")
+    return "\n".join(lines)
+
+
 def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] = None, *, search_keyword: str = "",
-                        link: str = "", disclosure_full: str = "", items: Optional[List[Dict[str, str]]] = None) -> str:
+                        link: str = "", disclosure_full: str = "", items: Optional[List[Dict[str, str]]] = None,
+                        business_type: str = "", usp: str = "", core_concept: str = "", address: str = "") -> str:
     """
     업로드 직후 채널 계정으로 다는 첫 댓글 (고정은 스튜디오에서 한 번):
     참여 유도 질문 → 사장님: 네이버 검색 안내 + 네이버 지도 링크 / 숙소: 제휴 링크 + 고지 전문 /
@@ -414,12 +522,12 @@ def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] 
     if mode == "owner":
         kw = (search_keyword or "").strip()
         if kw:
-            blocks.append(f"📍 네이버에서 '{kw}' 검색하면 위치·영업시간·메뉴를 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+            blocks.append(map_search_guide(kw, address, retail=is_retail(business_type, name=kw, usp=usp, core_concept=core_concept)))
     elif mode == "book":
         # 시골책방: 책방 방문(네이버 검색·지도) + 도서 구매 링크(알라딘 우선) + 링크 종류별 제휴 고지
         kw = (search_keyword or "").strip()
         if kw:
-            blocks.append(f"📍 네이버에서 '{kw}' 검색하면 책방 위치·영업시간을 바로 볼 수 있어요\n🗺️ 네이버 지도: {naver_map_link(kw)}")
+            blocks.append(map_search_guide(kw, address, book=True))
         rows = [it for it in (items or ([{"short": "", "link": link}] if link else [])) if (it.get("link") or "").strip()]
         if rows:
             blocks.append("\n".join(f"📖 {(it.get('short') or it.get('name') or '이 책').strip()} 구매 👉 {it['link'].strip()}"

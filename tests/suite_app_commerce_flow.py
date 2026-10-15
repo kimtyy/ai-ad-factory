@@ -47,6 +47,8 @@ try:
         "cp.CoupangPartners.search = lambda self, kw, limit=10: [{'product_id': '1', 'name': '한경희 불멍 온풍기 HAN-P9900',"
         " 'price': 129900, 'image_url': 'https://x/i.png', 'partner_url': 'https://link.coupang.com/re/x', 'category': '', 'is_rocket': True}]\n"
         "cp.CoupangPartners.deeplink = lambda self, url: 'https://link.coupang.com/a/TEST'\n"
+        "import importlib\n"
+        "importlib.reload = lambda m: m\n"   # 앱이 시작 시 core.planners*를 reload해 아래 패치를 지우므로 reload 무력화
         "import requests\n"   # 앱이 core.scraper를 reload하므로 함수 대신 네트워크 층을 가짜로 (사진 1장 응답)
         f"_img = open({photo!r}, 'rb').read()\n"
         "requests.get = lambda url, **kw: type('R', (), {'status_code': 200, 'content': _img, 'headers': {}})()\n"

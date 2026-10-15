@@ -21,11 +21,13 @@ from core.planners.commerce import TEMPLATE_LINES, _claim, _scene
 from core.script_guard import (COPY_TONE_RULES, complete_sentence, diversify_exclamations, find_banned_style,
                                find_promo_tone, ending_kind, shorten_line, strip_brochure_words, to_haeyo)
 
+from core.script_guard import RHYTHM_ENFORCE  # noqa: E402
+
 logger = logging.getLogger("ad_factory.planners.commerce_bundle")
 
 BUNDLE_SIZE = 3
 LINES_PER_ITEM = 2
-BUNDLE_CTA = "구매 좌표는 고정 댓글에 남겨 둘게요!"
+BUNDLE_CTA = "마음에 드는 건 고정 댓글에서 바로 확인해 봐요!"   # 행동 1개 + 이유 1개
 DEFAULT_BOTTOM_BAR = "🛒 구매 좌표는 고정 댓글 확인!"
 DEFAULT_HOOK = "이거 모르면 손해예요"
 DEFAULT_HOOK_LINE = "이 세 가지면 충분하지 않을까요?"
@@ -87,6 +89,7 @@ def plan_bundle_storyboard(
     mock: bool = False,
     thumb_dir: Optional[str] = None,
     output_plan_path: Optional[str] = None,
+    core_concept: str = "",
 ) -> List[Dict[str, Any]]:
     """
     items: [{name, usp, link, media?}] × 3 (상품명은 판매 페이지·사용자 입력 그대로). theme: 묶음 주제 (예: 자취생 삶의 질)
@@ -172,7 +175,7 @@ def plan_bundle_storyboard(
     for c in changes:
         logger.info(f"[감탄사 중복 분산] {c}")
     # 템플릿 대사가 끼어 평서 '~요.'가 연속되면 그 템플릿 줄을 감탄형('~요!')으로 (질문형 강제 변환은 비문 위험이라 안 함)
-    for i in sorted(templated):
+    for i in sorted(templated if RHYTHM_ENFORCE else ()):
         kinds = [ending_kind(s["voiceover"]) for s in body]
         vo = body[i]["voiceover"] if i < len(body) else ""
         near_plain = (i > 0 and kinds[i - 1] == "plain") or (i + 1 < len(kinds) and kinds[i + 1] == "plain")
@@ -185,6 +188,7 @@ def plan_bundle_storyboard(
     scenes[0].update({"bundle_title": title[:TITLE_BAR_MAX + 4], "bundle_theme": theme,
                       "bundle_items": [{"name": it["name"].strip(), "short": short_name(it["name"]),
                                         "link": (it.get("link") or "").strip()} for it in items],
+                      "core_concept": (core_concept or "").strip(),
                       "script_engine": (llm or {}).get("_engine") or "template"})
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:

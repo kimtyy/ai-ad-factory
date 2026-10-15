@@ -347,6 +347,23 @@ def main():
                 title="[green]성공[/green]",
                 border_style="bright_green"
             ))
+
+            # 쇼츠 최적화 SEO 메타데이터 자동 생성 및 저장
+            try:
+                from core.seo_generator import generate_seo_metadata
+                seo_meta = generate_seo_metadata(
+                    scenes=scenes,
+                    mode=args.mode,
+                    product_name=args.product,
+                    usp=args.usp,
+                    search_keyword=args.search_keyword or args.product,
+                    api_key=keys.get("GEMINI_API_KEY"),
+                    mock=args.mock
+                )
+                job.save_metadata(seo_meta)
+                console.print(f"[dim]쇼츠 SEO 메타데이터 저장 완료: {job.metadata_path}[/dim]")
+            except Exception as me:
+                logger.warning(f"SEO 메타데이터 저장 실패: {me}")
         except Exception as e:
             console.print(f"[bold red][ERROR] Step 3 실행 중 오류 발생:[/bold red] {e}")
             sys.exit(1)

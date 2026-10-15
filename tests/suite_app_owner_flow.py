@@ -68,15 +68,44 @@ try:
     check(sb[2].get("media", {}).get("type") == "video" and sb[0].get("image_path") == up[0], "업로드 순서대로 씬 키 배정 (씬3=영상)")
     check(os.path.exists(job.plan_path), "콘티가 job/storyboard.json에 저장")
 
-    # 모드 불일치 렌더 차단 (콘티는 owner, 현재 모드는 travel)
+    # 카드형 편집기: 표(data_editor) 없이 씬별 대사·지속시간만 노출, 수정값은 즉시 세션·저장본에 반영, 내부 필드는 보존
+    check(len(at.get("data_editor")) == 0 and len([t for t in at.text_area if t.key and t.key.startswith("sb_text_")]) == 4,
+          "스토리보드 편집: 표 없이 씬별 카드(대사 입력 4개)")
+    hook0, role0 = sb[0]["hook_title"], sb[0].get("role")
+    at.text_area(key="sb_text_1").input("수정한 첫 문장이에요")
+    at.number_input(key="sb_dur_1").set_value(3.5)
+    at.run()
+    sb2 = at.session_state.storyboard
+    check(sb2[0]["voiceover"] == sb2[0]["subtitle"] == sb2[0]["caption"] == "수정한 첫 문장이에요" and sb2[0]["duration_sec"] == 3.5
+          and sb2[0]["hook_title"] == hook0 and sb2[0].get("role") == role0 and sb2[3]["voiceover"] == sb[3]["voiceover"],
+          "카드 수정 즉시 반영: 대사=자막 일치, 지속시간 반영, 숨은 필드(hook_title·role)와 다른 씬 보존")
+
+    # 모드 전환 시 이전 모드의 콘티·업로드·입력값은 즉시 폐기 (캐시 오염 차단: reset_mode_session_state)
     at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
     at.session_state.production_mode = "travel"
     at.run()
+    check(not at.session_state.storyboard and not at.session_state.uploaded_paths,
+          "다른 모드로 전환하면 이전 모드 콘티·업로드가 초기화됨 (다른 모드 콘티가 렌더되지 않음)")
+    # 직접 modes 불일치 상태를 만들어도 렌더는 차단 (안전망)
+    at.session_state.storyboard = sb
+    at.session_state.storyboard_mode = "owner"
+    at.run()
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
-    check(any("다른 제작 모드" in e.value for e in at.error), "다른 모드에서 기획한 콘티는 렌더 차단")
+    check(any("다른 제작 모드" in e.value for e in at.error), "다른 모드에서 기획한 콘티는 렌더 차단 (안전망)")
+
+    # 사장님 모드로 복귀 → 입력·업로드·기획을 다시 수행
     at.session_state.mode_switch = "🏠 사장님 매장 홍보"
     at.session_state.production_mode = "owner"
     at.run()
+    up = [shutil.copy(p, os.path.join(at.session_state.job.uploads_dir, f"r{i}{os.path.splitext(p)[1]}")) for i, p in enumerate(srcs)]
+    at.session_state.uploaded_paths = up
+    at.text_input(key="owner_name").input("가평 솔바람 펜션")
+    at.selectbox(key="owner_type").select("stay")
+    at.text_input(key="owner_usp").input("계곡 바로 앞, 개별 바베큐장")
+    at.run()
+    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    check(not at.exception and len(at.session_state.storyboard) == 4, "복귀 후 재기획 4씬")
+    job = at.session_state.job
 
     # 렌더 (mock 음성) → 브랜드 워터마크 + 엔딩 카드 자동 적용
     t0 = time.time()

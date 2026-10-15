@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance, ImageOps
 
 RGB = Tuple[int, int, int]
 
@@ -52,7 +52,8 @@ class BrandOverlay:
         if not self.logo_path or not os.path.exists(self.logo_path):
             return None
         try:
-            logo = Image.open(self.logo_path).convert("RGBA")
+            with Image.open(self.logo_path) as source:
+                logo = ImageOps.exif_transpose(source).convert("RGBA")
         except Exception:
             return None
         scale = target_h / max(logo.height, 1)
