@@ -447,4 +447,20 @@ for k, v in _saved_env.items():
     else:
         os.environ[k] = v
 
+# 클라우드(Streamlit Secrets): 토큰 JSON을 환경변수로 주면 파일 없이도 '연결됨' (파일이 있으면 덮어쓰지 않음)
+import json as _json
+_old_dir = yu.SECRETS_DIR
+yu.SECRETS_DIR = tmp("yt_env_")
+os.environ["YOUTUBE_TOKEN_STORE"] = _json.dumps({"token": "t", "refresh_token": "r", "scopes": ["https://www.googleapis.com/auth/youtube.upload"]})
+try:
+    ok_env = yu.is_authorized("owner") and os.path.exists(os.path.join(yu.SECRETS_DIR, "token_store.json"))
+    with open(os.path.join(yu.SECRETS_DIR, "token_store.json"), "w", encoding="utf-8") as _f:
+        _f.write('{"token": "local"}')
+    yu._materialize_from_env(os.path.join(yu.SECRETS_DIR, "token_store.json"), "YOUTUBE_TOKEN_STORE")
+    keep = _json.load(open(os.path.join(yu.SECRETS_DIR, "token_store.json"), encoding="utf-8")).get("token") == "local"
+finally:
+    os.environ.pop("YOUTUBE_TOKEN_STORE", None)
+    yu.SECRETS_DIR = _old_dir
+check(ok_env and keep, "환경변수 토큰(YOUTUBE_TOKEN_STORE)만으로 연결됨 처리, 이미 있는 토큰 파일은 덮어쓰지 않음")
+
 finish(fails)

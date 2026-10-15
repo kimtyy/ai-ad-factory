@@ -67,7 +67,25 @@ def channel_key(mode: str) -> str:
 
 
 def token_path(mode: str) -> str:
-    return os.path.join(SECRETS_DIR, f"token_{channel_key(mode)}.json")
+    path = os.path.join(SECRETS_DIR, f"token_{channel_key(mode)}.json")
+    _materialize_from_env(path, f"YOUTUBE_TOKEN_{channel_key(mode).upper()}")
+    return path
+
+
+def _materialize_from_env(path: str, env_name: str) -> None:
+    """클라우드처럼 secrets/ 파일을 둘 수 없는 환경: 환경변수(Streamlit Secrets)에 JSON 문자열로 넣어 둔 값을 파일로 풀어 쓴다.
+    파일이 이미 있으면(로컬·갱신된 토큰) 건드리지 않는다. 값은 로그에 남기지 않는다."""
+    raw = os.getenv(env_name, "").strip()
+    if not raw or os.path.exists(path):
+        return
+    try:
+        import json
+        json.loads(raw)                                  # JSON 형식 확인 (아니면 무시)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(raw)
+    except (ValueError, OSError):
+        pass
 
 
 def expected_channel(mode: str) -> str:
@@ -80,7 +98,9 @@ def auth_command(mode: str) -> str:
 
 
 def client_secrets_path() -> str:
-    return os.getenv("YOUTUBE_CLIENT_SECRETS", "").strip() or os.path.join(SECRETS_DIR, "client_secret.json")
+    path = os.getenv("YOUTUBE_CLIENT_SECRETS", "").strip() or os.path.join(SECRETS_DIR, "client_secret.json")
+    _materialize_from_env(path, "YOUTUBE_CLIENT_SECRET_JSON")      # 클라우드: JSON 문자열을 Secrets에 직접
+    return path
 
 
 def is_authorized(mode: str) -> bool:
