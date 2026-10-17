@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, Iterable, List, Optional
 
 CORE_MAX = 7
-COMMENT_MAX = 3
+COMMENT_MAX = 7          # 첫 댓글 해시태그 = 설명란과 같은 핵심 태그 전부 (댓글에서도 눌러 채널·상호 태그 페이지로 이동)
 POOL_MAX = 20
 POOL_MIN = 15
 ALWAYS_TAG = "shorts"
@@ -147,6 +147,18 @@ def guard_tags(tags: Iterable[str], industry: str) -> List[str]:
     return out
 
 
+def channel_brand_tag(mode: str) -> List[str]:
+    """우리 채널 이름 해시태그 (.env YOUTUBE_CHANNEL_STORE 등, 예: '샵스토리' → '샵스토리'). 채널 태그 페이지에 영상이 모이고,
+    댓글·설명란에서 눌러 우리 영상 모음으로 올 수 있다. 채널명이 없거나 모드에 채널이 없으면 빈 목록"""
+    try:
+        from core.youtube_upload import expected_channel
+        name = expected_channel(mode)
+    except Exception:
+        return []
+    tag = re.sub(r"[^0-9A-Za-z가-힣]+", "", name or "")
+    return [tag] if 2 <= len(tag) <= 22 else []
+
+
 def _brand_tags(name: str) -> List[str]:
     n = re.sub(r"\s+", " ", (name or "").strip())
     if not n or n in ("촬영 영상 쇼츠",):
@@ -209,6 +221,7 @@ def build_tag_set(mode: str, *, business_type: str = "", name: str = "", usp: st
 
     ordered: List[str] = []
     ordered += _brand_tags(name if mode != "travel" else "")          # 숙소명은 영상에서 숨기므로 태그에도 쓰지 않음
+    ordered += channel_brand_tag(mode)                                  # 우리 채널 태그 (#샵스토리): 상호 바로 다음, 설명란 앞 3개 안
     ordered += guard_tags(extra, industry)                 # 모델이 낸 이 영상 고유 태그(메뉴·특징): 업종 가드를 통과한 것만
     ordered += guard_tags(list(trend_tags)[:2], industry)  # 떡상 레이더 태그 최소 2개
     reg = _region_noun(region)

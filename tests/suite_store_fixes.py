@@ -52,8 +52,22 @@ check(ts.industry == "retail" and not any(w in core_words for w in RESTAURANT_WO
 check(ts.core[0] == "#이마트24덕계메디프라자점" and "#이마트24" in ts.core and "#편의점" in ts.core and "#원플러스원" in ts.core
       and ts.core[-1] == "#shorts" and 5 <= len(ts.core) <= 7, "편의점 핵심 태그: 상호·브랜드·업종·행사·#shorts")
 check("#양주편의점" in ts.core, "지역+업종 태그 (#양주편의점)")
-check(ts.comment == ts.core[:3] and ts.pool[:len(ts.core)] == [t.lstrip("#") for t in ts.core] and 15 <= len(ts.pool) <= 20,
-      f"단일 풀: 댓글 태그 = 핵심의 앞 3개, 검색 태그 = 핵심이 앞인 15~20개 ({len(ts.pool)}개)")
+check(ts.comment == ts.core and ts.pool[:len(ts.core)] == [t.lstrip("#") for t in ts.core] and 15 <= len(ts.pool) <= 20,
+      f"단일 풀: 댓글 태그 = 설명란 핵심 태그와 같음, 검색 태그 = 핵심이 앞인 15~20개 ({len(ts.pool)}개)")
+# 우리 채널 태그(#샵스토리): 상호 바로 다음, 설명란·댓글·검색 태그에 모두 (댓글에서 눌러 채널 모음으로)
+_old_ch = os.environ.get("YOUTUBE_CHANNEL_STORE")
+os.environ["YOUTUBE_CHANNEL_STORE"] = "샵스토리"
+try:
+    tb = build_tag_set("owner", business_type="food", name="효정명인갈비", usp="숯불 양념 생고기", concept="구워 나오는 한 상", region="경기 가평군")
+    os.environ["YOUTUBE_CHANNEL_STORE"] = ""
+    tn = build_tag_set("owner", business_type="food", name="효정명인갈비", usp="숯불 양념 생고기", concept="구워 나오는 한 상", region="경기 가평군")
+finally:
+    if _old_ch is None:
+        os.environ.pop("YOUTUBE_CHANNEL_STORE", None)
+    else:
+        os.environ["YOUTUBE_CHANNEL_STORE"] = _old_ch
+check(tb.core[:2] == ["#효정명인갈비", "#샵스토리"] and "#샵스토리" in tb.comment and "샵스토리" in tb.pool and tb.core[-1] == "#shorts"
+      and "#샵스토리" not in tn.core, f"채널 태그: 상호 다음 #샵스토리가 핵심·댓글·검색 태그에 모두 (채널명 없으면 생략) {tb.core}")
 rs = build_tag_set("owner", business_type="food", name="오늘식탁", usp="주문 즉시 무쳐내는 겉절이", concept="신선한 겉절이", region="서울 성동구")
 check(any("맛집" in t for t in rs.core) and not any("편의점" in t or "원플러스원" in t for t in rs.core + rs.pool),
       f"식당은 맛집 태그, 편의점 태그 없음 {rs.core}")
