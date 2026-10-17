@@ -39,7 +39,7 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
     "core.script_guard", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
-    "core.scraper", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
+    "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
     "core.pipeline", "core.renderers.video_overlay_renderer", "core.renderers.highlight_renderer", "core.renderers",

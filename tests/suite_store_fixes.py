@@ -123,7 +123,7 @@ imported = set(_re.findall(r"^from ((?:core|ui)\.[A-Za-z0-9_.]+) import", app_sr
 NO_RELOAD = {"core.longform", "core.llm.router", "core.media.audio_stt"}      # 레지스트리·주입점을 가진 모듈
 logic_modules = {m for m in imported if m not in NO_RELOAD}
 # 화면 로직·렌더 로직·카피/태그/업로드 계층은 반드시 목록에 있어야 함 (빠지면 옛 코드가 서버에 남음)
-must = {"core.render.ffmpeg_assemble", "core.compositor", "core.asset_generator", "core.hashtags", "core.shorts_meta",
+must = {"core.render.bgm", "core.render.cover_clip", "core.render.ffmpeg_assemble", "core.compositor", "core.asset_generator", "core.hashtags", "core.shorts_meta",
         "core.seo_generator", "core.mode_policy", "core.pipeline", "ui.youtube_panel", "ui.longform_page"}
 check(must <= listed, f"서버 새로고침 목록에 핵심 모듈 포함 (누락 {sorted(must - listed)})")
 missing = sorted(m for m in logic_modules if m not in listed and m.split(".")[0] in ("core", "ui")
