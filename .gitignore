@@ -38,6 +38,7 @@ assets/bgm/*
 !assets/bgm/README.md
 # 배포(Streamlit Cloud)용 압축본 mp3는 올림 (원본 wav는 용량 때문에 제외)
 !assets/bgm/*.mp3
+!assets/bgm/moods.json
 
 # 캘린더 자동 제작 사진 폴더 (사용자 사진)
 inbox/

@@ -97,6 +97,39 @@ def display_name(track: str) -> str:
     return re.sub(r"_\d+-\d+$", "", stem).strip() or stem
 
 
+MOODS = ("미드템포", "업템포", "해결 비트", "어쿠스틱")
+MOOD_PREFIX = "__mood__:"
+MOODS_FILE = "moods.json"           # assets/bgm/moods.json: {"곡 이름(확장자·테이크 번호 제외 가능)": "업템포", ...}
+
+
+def mood_choice(mood: str) -> str:
+    return MOOD_PREFIX + mood
+
+
+def load_moods(bgm_dir: Optional[str] = None) -> Dict[str, str]:
+    """곡 이름(확장자 뺀 소문자) → 분위기. 파일이 없거나 깨졌으면 빈 값 (분위기 태그가 없는 곡은 '미분류')"""
+    path = os.path.join(bgm_dir or BGM_DIR, MOODS_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {_stem(k): v for k, v in raw.items() if isinstance(v, str) and v in MOODS}
+
+
+def track_mood(track: str, bgm_dir: Optional[str] = None) -> Optional[str]:
+    moods = load_moods(bgm_dir)
+    s = _stem(track)
+    if s in moods:
+        return moods[s]
+    base = _stem(display_name(track))                 # 'Neon Skyline_5-2' → 'neon skyline' 이름만으로도 지정 가능
+    return moods.get(base)
+
+
+def tracks_by_mood(mood: str, bgm_dir: Optional[str] = None) -> List[str]:
+    return [t for t in list_tracks(bgm_dir) if track_mood(t, bgm_dir) == mood]
+
+
 def book_default_track(bgm_dir: Optional[str] = None) -> Optional[str]:
     """시골책방 기본 BGM (.env BGM_BOOK_TRACK = assets/bgm 안 파일 이름, 잔잔한 피아노 곡 권장). 없거나 파일이 없으면 None"""
     name = os.getenv("BGM_BOOK_TRACK", "").strip()
@@ -115,6 +148,9 @@ def pick_track(choice: Optional[str], bgm_dir: Optional[str] = None, rng: Option
         return None
     if choice == RANDOM:
         return (rng or random).choice(tracks)
+    if str(choice).startswith(MOOD_PREFIX):
+        pool = tracks_by_mood(str(choice)[len(MOOD_PREFIX):], bgm_dir) or tracks    # 태그된 곡이 없으면 전체에서
+        return (rng or random).choice(pool)
     return find_track(choice, bgm_dir)
 
 

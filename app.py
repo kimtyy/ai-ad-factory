@@ -346,6 +346,12 @@ def render_media_manager():
     if paths != st.session_state.uploaded_paths:
         st.session_state.uploaded_paths = paths
     with st.container(border=True, key="media_manager"):
+        if st.session_state.get("production_mode", "owner") == "owner" and st.session_state.get("selected_core_concept", "").strip():
+            from core.shoot_guide import shoot_guide
+            _g = shoot_guide(st.session_state.get("selected_core_concept", ""), st.session_state.get("owner_type", ""),
+                             st.session_state.get("owner_name", ""), st.session_state.get("owner_usp", ""))
+            if _g:
+                st.info(_g["text"])
         st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {MAX_MEDIA}개)")
         if st.session_state.pop("media_stale", False):
             st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
@@ -559,11 +565,21 @@ if page == "longform":
 # ==============================================================================
 # 사이드바: 기획 및 제작 설정 패널
 # ==============================================================================
-def _sync_bgm(src: str, dst: str):
-    """사이드바 BGM 스위치와 렌더 버튼 옆 스위치를 같은 상태로 (콜백은 다음 실행 전에 돌아 위젯 값 변경 가능)"""
-    st.session_state[dst] = st.session_state.get(src, False)
-    if src == "bgm_on_main":
-        st.session_state.bgm_on = st.session_state[src]
+# 화자 시점 → 어울리는 성우·말투 프리셋 (시점을 바꿀 때만 적용하고, 이후 드롭다운에서 직접 바꾼 값은 그대로 둠)
+VOICE_PRESET_BY_STYLE = {
+    "official": {"actor": "female_30s", "tone": "calm", "why": "차분하고 신뢰감 있는 30대 톤"},
+    "review": {"actor": "female_20s", "tone": "lively", "why": "발랄하고 생생한 20대 톤"},
+}
+
+
+def _apply_voice_preset():
+    preset = VOICE_PRESET_BY_STYLE.get(st.session_state.get("script_style_radio"))
+    if not preset:
+        return
+    st.session_state.selected_actor = preset["actor"]
+    st.session_state.voice_actor_select_box = VOICE_ACTOR_PROFILES[preset["actor"]]["name"]
+    st.session_state.voice_tone = preset["tone"]
+    st.session_state.voice_preset_note = preset["why"]
 
 
 with st.sidebar:
@@ -631,14 +647,23 @@ with st.sidebar:
     if not (0 <= default_style_idx < len(script_style_keys)):
         default_style_idx = 0
 
+    if "script_style_radio" not in st.session_state or st.session_state.script_style_radio not in script_style_keys:
+        st.session_state.script_style_radio = script_style_keys[default_style_idx]
+    if not st.session_state.get("voice_preset_seeded"):
+        # 첫 진입: 기본 화자 시점에 맞는 성우·말투로 시작 (이후엔 시점을 바꿀 때만 연동)
+        _apply_voice_preset()
+        st.session_state.voice_preset_seeded = True
     selected_script_style = st.radio(
         str("화자 시점" or ""),
         script_style_keys,
-        index=default_style_idx,
+        key="script_style_radio",
         format_func=lambda x: str(script_style_options.get(x, x or "")),
-        help=script_style_help
+        help=script_style_help,
+        on_change=_apply_voice_preset,
     )
     st.session_state.script_style = selected_script_style
+    if st.session_state.get("voice_preset_note"):
+        st.caption(f"🔗 성우·말투를 이 시점에 맞춰 두었어요 ({st.session_state.voice_preset_note}). 아래에서 바꿀 수 있어요.")
 
     travel_template = DEFAULT_TRAVEL_TEMPLATE
     if is_travel_mode:
@@ -712,18 +737,29 @@ with st.sidebar:
 
     # 자체 음원 BGM (assets/bgm): 나레이션 구간 20% 덕킹 + 시작 페이드인·끝 페이드아웃
     bgm_tracks = bgm_mod.ordered_tracks()
-    st.session_state.setdefault("bgm_on", False)
+    st.session_state.setdefault("bgm_on", bool(bgm_tracks))      # 자체 음원이 있으면 기본 ON (끄려면 아래 토글)
     # 시골책방: 잔잔한 피아노 BGM 기본 (.env BGM_BOOK_TRACK) - 이 세션에서 처음 시골책방에 들어올 때 한 번만 켜 둠
     _book_track = bgm_mod.book_default_track() if is_book_mode else None
     if _book_track and not st.session_state.get("bgm_book_init"):
         st.session_state.bgm_on, st.session_state.bgm_choice, st.session_state.bgm_book_init = True, _book_track, True
-    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks, on_change=_sync_bgm, args=("bgm_on", "bgm_on_main"),
+    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks,
                        help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
     bgm_choice = None
     if bgm_tracks:
         if bgm_on:
-            bgm_raw_opts = [bgm_mod.RANDOM] + [os.path.basename(t) for t in bgm_tracks if t]
+            bgm_raw_opts = [bgm_mod.RANDOM] + [bgm_mod.mood_choice(m) for m in bgm_mod.MOODS] + [os.path.basename(t) for t in bgm_tracks if t]
             bgm_options = [str(opt) for opt in bgm_raw_opts if opt]
+            _mood_cnt = {m: len(bgm_mod.tracks_by_mood(m)) for m in bgm_mod.MOODS}
+
+            def _bgm_label(v):
+                if v == bgm_mod.RANDOM:
+                    return "🎲 랜덤 (렌더마다 무작위)"
+                if str(v).startswith(bgm_mod.MOOD_PREFIX):
+                    m = str(v)[len(bgm_mod.MOOD_PREFIX):]
+                    return (f"🎼 {m} 분위기 중 랜덤 ({_mood_cnt[m]}곡)" if _mood_cnt[m]
+                            else f"🎼 {m} (태그된 곡 없음 → 전체에서 랜덤)")
+                _m = bgm_mod.track_mood(str(v))
+                return (f"⭐ {v}" if v in _sig else str(v or "")) + (f"  · {_m}" if _m else "")
             if st.session_state.get("bgm_choice") not in bgm_options:
                 st.session_state.bgm_choice = str(bgm_mod.RANDOM)
             _sig = set(bgm_mod.signature_tracks())
@@ -731,9 +767,9 @@ with st.sidebar:
                 str("BGM 음원" or ""),
                 bgm_options,
                 key="bgm_choice",
-                format_func=lambda v: "🎲 랜덤 (렌더마다 무작위)" if v == bgm_mod.RANDOM
-                else (f"⭐ {v}" if v in _sig else str(v or "")),
-                help="곡 처음의 인트로는 건너뛰고 비트가 들어오는 지점(드롭)부터 자동으로 붙습니다."
+                format_func=_bgm_label,
+                help="분위기(미드템포·업템포·해결 비트·어쿠스틱)를 고르면 그 분위기 곡 중 하나가 렌더마다 선택돼요. "
+                     "곡의 분위기는 assets/bgm/moods.json에 적습니다. 곡 처음의 인트로는 건너뛰고 비트가 들어오는 지점(드롭)부터 붙습니다."
             )
     else:
         st.caption("🎵 자체 BGM: `assets/bgm/` 폴더에 mp3·wav·m4a 음원을 넣으면 켤 수 있어요.")
@@ -1845,12 +1881,8 @@ st.markdown("---")
 # ==============================================================================
 st.markdown("### 🎬 3. 영상 제작 & 업로드")
 
-_rc1, _rc2 = st.columns([3.8, 1.2], vertical_alignment="center")
-with _rc2:
-    st.toggle("🎵 BGM 사용", value=st.session_state.get("bgm_on", False), key="bgm_on_main", disabled=not bgm_tracks, on_change=_sync_bgm, args=("bgm_on_main", "bgm_on"),
-              help="자체 음원(assets/bgm)을 나레이션 아래에 깔아요. 음원 선택은 사이드바에서 (기본 랜덤).")
-with _rc1:
-    render_btn = st.button("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기", type="primary", use_container_width=True, key="render_cta")
+render_btn = st.button("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기", type="primary", use_container_width=True, key="render_cta")
+st.caption("🎵 BGM은 왼쪽 사이드바 '오디오 및 성우 제어'에서 켜고 끄고, 분위기·곡을 고를 수 있어요.")
 bgm_on = st.session_state.get("bgm_on", False) and bool(bgm_tracks)
 if bgm_on and bgm_choice is None:
     bgm_choice = st.session_state.get("bgm_choice") or bgm_mod.RANDOM
@@ -2009,7 +2041,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         elif _bs.get("on") and _bs.get("error"):
             st.warning(f"🔇 BGM 꺼짐 (섞기 실패: {_bs['error']})")
         else:
-            st.info("🔇 BGM 꺼짐 · 넣으려면 렌더 버튼 옆 '🎵 BGM 사용'을 켜고 다시 만들어 주세요. "
+            st.info("🔇 BGM 꺼짐 · 넣으려면 왼쪽 사이드바의 '🎵 자체 BGM 넣기'를 켜고 다시 만들어 주세요. "
                     "(BGM 없이 올릴 땐 플랫폼 추천 트렌딩 음원을 태그해 보세요)")
         if is_book_mode:
             st.markdown("**💬 첫 댓글 (책방 위치 + 알라딘 구매 링크 + 제휴 고지)** · 유튜브 업로드 연결 전이라 대기열에 저장돼요")

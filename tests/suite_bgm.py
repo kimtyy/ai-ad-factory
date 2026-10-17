@@ -206,14 +206,10 @@ try:
     sel = at.sidebar.selectbox(key="bgm_choice")
     check(not at.exception and sel.options[0].startswith("🎲") and "a_song.mp3" in sel.options and sel.value == bgm.RANDOM,
           f"음원이 있으면 켜고 고르기 (기본 랜덤) {sel.options}")
-    check(at.toggle(key="bgm_on_main").value is True and not at.toggle(key="bgm_on_main").disabled,
-          "렌더 버튼 옆 '🎵 BGM 사용' 스위치도 켜짐으로 (사이드바와 같은 상태)")
-    at.toggle(key="bgm_on_main").set_value(False).run()
-    check(at.sidebar.toggle(key="bgm_on").value is False and at.toggle(key="bgm_on_main").value is False,
-          "렌더 버튼 옆에서 끄면 사이드바도 꺼짐 (모바일: 사이드바를 안 열어도 됨)")
-    at.toggle(key="bgm_on_main").set_value(True).run()
-    check(at.sidebar.toggle(key="bgm_on").value is True and at.sidebar.selectbox(key="bgm_choice").value == bgm.RANDOM,
-          "렌더 버튼 옆에서 켜면 사이드바도 켜지고 음원은 랜덤")
+    check(not [t for t in at.toggle if t.key == "bgm_on_main"],
+          "BGM 스위치는 사이드바 하나로 일원화 (하단 '영상 만들기' 옆 중복 스위치 없음)")
+    check(len([o for o in sel.options if str(o).startswith("🎼")]) == 4 and all(any(str(o).startswith(f"🎼 {m}") for o in sel.options) for m in bgm.MOODS),
+          "음원 드롭다운에 분위기 4종(미드템포·업템포·해결 비트·어쿠스틱) 선택지")
 
     # 렌더 후 완료 화면: 실제로 들어간 BGM 표시 (BGM 켬 / 끔 두 번)
     real_track = os.path.join(tdir, "Neon Skyline_5-2.wav")
@@ -232,11 +228,24 @@ try:
     # 맨 앞 이모지(🎵)는 Streamlit 알림 아이콘으로 빠지므로 본문만 비교
     check(not at.exception and st_ok and "BGM: Neon Skyline (적용)" in st_ok[0] and "초부터" in st_ok[0],
           f"완료 화면: 실제로 섞인 BGM 표시 {st_ok[:1]}")
-    at.toggle(key="bgm_on_main").set_value(False).run()
+    at.sidebar.toggle(key="bgm_on").set_value(False).run()
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     off = [i.value for i in at.info if "BGM 꺼짐" in (i.value or "")]
     check(not at.exception and off and not [s for s in at.success if "BGM:" in (s.value or "")],
           "BGM을 끄고 만들면 완료 화면에 '🔇 BGM 꺼짐' (토글 상태가 아니라 실제 결과 기준)")
+    # 분위기 태그: moods.json → 분위기별 랜덤 선택, 태그 없는 분위기는 전체에서
+    import json as _j
+    with open(os.path.join(tdir, "moods.json"), "w", encoding="utf-8") as _f:
+        _j.dump({"a_song": "업템포", "Neon Skyline": "어쿠스틱", "_안내": "무시"}, _f, ensure_ascii=False)
+    import random as _r
+    check(bgm.track_mood(os.path.join(tdir, "a_song.mp3")) == "업템포" and bgm.track_mood(real_track) == "어쿠스틱"
+          and os.path.basename(bgm.pick_track(bgm.mood_choice("업템포"), rng=_r.Random(1))) == "a_song.mp3"
+          and bgm.pick_track(bgm.mood_choice("해결 비트")) is not None,
+          "분위기 태그(moods.json): 곡 이름으로 분위기 인식 · 분위기 랜덤 선택 · 태그 없는 분위기는 전체에서")
+    # 자체 음원이 있으면 BGM은 기본 ON (처음 들어올 때부터)
+    at_fresh = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
+    created.append(at_fresh.session_state.job.workdir)
+    check(at_fresh.sidebar.toggle(key="bgm_on").value is True, "자체 음원이 있으면 BGM 스위치 기본 ON")
 finally:
     bgm.BGM_DIR = _orig_dir
     for wd in created:

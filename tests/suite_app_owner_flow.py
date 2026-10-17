@@ -80,6 +80,28 @@ try:
           and sb2[0]["hook_title"] == hook0 and sb2[0].get("role") == role0 and sb2[3]["voiceover"] == sb[3]["voiceover"],
           "카드 수정 즉시 반영: 대사=자막 일치, 지속시간 반영, 숨은 필드(hook_title·role)와 다른 씬 보존")
 
+    # 화자 시점 ↔ 성우·말투 프리셋 연동 (시점을 바꿀 때 적용, 이후 수동 변경은 유지)
+    at.sidebar.radio(key="script_style_radio").set_value("review").run()
+    check(not at.exception and at.session_state.selected_actor == "female_20s" and at.session_state.voice_tone == "lively",
+          "화자 시점 '손님 꿀팁 리뷰형' → 20대 여성(발랄) + 활기찬 말투로 자동 설정")
+    at.sidebar.radio(key="script_style_radio").set_value("official").run()
+    check(at.session_state.selected_actor == "female_30s" and at.session_state.voice_tone == "calm",
+          "화자 시점 '가게 공식 추천형' → 30대 여성(신뢰) + 차분한 말투로 자동 설정")
+    at.sidebar.selectbox(key="voice_actor_select_box").set_value("20대 남성 (에너지)").run()
+    check(at.session_state.selected_actor == "male_20s", "연동 뒤에도 성우 드롭다운에서 직접 바꿀 수 있음")
+    at.run()
+    check(at.session_state.selected_actor == "male_20s", "직접 바꾼 성우는 같은 시점에서 다시 실행해도 유지")
+
+    # 1컨셉에 맞는 촬영 가이드 (업로드 영역 상단)
+    at.session_state.selected_core_concept = "누수 원인부터 수리까지 한 번에 해결"
+    at.run()
+    gi = [i.value for i in at.info if "추천 8컷 촬영 순서" in (i.value or "")]
+    check(gi and "설비·해결형" in gi[0] and "비포" in gi[0] and "애프터" in gi[0], "컨셉(누수·수리) → 설비·해결형 촬영 가이드 표시")
+    at.session_state.selected_core_concept = "신상 1+1 행사 한눈에"
+    at.run()
+    gi = [i.value for i in at.info if "추천 8컷 촬영 순서" in (i.value or "")]
+    check(gi and "편의점·신상형" in gi[0] and "신상품 패키지" in gi[0], "컨셉(신상·1+1) → 편의점·신상형 촬영 가이드 표시")
+
     # 모드 전환 시 이전 모드의 콘티·업로드·입력값은 즉시 폐기 (캐시 오염 차단: reset_mode_session_state)
     at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
     at.session_state.production_mode = "travel"
