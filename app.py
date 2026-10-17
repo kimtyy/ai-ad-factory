@@ -1699,6 +1699,13 @@ if st.session_state.storyboard:
         st.caption("🔥 씬 1 후킹: " + (f"레이더 패턴 적용 [{HOOK_TYPE_KO.get(_used['hook_type'], _used['hook_type'])}] {_used['pattern_template']}"
                                      if _used else "레이더 패턴 참고했으나 사실에 맞는 패턴이 없어 기본 규칙 적용")
                    + " · 참고 " + ", ".join(f"{HOOK_TYPE_KO.get(r['hook_type'], r['hook_type'])} {r['outlier_ratio']:.1f}배" for r in _ref))
+    _eng = str((st.session_state.storyboard[0] or {}).get("script_engine") or "")
+    _ENGINE_LABEL = {"claude": "Claude", "openai": "GPT(OpenAI)", "gemini": "Gemini"}
+    if _eng in _ENGINE_LABEL:
+        st.caption(f"✍️ 이 대본은 **{_ENGINE_LABEL[_eng]}**가 작성했어요. (직접 고친 문장은 이 표시와 무관해요)")
+    elif _eng in ("template", "mock"):
+        st.warning("⚠️ 이 대본은 AI가 아니라 **업종 기본 문구(템플릿)**로 만들어졌어요. Mock 모드가 켜져 있거나 AI 호출이 실패했을 수 있어요. "
+                   "사이드바 'Mock 모드'를 끄고 다시 기획해 보세요.")
     st.markdown("💡 *씬마다 나레이션 대사와 지속시간을 바로 수정하세요. 대사는 화면 자막과 음성에 똑같이 쓰입니다.*")
     if st.session_state.get("storyboard_mode", pipeline_mode) != pipeline_mode:
         st.warning(f"⚠️ 이 콘티는 '{MODE_LABELS.get(st.session_state.get('storyboard_mode'), '다른')}' 모드로 기획되었습니다. "

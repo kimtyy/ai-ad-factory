@@ -68,6 +68,8 @@ try:
     check(sb[2].get("media", {}).get("type") == "video" and sb[0].get("image_path") == up[0], "업로드 순서대로 씬 키 배정 (씬3=영상)")
     check(os.path.exists(job.plan_path), "콘티가 job/storyboard.json에 저장")
 
+    check(sb[0].get("script_engine") == "template" and any("업종 기본 문구" in (w.value or "") for w in at.warning),
+          "템플릿(Mock) 대본이면 화면에 'AI가 아니라 업종 기본 문구' 경고 표시")
     # 카드형 편집기: 표(data_editor) 없이 씬별 대사·지속시간만 노출, 수정값은 즉시 세션·저장본에 반영, 내부 필드는 보존
     check(len(at.get("data_editor")) == 0 and len([t for t in at.text_area if t.key and t.key.startswith("sb_text_")]) == 4,
           "스토리보드 편집: 표 없이 씬별 카드(대사 입력 4개)")
