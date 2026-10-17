@@ -195,6 +195,8 @@ COPY_TONE_RULES = """[대본 톤 - 3자 큐레이터가 시청자에게 '이런 
 # 판에 박힌 패턴 (요청: 엄격 금지) → 생성 직후 한 번 다시 쓰게 하고, 그래도 남으면 안전 문구로 교체
 BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"거든요", "'~거든요' 어미"),
+    (r"\^\^|ㅎㅎ|ㅋㅋ|ㅠㅠ|;;|~{2,}", "이모티콘·웃음 표기 (^^, ㅎㅎ 등)"),
+    (r"에\s*보세요\s*[.!?~]*$", "조사 오류 ('~에 보세요' → '~해 보세요')"),
     (r"힐링의\s*시간", "'힐링의 시간' 상투구"),
     (r"예술이(죠|에요|예요)", "'~이 예술이죠' 상투구"),
     (r"특별한\s*\S+\s*경험이\s*기다", "'특별한 ~ 경험이 기다리고 있어요' 상투구"),
@@ -460,6 +462,22 @@ def rhythm_issues(lines: List[str]) -> Dict[int, str]:
     return issues
 
 
+_CAN_ENDING = re.compile(r"수\s*있(어요|죠|네요|답니다|습니다)\s*[.!?~]*$")
+CAN_ENDING_MAX = 2
+
+
+def repeated_ending_issues(lines: List[str]) -> Dict[int, str]:
+    """'~할 수 있어요' 어미는 영상 전체 2번까지 (단정하지 않는 말투가 반복되면 힘이 빠짐) → 3번째부터 {줄 번호: 고칠 방향}"""
+    issues: Dict[int, str] = {}
+    n = 0
+    for i, t in enumerate(lines):
+        if _CAN_ENDING.search((t or "").strip()):
+            n += 1
+            if n > CAN_ENDING_MAX:
+                issues[i] = "'~할 수 있어요' 어미가 3번째 → 단정하는 문장('~해요', '~예요')으로 바꾸기"
+    return issues
+
+
 def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None):
     """
     대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
@@ -468,6 +486,8 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
     use_rhythm = RHYTHM_ENFORCE if rhythm is None else rhythm
     flagged: Dict[str, str] = {lines[i]: msg for i, msg in rhythm_issues(lines).items()} if use_rhythm else {}
     for i, msg in repeated_line_issues(lines, hook).items():
+        flagged.setdefault(lines[i], msg)
+    for i, msg in repeated_ending_issues(lines).items():
         flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():
@@ -609,7 +629,23 @@ def hook_echo(hook: str, text: str) -> list:
     return [w for w in words if w in t or (len(w) >= 3 and w[:3] in t)]
 
 
-def is_hook_echo(hook: str, text: str) -> bool:
+def _without_concept(text: str, core_concept: str) -> str:
+    """컨셉에 쓰인 단어를 지운 글 (컨셉은 모든 대사에 들어가야 하므로 훅과 겹쳐도 '반복'이 아님)"""
+    out = text or ""
+    for w in sorted({w for w in re.split(r"\s+", (core_concept or "").strip()) if len(re.sub(r"[^\w]", "", w)) >= 2},
+                    key=len, reverse=True):
+        out = out.replace(w, " ")
+        stem = re.sub(r"(은|는|이|가|을|를|에서|에|의|로|으로|도|만|와|과)$", "", w)     # '계곡을' → '계곡'
+        if len(stem) >= 2:
+            out = out.replace(stem, " ")
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def is_hook_echo(hook: str, text: str, core_concept: str = "") -> bool:
+    if core_concept:
+        hook, text = _without_concept(hook, core_concept), _without_concept(text, core_concept)
+        if not hook or not text:
+            return False
     hits = hook_echo(hook, text)
     words = [w for w in (hook or "").split() if len(re.sub(r"[^\w]", "", w)) >= 2]
     if len(hits) >= 2 or (words and len(hits) / len(words) >= 0.6):

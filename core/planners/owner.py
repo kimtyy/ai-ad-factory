@@ -248,7 +248,7 @@ def plan_owner_storyboard(
                     hook = default_hook
                 if copies_reference(text, hook_hints):
                     text = lines.get(role, lines["exterior"])
-            if is_hook_echo(hook, text):
+            if is_hook_echo(hook, text, core_concept):
                 # 컨셉을 담은 서브 대사는 살리고 헤드라인을 기본 후킹으로 바꾼다 (서브 대사를 기계 문구로 바꾸면 컨셉이 사라짐)
                 logger.info(f"[후킹 반복 차단] 헤드라인 '{hook}' ≈ 서브 '{text}' → 기본 후킹으로 교체")
                 hook = default_hook
@@ -521,6 +521,9 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 - 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {OWNER_POLICY.min_chars + 6}~{OWNER_POLICY.max_chars - 2}자 (최대 {OWNER_POLICY.max_chars}자). 한 문장에 한 가지 이야기만 하세요.
 - 씬마다 새로운 장면·근거를 말하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다 (씬 1 대사는 헤드라인을 받아 '이유'로 이어 갑니다).
 - 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'.
+- 사장님이 적은 특장점(USP)과 첨부 사진에 없는 메뉴·반찬·조리 방식·시설·서비스는 지어내지 마세요 (예: 적히지 않은 계란찜·냉면·미리 손질).
+  매장 운영 방식(손님이 직접 굽는지, 구워서 내는지 등)은 USP에 있는 한 가지로만 일관되게 쓰고, 모르면 방식을 단정하지 말고 맛·분위기·상황으로 말하세요.
+- '~할 수 있어요' 어미는 영상 전체에서 2번까지만, 나머지는 '~해요/~예요/~죠'로 단정하세요. 웃음 표기(^^, ㅎㅎ)와 이모티콘은 쓰지 마세요.
 {hook_hints.prompt_block if hook_hints else ""}
 - role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")
 

@@ -928,7 +928,7 @@ JSON 출력 스키마 예시:
                         sc["hook_pattern_used"] = {"video_id": used["video_id"], "hook_type": used["hook_type"],
                                                    "pattern_template": used["pattern_template"]} if used else None
                     # 씬 1 앵무새 반복: 후킹을 읽은 직후 같은 단어를 다시 읽으면 늘어짐 → 교체
-                    if idx == 0 and is_hook_echo(sc.get("hook_title", ""), vo):
+                    if idx == 0 and is_hook_echo(sc.get("hook_title", ""), vo, core_concept):
                         logger.info(f"[후킹 반복 차단] 헤드라인 '{sc.get('hook_title')}' ≈ 서브 '{vo}' → 사진 중립 문구로 교체")
                         vo = safe_line_for(sc.get("target_visual_role", ""), note, replaced)
                         replaced += 1
