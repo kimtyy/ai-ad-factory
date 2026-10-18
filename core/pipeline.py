@@ -147,6 +147,7 @@ def assign_uploads_to_scenes(job, scenes: list, paths: list, cycle: bool = False
 def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     """모드별 플래너 → 씬 사진·영상 배정. 입력이 모자라면 ValueError (지어내지 않음)"""
     from core.planners import plan_commerce_storyboard, plan_owner_storyboard
+    from core.naver_local import region_of
     from core.planners.book import plan_book_storyboard
     from core.planners.commerce_bundle import plan_bundle_storyboard
     if spec.mode not in PIPELINE_MODES:
@@ -158,7 +159,8 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
         scenes = plan_owner_storyboard(business_name=spec.name, usp=spec.usp, business_type=spec.business_type,
                                        search_keyword=spec.search_keyword or spec.name, media_paths=spec.media_paths,
                                        num_scenes=spec.num_scenes or DEFAULT_SCENES, hook_hints=spec.hook_hints,
-                                       core_concept=spec.core_concept, tone_instruction=spec.tone_instruction, **common)
+                                       core_concept=spec.core_concept, tone_instruction=spec.tone_instruction,
+                                       region=region_of(spec.address) if spec.address else "", **common)
     elif spec.mode == "book":
         scenes = plan_book_storyboard(store_name=spec.name, book_title=spec.book_title, author=spec.book_author,
                                       book_info=spec.usp, quote=spec.book_quote, media_paths=spec.media_paths,

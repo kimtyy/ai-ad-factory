@@ -863,6 +863,7 @@ class AdCompositor:
         processed_clips = []
         opened_clips = []
         watermark_cache = {}
+        end_card_base_frame = None      # 엔딩 카드 배경용: 마지막 씬의 자막 없는 마지막 프레임
         has_end_card = bool(brand and brand.end_card)
 
         try:
@@ -930,6 +931,15 @@ class AdCompositor:
                         else:
                             logger.info(f"씬 {scene_num} 하단 나레이션 자막 단독 렌더링 (쇼츠 UI 세이프존 62%): '{caption_text}'")
 
+                    if is_last_scene and has_end_card:
+                        # 엔딩 카드 배경은 자막이 얹히기 전의 순수 영상 마지막 프레임 (자막이 카드 뒤에 비쳐 겹쳐 보이지 않게)
+                        try:
+                            end_card_base_frame = synced_video.get_frame(max(0.0, scene_target_duration - 0.05))
+                        except Exception:
+                            end_card_base_frame = None
+                        # 마지막 씬 자막·워터마크는 엔딩 카드가 페이드인되기 시작하는 시점에 끝냄 (카드 화면은 검색 안내만 단독으로)
+                        cut_at = max(0.5, scene_target_duration - XFADE)
+                        segments = [(s0, max(0.1, min(d0, cut_at - s0)), c0, h0) for s0, d0, c0, h0 in segments]
                     layers = [synced_video]
                     for seg_start, seg_dur, seg_caption, seg_hook in segments:
                         overlay_img_arr = self.create_overlay_image(
@@ -993,7 +1003,7 @@ class AdCompositor:
             # 브랜드 엔딩 카드: 마지막 장면의 마지막 프레임을 흐리게 깔고 상호명 + 검색 유도 그래픽 표시
             if has_end_card:
                 last_clip = processed_clips[-1]
-                last_frame = last_clip.get_frame(max(0, last_clip.duration - 0.05))
+                last_frame = end_card_base_frame if end_card_base_frame is not None                     else last_clip.get_frame(max(0, last_clip.duration - 0.05))
                 card_arr = brand.render_end_card(last_frame, font_path=self.font_path)
                 card_clip = ImageClip(card_arr).set_duration(float(brand.end_card.duration_sec) + XFADE).fadeout(0.4)
                 opened_clips.append(card_clip)

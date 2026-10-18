@@ -191,16 +191,24 @@ check(os.path.exists(r2) and bad.last_bgm_error, f"음원이 깨졌거나 없으
 # ---------------------------------------------------------------- 4. 사이드바 UI
 from streamlit.testing.v1 import AppTest
 _orig_dir = bgm.BGM_DIR
+
+
+def _use_bgm_dir(path):
+    """앱은 실행마다 bgm 모듈을 새로고침하므로 모듈 변수만 바꾸면 되돌아감 → 환경변수로도 지정"""
+    bgm.BGM_DIR = path
+    os.environ["BGM_DIR"] = path
+
+
 created = []
 try:
-    bgm.BGM_DIR = os.path.join(work, "empty_ui")
+    _use_bgm_dir(os.path.join(work, "empty_ui"))
     os.makedirs(bgm.BGM_DIR)
     at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
     created.append(at.session_state.job.workdir)
     tg = at.sidebar.toggle(key="bgm_on")
     check(not at.exception and tg.disabled and any("assets/bgm" in (c.value or "") for c in at.sidebar.caption),
           "음원이 없으면 BGM 스위치 꺼짐 + 폴더 안내")
-    bgm.BGM_DIR = tdir
+    _use_bgm_dir(tdir)
     at.run()
     at.sidebar.toggle(key="bgm_on").set_value(True).run()
     sel = at.sidebar.selectbox(key="bgm_choice")
@@ -248,6 +256,7 @@ try:
     check(at_fresh.sidebar.toggle(key="bgm_on").value is True, "자체 음원이 있으면 BGM 스위치 기본 ON")
 finally:
     bgm.BGM_DIR = _orig_dir
+    os.environ.pop("BGM_DIR", None)
     for wd in created:
         shutil.rmtree(wd, ignore_errors=True)
 

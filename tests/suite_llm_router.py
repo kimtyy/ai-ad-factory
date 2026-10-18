@@ -252,11 +252,13 @@ plan_reply = {"story": "...", "scenes": [
     {"scene_index": 3, "role": "interior", "voiceover": "근데 단체 모임도 편하고요."},
     {"scene_index": 4, "role": "cta", "voiceover": "x"}]}
 step = {"n": 0}
+seen_prompt = {}
 
 
 def claude_seq(contents, system, temperature, max_tokens):
     step["n"] += 1
     if step["n"] == 1:
+        seen_prompt["p"] = contents[-1]
         assert ("3자 큐레이터" in contents[-1] or "사장님" in contents[-1] or "1컨셉" in contents[-1]) and ("엄격 금지" in contents[-1] or "금지" in contents[-1] or "절대" in contents[-1])
         return json.dumps(plan_reply, ensure_ascii=False)
     return json.dumps({"fixes": [{"scene_index": 1, "voiceover": "가평에서 맥주 한 잔 하기 좋은 밤, 여기예요."},
@@ -265,13 +267,17 @@ def claude_seq(contents, system, temperature, max_tokens):
 
 rt._overrides = {"claude": claude_seq}
 sb = plan_owner_storyboard("설맥 가평현리점", "맥주얼음 맥주, 넓은 매장", "food", search_keyword="설맥",
-                           media_paths=[fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("photo_pool.jpg"), fixture("photo_room.jpg")], api_key="g")
+                           media_paths=[fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("photo_pool.jpg"), fixture("photo_room.jpg")], api_key="g",
+                           region="경기 가평군")
 rt._overrides = {}
+_pp = seen_prompt.get("p", "")
+check("지역: 가평" in _pp and "육즙" in _pp and "조리 과정·행동 묘사 금지" in _pp and "지역명(가평)" in _pp and "지금 저장하고 가평 설맥을 검색해 보세요!" in _pp,
+      "사장님 프롬프트: 설명조 금지·감각어(육즙·숯불 향)·지역 후킹·저장 명분 CTA 규칙과 지역명이 전달됨")
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
 check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4,
       f"보정된 줄은 반영, 사장님 구어체 대사 생성 → {vo}")
-check(vo[-1] == "네이버에서 설맥 검색해 보세요!" and all(s.get("voiceover") for s in sb),
+check("지금 저장하고" in vo[-1] and vo[-1].endswith("가평 설맥을 검색해 보세요!") and all(s.get("voiceover") for s in sb),
       "출력 형식은 그대로 (씬별 voiceover → TTS·BGM 덕킹·렌더로 그대로 전달)")
 
 # Gemini 키 없이 Claude 키만 있어도 대본 엔진이 돌아야 함 (예전엔 Gemini 키가 없으면 바로 템플릿)

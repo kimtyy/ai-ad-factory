@@ -63,7 +63,7 @@ try:
     check(not at.exception, f"사장님 기획 예외 없음 {at.exception}")
     sb = at.session_state.storyboard
     check(len(sb) == 4 and at.session_state.storyboard_mode == "owner", f"업로드 4개 → 4씬 콘티 ({len(sb)}씬)")
-    check(sb[-1]["voiceover"] == "네이버에서 가평 솔바람 펜션 검색해 보세요!" and "가평 솔바람 펜션" in sb[0]["hook_title"],
+    check("지금 저장하고" in sb[-1]["voiceover"] and sb[-1]["voiceover"].endswith("가평 솔바람 펜션을 검색해 보세요!") and "가평 솔바람 펜션" in sb[0]["hook_title"],
           f"상호명 보존 + 네이버 검색 CTA: hook='{sb[0]['hook_title']}', 마지막='{sb[-1]['voiceover']}'")
     check(sb[2].get("media", {}).get("type") == "video" and sb[0].get("image_path") == up[0], "업로드 순서대로 씬 키 배정 (씬3=영상)")
     check(os.path.exists(job.plan_path), "콘티가 job/storyboard.json에 저장")

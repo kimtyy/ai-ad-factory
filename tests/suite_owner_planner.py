@@ -30,13 +30,20 @@ thumbs = tmp("owner_thumbs_")
 # 1. 오프라인(mock): 업종별 템플릿, 상호명 보존, 네이버 CTA
 for btype in ("stay", "food", "shop"):
     sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞, 개별 바베큐", btype, "", media, mock=True)
-    check(len(sc) == 4 and sc[-1]["role"] == "cta" and sc[-1]["voiceover"] == "네이버에서 가평 솔바람 펜션 검색해 보세요!",
-          f"[{btype}] 미디어 4개 → 4씬, 마지막 네이버 검색 CTA")
+    check(len(sc) == 4 and sc[-1]["role"] == "cta" and "나중에 찾으면 늦어요, 지금 저장하고" in sc[-1]["voiceover"]
+          and sc[-1]["voiceover"].endswith("가평 솔바람 펜션을 검색해 보세요!"),
+          f"[{btype}] 미디어 4개 → 4씬, 마지막은 저장 명분 + 검색 CTA ({sc[-1]['voiceover']})")
     check("가평 솔바람 펜션" in sc[0]["hook_title"] and all("비밀 힐링" not in s["voiceover"] for s in sc), f"[{btype}] 상호명 보존 (은닉 치환 없음)")
     check(all(s["focus_bottom"] is False for s in sc), f"[{btype}] 간판 크롭(focus_bottom) 비활성")
 sc = plan_owner_storyboard("성수 불판", "", "food", "성수 불판 성수점", [], num_scenes=5, mock=True)
-check(len(sc) == 5 and sc[-1]["voiceover"] == "네이버에서 성수 불판 성수점 검색해 보세요!" and sc[1]["role"] == "signature",
-      "미디어 없음 → 업종 템플릿 5씬 + 검색어 별도 지정")
+check(len(sc) == 5 and sc[-1]["voiceover"].startswith("주말 외식 장소로 나중에 찾으면 늦어요, 지금 저장하고")
+      and sc[-1]["voiceover"].endswith("성수 불판 성수점을 검색해 보세요!") and sc[1]["role"] == "signature",
+      "미디어 없음 → 업종 템플릿 5씬 + 검색어 별도 지정 + 업종별 저장 명분(외식)")
+sc_r = plan_owner_storyboard("효정명인갈비", "", "food", "", [], num_scenes=5, mock=True, region="경기 가평군")
+sc_s = plan_owner_storyboard("가평 솔바람 펜션", "", "stay", "", [], num_scenes=3, mock=True, region="경기 가평군")
+check(sc_r[-1]["voiceover"] == "주말 외식 장소로 나중에 찾으면 늦어요, 지금 저장하고 가평 효정명인갈비를 검색해 보세요!"
+      and sc_s[-1]["voiceover"].endswith("지금 저장하고 가평 솔바람 펜션을 검색해 보세요!") and "다음 휴가 숙소로" in sc_s[-1]["voiceover"],
+      f"CTA: 저장 명분 + [지역명+상호명] (지역이 상호에 이미 있으면 중복 안 함, 업종별 문구) → {sc_r[-1]['voiceover']}")
 
 # 1-1. 사장님 템플릿 및 LLM 응답 후처리: 상호/CTA 보존 및 합쇼체 → 해요체
 check(all(isinstance(l, str) and len(l) > 0 for d in MOCK_LINES.values() for l in d.values()), "사장님 템플릿 대사 정의 확인")
@@ -50,7 +57,7 @@ _ow._plan_with_gemini = mock_fn1
 _ow._plan_with_llm = mock_fn1
 sc = plan_owner_storyboard("가평 솔바람 펜션", "계곡 바로 앞", "stay", "", [], num_scenes=3, api_key="fake")
 check("힐링" in sc[0]["voiceover"] and "계곡" in sc[1]["voiceover"]
-      and sc[-1]["voiceover"].endswith("검색해 보세요!"), f"자연스러운 대사·CTA 유지 ({sc[0]['voiceover']})")
+      and sc[-1]["voiceover"].endswith("검색해 보세요!") and "저장하고" in sc[-1]["voiceover"], f"자연스러운 대사·CTA 유지 ({sc[0]['voiceover']})")
 
 mock_fn2 = lambda *a, **k: [{"role": "room", "hook_title": "계곡 앞 독채 펜션", "voiceover": "계곡 앞 독채 펜션이라 조용합니다."},
                             {"role": "view", "voiceover": "창문 열면 계곡 소리가 그대로 들립니다."}, {"voiceover": "x"}]

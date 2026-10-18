@@ -34,6 +34,7 @@ SUITES = [
     ("suite_visual_scorer.py", "시각 품질 스코어러: 선명도·조도·급패닝·흔들림·컷 감점/원천 제외, 후보 창 샘플링, highlight_selector 하드 필터·가중 합산", False),
     ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
     ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
+    ("suite_endcard_overlap.py", "엔딩 카드 자막 겹침 방지: 카드 페이드인 시점에 마지막 씬 자막 종료 (ffmpeg·MoviePy 경로, 카드 배경에 자막 안 비침)", False),
     ("suite_store_fixes.py", "매장 모드 실영상 피드백: 씬 1 본문 단일 자막·독립 커버 thumbnail.jpg·해시태그 단일 소스/업종 가드·첫 댓글 지도 URL 제거", False),
     ("suite_ugc_normalize.py", "스마트폰 영상 정규화 (회전·VFR·HDR·가로·짧은 클립)", False),
     ("suite_job_lazy_folders.py", "작업 폴더 지연 생성 + 빈 폴더 자동 정리", False),

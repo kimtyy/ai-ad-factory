@@ -122,9 +122,29 @@ def ensure_natural_pauses(text: str) -> str:
 # 사장님이 입력하지 않은 수치/혜택/순위 주장 차단 규칙은 core.script_guard.PRICE_CLAIM_PATTERNS에서 관리
 
 
-def owner_cta(search_keyword: str) -> str:
+CTA_SAVE_REASON = {      # 단순 '검색해 보세요'가 아니라 지금 저장해야 하는 이유 (업종별 이용 장면)
+    "food": "주말 외식 장소로 나중에 찾으면 늦어요, 지금 저장하고",
+    "stay": "다음 휴가 숙소로 나중에 찾으면 늦어요, 지금 저장하고",
+    "shop": "필요할 때 나중에 찾으면 늦어요, 지금 저장하고",
+}
+
+
+def short_region(region: str) -> str:
+    """'경기 가평군' → '가평' (대사에서 자연스러운 짧은 지역명. '성동구'처럼 구는 그대로)"""
+    last = (region or "").strip().split()[-1] if (region or "").strip() else ""
+    return last[:-1] if len(last) > 2 and last.endswith(("시", "군")) else last
+
+
+def owner_cta(search_keyword: str, region: str = "", business_type: str = "") -> str:
+    """마지막 씬 CTA: 저장 명분 + [지역명+상호명] 검색 ('주말 외식 장소로 나중에 찾으면 늦어요, 지금 저장하고 가평 효정명인갈비를 검색해 보세요!')"""
+    from core.script_guard import with_josa
     kw = (search_keyword or "").strip()
-    return f"네이버에서 {kw} 검색해 보세요!" if kw else "네이버에서 검색해 보세요!"
+    if not kw:
+        return "지금 저장하고 네이버에서 검색해 보세요!"
+    reg = short_region(region)
+    target = f"{reg} {kw}" if reg and reg not in kw else kw
+    reason = CTA_SAVE_REASON.get(business_type, CTA_SAVE_REASON[DEFAULT_BUSINESS_TYPE])
+    return f"{reason} {with_josa(target, '을/를')} 검색해 보세요!"
 
 
 def _roles_for(business_type: str, count: int) -> List[str]:
@@ -180,6 +200,7 @@ def plan_owner_storyboard(
     output_plan_path: Optional[str] = None,
     hook_hints: Optional[HookHints] = None,
     core_concept: str = "",
+    region: str = "",
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -192,7 +213,7 @@ def plan_owner_storyboard(
     media = list(media_paths or [])[:8]
     count = len(media) if len(media) >= 2 else max(int(num_scenes or 4), 2)
     roles = _roles_for(business_type, count)
-    cta_line = owner_cta(search_keyword)
+    cta_line = owner_cta(search_keyword, region, business_type)
     lines = MOCK_LINES.get(business_type, MOCK_LINES[DEFAULT_BUSINESS_TYPE])
     default_hook = f"{business_name} 가봤어요?" if business_name else "여기 진짜 가볼 만해요!"
 
@@ -201,7 +222,7 @@ def plan_owner_storyboard(
     if not mock and script_llm_ready(api_key):   # Gemini 키 없이 Claude·GPT 키만 있어도 대본 엔진 사용
         try:
             llm = _plan_with_llm(business_name, usp, business_type, roles, media, cta_line,
-                                 tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept)
+                                 tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
@@ -479,7 +500,7 @@ OWNER_SYSTEM = build_ad_system_prompt("동네 매장·플레이스", mode="owner
 
 
 def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
-                   hook_hints=None, core_concept: str = ""):
+                   hook_hints=None, core_concept: str = "", region: str = ""):
     from core.llm import generate_json, repair_scene_lines
     from core.script_guard import script_violation_finder
 
@@ -508,6 +529,7 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 - 상호명(대본에 자연스럽게 노출 가능): {business_name}
 - 업종: {type_label}
 - 사장님이 직접 적은 특장점(USP): {usp or '(없음)'}
+- 지역: {short_region(region) or '(알 수 없음)'}
 - 톤 참고: {tone_instruction or '친근하고 경쾌한 사장님 직영 홍보 톤'}
 
 {concept_override_prompt}
@@ -521,6 +543,13 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 - 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {OWNER_POLICY.min_chars + 6}~{OWNER_POLICY.max_chars - 2}자 (최대 {OWNER_POLICY.max_chars}자). 한 문장에 한 가지 이야기만 하세요.
 - 씬마다 새로운 장면·근거를 말하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다 (씬 1 대사는 헤드라인을 받아 '이유'로 이어 갑니다).
 - 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'.
+- [카피 규칙: 설명이 아니라 세일즈 카피]
+  * 조리 과정·행동 묘사 금지: '~구워요', '~잘라요', '그릇에 담아요', '집게로 뒤집을수록' 같은 일기장식 설명문은 쓰지 마세요.
+  * 대신 손님이 얻는 감각과 이유를 쓰세요: 육즙, 숯불 향, 식감, 윤기, 살얼음처럼 미각·후각·시각을 건드리는 단어를 씬마다 하나 이상 넣으세요.
+    단, 감각어는 USP·사진에 있는 메뉴와 조리 방식에 붙는 것만 쓰고, 없는 재료·'비법'·가격·수치 같은 새 사실은 만들지 마세요.
+  * 씬 1 첫 문장은 후킹: 지역명({short_region(region) or '지역명'}) 또는 누구를 위한 곳인지(타깃)를 짚으세요.
+    (구조 예: '{short_region(region) or '동네'} 사람들이 ○○ 생각날 때 찾는 곳이에요!' — 문구는 이 매장 정보로 새로 쓰기)
+  * 마지막 씬은 위 '정확히' 지정한 문구(저장 명분 + 검색 유도) 그대로 쓰세요.
 - 사장님이 적은 특장점(USP)과 첨부 사진에 없는 메뉴·반찬·조리 방식·시설·서비스는 지어내지 마세요 (예: 적히지 않은 계란찜·냉면·미리 손질).
   매장 운영 방식(손님이 직접 굽는지, 구워서 내는지 등)은 USP에 있는 한 가지로만 일관되게 쓰고, 모르면 방식을 단정하지 말고 맛·분위기·상황으로 말하세요.
 - '~할 수 있어요' 어미는 영상 전체에서 2번까지만, 나머지는 '~해요/~예요/~죠'로 단정하세요. 웃음 표기(^^, ㅎㅎ)와 이모티콘은 쓰지 마세요.

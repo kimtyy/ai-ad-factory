@@ -226,6 +226,9 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             with Image.open(intro_image) as source:
                 ImageOps.exif_transpose(source).convert("RGB").resize((W, H), Image.LANCZOS).save(ip)
             pngs.append((ip, 0.0, min(intro_sec, dur)))
+        if is_last and has_card:
+            # 엔딩 카드가 페이드인되기 시작하는 시점(씬 끝 xfade 전)에 마지막 씬 자막·워터마크를 끝냄: 카드는 검색 안내만 단독으로
+            pngs = [(p_, s_, max(s_ + 0.1, min(e_, dur - xfade))) for p_, s_, e_ in pngs]
         scenes.append({"video": vp, "audio": ap, "dur": dur, "pngs": pngs})
 
     card_png, card_sec = None, 0.0

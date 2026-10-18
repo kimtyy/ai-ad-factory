@@ -23,7 +23,7 @@ import imageio_ffmpeg
 logger = logging.getLogger("ad_factory.render.bgm")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BGM_DIR = os.path.join(ROOT, "assets", "bgm")
+BGM_DIR = os.getenv("BGM_DIR", "").strip() or os.path.join(ROOT, "assets", "bgm")      # BGM_DIR: 다른 폴더를 쓰거나 테스트에서 지정 (모듈 새로고침에도 유지)
 BGM_EXTS = (".mp3", ".wav", ".m4a")
 RANDOM = "__random__"
 
