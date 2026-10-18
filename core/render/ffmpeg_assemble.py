@@ -229,7 +229,8 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         if is_last and has_card:
             # 엔딩 카드가 페이드인되기 시작하는 시점(씬 끝 xfade 전)에 마지막 씬 자막·워터마크를 끝냄: 카드는 검색 안내만 단독으로
             pngs = [(p_, s_, max(s_ + 0.1, min(e_, dur - xfade))) for p_, s_, e_ in pngs]
-        scenes.append({"video": vp, "audio": ap, "dur": dur, "pngs": pngs})
+        extras = [p for p in (item.get("extra_videos") or []) if p and os.path.exists(p)]
+        scenes.append({"video": vp, "audio": ap, "dur": dur, "pngs": pngs, "extras": extras})
 
     card_png, card_sec = None, 0.0
     if has_card:
@@ -261,14 +262,27 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             chain = f"[0:v]scale={W}:{H},setsar=1,format=yuv420p,settb=AVTB,fps={fps},fade=t=out:st={d - 0.4:.3f}:d=0.4[vo]"
             return cmd + ["-filter_complex", chain, "-map", "[vo]"]
         sc = u["sc"]
-        cmd = ["-i", sc["video"]]
-        fl = [f"[0:v]fps={fps},scale={W}:{H}:flags=bicubic:out_range=tv,setsar=1,format=yuv420p,"   # yuvj(풀레인지)도 tv로 정규화
-              f"tpad=stop_mode=clone:stop_duration={d + 1:.3f},trim=duration={d:.3f},setpts=PTS-STARTPTS[b0]"]
+        sources = [sc["video"]] + list(sc.get("extras") or [])
+        cmd = []
+        for src in sources:
+            cmd += ["-i", src]
+        n_src = len(sources)
+        # 한 문장 안의 컷 전환: 문장 길이를 컷 수로 균등 분할해 이어 붙임 (예: 후킹 3.0초 = 1.5초 + 1.5초). 컷이 하나면 그대로
+        part = d / n_src
+        fl = []
+        for j in range(n_src):
+            d_j = part if j < n_src - 1 else d - part * (n_src - 1)
+            fl.append(f"[{j}:v]fps={fps},scale={W}:{H}:flags=bicubic:out_range=tv,setsar=1,format=yuv420p,"   # yuvj(풀레인지)도 tv로 정규화
+                      f"tpad=stop_mode=clone:stop_duration={d_j + 1:.3f},trim=duration={d_j:.3f},setpts=PTS-STARTPTS[s{j}]")
+        if n_src == 1:
+            fl.append("[s0]null[b0]")
+        else:
+            fl.append("".join(f"[s{j}]" for j in range(n_src)) + f"concat=n={n_src}:v=1:a=0[b0]")
         cur = "b0"
         for k, (png, s_, e_) in enumerate(sc["pngs"]):
             cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", png]
             nxt = f"o{k}"
-            fl.append(f"[{cur}][{k + 1}:v]overlay=0:0:enable='between(t,{s_:.3f},{e_ - 0.0005:.4f})':format=auto:eof_action=pass[{nxt}]")
+            fl.append(f"[{cur}][{n_src + k}:v]overlay=0:0:enable='between(t,{s_:.3f},{e_ - 0.0005:.4f})':format=auto:eof_action=pass[{nxt}]")
             cur = nxt
         tail = f",fade=t=out:st={d - 0.4:.3f}:d=0.4" if u["fade_out"] else ""
         fl.append(f"[{cur}]format=yuv420p,settb=AVTB,fps={fps}{tail}[vo]")

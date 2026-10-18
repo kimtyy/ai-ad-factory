@@ -195,6 +195,15 @@ COPY_TONE_RULES = """[대본 톤 - 3자 큐레이터가 시청자에게 '이런 
 # 판에 박힌 패턴 (요청: 엄격 금지) → 생성 직후 한 번 다시 쓰게 하고, 그래도 남으면 안전 문구로 교체
 BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"거든요", "'~거든요' 어미"),
+    # 전국 매장 공용 AI 맛집 상투어 (상호명만 가리면 어느 가게에나 쓸 수 있는 문구)
+    (r"팡\s*터지는\s*육즙|육즙이\s*미쳤", "AI 상투어 '팡 터지는 육즙' (이 매장만의 사실로 바꾸기)"),
+    (r"감칠맛\s*(이\s*)?폭발", "AI 상투어 '감칠맛 폭발'"),
+    (r"겉은\s*바삭하고\s*속은\s*촉촉|겉바속촉", "AI 상투어 '겉바속촉'"),
+    (r"정갈한\s*밑반찬", "AI 상투어 '정갈한 밑반찬' (실제 반찬 이름으로)"),
+    (r"윤기부터\s*남달", "AI 상투어 '윤기부터 남달라요'"),
+    (r"극락\s*(그\s*자체|이\s*따로)?", "AI 상투어 '극락 그 자체'"),
+    (r"감탄이\s*절로", "AI 상투어 '감탄이 절로'"),
+    (r"입안\s*가득\s*퍼지는\s*풍미", "AI 상투어 '입안 가득 퍼지는 풍미'"),
     (r"\^\^|ㅎㅎ|ㅋㅋ|ㅠㅠ|;;|~{2,}", "이모티콘·웃음 표기 (^^, ㅎㅎ 등)"),
     (r"에\s*보세요\s*[.!?~]*$", "조사 오류 ('~에 보세요' → '~해 보세요')"),
     (r"힐링의\s*시간", "'힐링의 시간' 상투구"),
@@ -478,7 +487,60 @@ def repeated_ending_issues(lines: List[str]) -> Dict[int, str]:
     return issues
 
 
-def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None):
+def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -> Dict[int, str]:
+    """
+    1문장(후킹)에서 던진 주제를 2문장 이후(CTA 제외)에서도 이어서 증명하는지. 1문장·컨셉의 내용어가 한 번도 안 나오는 줄 → {줄 번호: 고칠 방향}
+    (용두사미 방지: '밑반찬 11가지'로 시작했는데 갑자기 일반 고기 칭찬·냉면 얘기로 새는 것). 최대 2줄까지만 지적해 과교정을 막는다
+    """
+    if len(lines) < 3 or not (lines[0] or "").strip():
+        return {}
+
+    def tokens(text: str) -> set:
+        out = set()
+        for tok in re.findall(r"[가-힣A-Za-z0-9]+", text or ""):
+            t = tok
+            for suf in _STEM_TRIM:
+                if len(t) - len(suf) >= 2 and t.endswith(suf):
+                    t = t[:-len(suf)]
+                    break
+            if len(t) >= 2 and t not in _STEM_STOP:
+                out.add(t)
+        return out
+
+    # 주제 앵커: 1문장 + 컨셉 + 사장님이 입력한 특장점(그 사실을 말하는 줄은 주제를 증명하는 줄로 인정 — 반찬 이름 같은 동의어 오탐 방지)
+    anchors = tokens(lines[0]) | tokens(core_concept) | tokens(usp)
+    anchor_stems = content_stems(lines[0]) | content_stems(core_concept) | content_stems(usp)
+    issues: Dict[int, str] = {}
+    for i in range(1, len(lines)):
+        t = lines[i] or ""
+        if not t.strip():
+            continue
+        if anchor_stems & content_stems(t) or any(a in t or any(w in a for w in tokens(t)) for a in anchors):
+            continue
+        issues[i] = ("1문장(후킹)의 주제에서 벗어남 → 1문장이 던진 주제를 이 장면에서도 이어서 증명하기 "
+                     "(주제와 무관한 일반 칭찬·다른 메뉴 이야기 금지)")
+        if len(issues) >= 2:
+            break
+    return issues
+
+
+def unique_fact_issues(lines: List[str], usp: str = "", need: int = 2) -> Dict[int, str]:
+    """
+    본론(2문장~)에 사장님이 입력한 고유 사실(특장점 문구의 고유 명사)이 need개 이상 들어갔는지. 입력된 사실이 need개 미만이면 검사하지 않음(지어내기 방지).
+    부족하면 첫 본론 줄을 {줄 번호: 고칠 방향}으로 반환
+    """
+    facts = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", usp or "") if w not in _STEM_STOP and w not in ("특징", "매장", "가게", "우리")}
+    if len(facts) < need or len(lines) < 2:
+        return {}
+    body = " ".join(lines[1:])
+    used = {f for f in facts if f in body or f[:2] in body}
+    if len(used) >= need:
+        return {}
+    return {1: "입력된 특장점의 고유 명사(반찬·재료·손질/숙성 방식·리뷰 문구)를 2개 이상 구체적으로 넣기 (추상적 맛 표현 대신)"}
+
+
+def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None,
+                            usp: str = "", lock_topic: bool = False):
     """
     대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
     씬 간 반복(훅 포함) + 1컨셉 연관성(core_concept를 넘긴 경우)
@@ -489,6 +551,11 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
         flagged.setdefault(lines[i], msg)
     for i, msg in repeated_ending_issues(lines).items():
         flagged.setdefault(lines[i], msg)
+    if lock_topic:
+        for i, msg in topic_lock_issues(lines, core_concept, usp).items():
+            flagged.setdefault(lines[i], msg)
+        for i, msg in unique_fact_issues(lines, usp).items():
+            flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():
             flagged.setdefault(lines[i], msg)

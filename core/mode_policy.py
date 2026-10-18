@@ -111,9 +111,9 @@ def build_one_concept_guidelines(mode: str, n_scenes: int, category_name: str, c
 OWNER_POLICY = ModePolicy(
     mode="owner",
     name_ko="매장/플레이스 직영",
-    min_chars=14,
-    target_chars=24,
-    max_chars=32,               # 톤 규칙(26~30자)과 일치: 씬당 20~30자 권장, 온전한 서술어 보존 위해 최대 32자 허용
+    min_chars=16,
+    target_chars=30,
+    max_chars=40,               # 5문장 150~190자(CTA 포함) 대본: 본론 문장은 씬당 24~38자, 온전한 서술어 보존 위해 최대 40자 허용
     min_scene_sec=2.8,
     max_scene_sec=3.3,
     default_scene_sec=3.0,

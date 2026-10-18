@@ -175,6 +175,21 @@ def _media_preview_image(path: str, thumb_dir: Optional[str]):
     return img
 
 
+# 6~8컷은 5문장에 비대칭으로 묶는다 (문장 호흡과 컷 전환이 엇갈려 지루하지 않게): 후킹·핵심 증거·후기 검증 문장에 컷 2장씩, 전개·CTA는 1장
+MEDIA_GROUP_SIZES = {6: [2, 1, 1, 1, 1], 7: [2, 1, 2, 1, 1], 8: [2, 1, 2, 2, 1]}
+
+
+def media_groups(n_media: int) -> List[List[int]]:
+    """미디어 번호(0부터)를 씬별 묶음으로: 5컷 이하는 1컷 = 1문장, 6~8컷은 5문장(예: 8컷 = [0,1] [2] [3,4] [5,6] [7])"""
+    n = max(0, min(int(n_media), 8))
+    sizes = MEDIA_GROUP_SIZES.get(n) or [1] * n
+    out, k = [], 0
+    for size in sizes:
+        out.append(list(range(k, k + size)))
+        k += size
+    return out
+
+
 def _scene(i: int, role: str, text: str, hook: str = "") -> Dict[str, Any]:
     motions = ["zoom_in", "pan_right", "zoom_out", "pan_left", "pan_down", "pan_up"]
     return {
@@ -211,7 +226,8 @@ def plan_owner_storyboard(
     business_name = (business_name or "").strip()
     search_keyword = (search_keyword or "").strip() or business_name
     media = list(media_paths or [])[:8]
-    count = len(media) if len(media) >= 2 else max(int(num_scenes or 4), 2)
+    groups = media_groups(len(media)) if len(media) >= 2 else []
+    count = len(groups) if groups else max(int(num_scenes or 4), 2)
     roles = _roles_for(business_type, count)
     cta_line = owner_cta(search_keyword, region, business_type)
     lines = MOCK_LINES.get(business_type, MOCK_LINES[DEFAULT_BUSINESS_TYPE])
@@ -222,7 +238,8 @@ def plan_owner_storyboard(
     if not mock and script_llm_ready(api_key):   # Gemini 키 없이 Claude·GPT 키만 있어도 대본 엔진 사용
         try:
             llm = _plan_with_llm(business_name, usp, business_type, roles, media, cta_line,
-                                 tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region)
+                                 tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region,
+                                 groups=groups)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
@@ -274,6 +291,8 @@ def plan_owner_storyboard(
                 logger.info(f"[후킹 반복 차단] 헤드라인 '{hook}' ≈ 서브 '{text}' → 기본 후킹으로 교체")
                 hook = default_hook
         scenes.append(_scene(i, "cta" if is_last else role, text, hook))
+        if groups and any(len(g) > 1 for g in groups):
+            scenes[-1]["media_group"] = list(groups[i])          # 이 문장 동안 보여 줄 미디어 번호들 (첫 번째가 대표, 나머지는 문장 중간 전환 컷)
         if i == 0 and hook_hints:
             scenes[0]["hook_reference"] = hook_hints.summary()
             used = hook_hints.pattern_used((llm[0] if llm else {}).get("hook_pattern_used"))
@@ -497,19 +516,64 @@ JSON만 출력:
 
 
 OWNER_SYSTEM = build_ad_system_prompt("동네 매장·플레이스", mode="owner")
+# 대본 생성 전용: 공용 시스템 프롬프트 + 본론 락인·상투어 금지·고유 명사 규칙 (컨셉 제안·특징 요약 호출에는 붙이지 않음)
+LOCKIN_BLOCK = """[핵심 제약 조건: 본론(2~4문장) 1컨셉 락인 및 상투어 금지]
+1. 떡밥 회수 강제: 1문장(후킹)에서 제시한 구체적 주제(예: 특정 반찬 가짓수, 부모님 동반, 특정 부위 두께 등)를 2, 3, 4문장에서도 절대 벗어나지 말고 끝까지 증명하라. 1문장 주제와 무관한 만능 문장(갑작스러운 냉면 육쌈 언급, 일반적인 숯불 향 칭찬 등)으로 주제를 흐리는 것을 엄격히 금지한다.
+2. AI 상투어 사용 금지: "팡 터지는 육즙", "감칠맛 폭발", "겉은 바삭하고 속은 촉촉", "정갈한 밑반찬", "윤기부터 남달라요", "극락 그 자체", "감탄이 절로"와 같은 추상적 맛집 클리셰는 절대 사용하지 마라.
+3. 매장 고유 명사 필수 삽입: 추상적인 맛 표현 대신, 입력된 매장 정보와 영수증 리뷰에 존재하는 실제 고유 명사(구체적인 밑반찬 이름, 손질/숙성 방식, 실제 리뷰 인용 문구)를 2~4문장 안에 최소 2개 이상 반드시 포함하여 오직 이 매장만의 대본을 완성하라.
+   (입력된 특장점·사장님이 적은 리뷰 문구·사진에 없는 사실은 지어내지 마라. 입력된 사실이 2개보다 적으면 있는 사실만 쓰고, 추상적인 미사여구로 채우지 마라.)"""
+OWNER_SCRIPT_SYSTEM = OWNER_SYSTEM + "\n\n" + LOCKIN_BLOCK
+FEWSHOT_BLOCK = """[Few-Shot: 기존 출력(Bad) vs 목표 출력(Good)] — 아래는 문장 구조·밀도·톤만 배우는 예시입니다.
+※ 예시 속 상호·지역·반찬·손질법·리뷰 문구는 예시일 뿐입니다. 실제 대본에는 이 매장의 입력 정보와 사진에 있는 사실만 쓰고, 예시 문장·메뉴를 그대로 가져오지 마세요.
+
+패턴 2 (핀셋 타깃·상황 지정형 / 주제: 부모님 효도 외식·부드러운 식감)
+[Bad: 본론에서 컨셉 이탈 + 상투어]
+1문장: 이번 주말 가평에서 부모님 모시고 갈비 뜯을 분들, 딱 15초만 집중하세요.
+2문장: 질긴 고기 딱 질색이신 어르신들도 잇몸으로 드실 만큼 부드러운 인생 갈비집입니다.
+3문장: 칼집 사이사이로 숯불 향이 꽉 차서 씹을 때마다 감칠맛이 폭발해요. (상투어)
+4문장: 정갈한 밑반찬에 시원한 냉면까지 한 상 가득 차려집니다. (백화점식 나열)
+5문장: 가족 모임 장소로 실패 없게 지금 저장해 두고 네이버에서 확인해 보세요.
+[Good: 1문장 컨셉을 4문장까지 관통 + 고유 팩트]
+1문장: 이번 주말 가평에서 부모님 모시고 갈비 뜯을 분들, 딱 15초만 집중하세요.
+2문장: 질긴 고기 딱 질색이신 어르신들도 잇몸으로 드실 만큼 부드러운 갈비집입니다.
+3문장: 기름기랑 질긴 근막을 일일이 손으로 다 발라내고 촘촘하게 수제 칼집을 넣었거든요.
+4문장: 자극적이지 않은 과일 양념이라 부모님들이 '속이 편하다'며 공기밥까지 싹 비우십니다.
+5문장: 가족 모임 장소로 실패 없게 지금 [저장] 누르고 '가평 효정명인갈비' 검색해 보세요.
+
+패턴 3 (숫자 충격·가성비형 / 주제: 밑반찬 11가지 한 상 가성비)
+[Bad: 반찬 얘기 실종 + 상투어]
+1문장: 돼지갈비 시켰는데 밑반찬만 11가지 깔리는 가평 1티어 갈비집을 찾았습니다.
+2문장: 참숯 위에 두툼한 양념 생갈비 얹어 노릇하게 구워내는데 윤기부터 남달라요. (반찬 내용 실종)
+3문장: 겉은 바삭하고 속은 촉촉해서 한 입 넣자마자 감탄이 절로 나옵니다. (상투어)
+4문장: 마지막 한 점까지 냉면에 돌돌 말아 남김없이 싹 비우게 되는 곳!
+5문장: 친구 태그하고 이번 주말 갈비 먹으러 갈 사람, 지금 저장하고 검색해 보세요.
+[Good: 반찬 주제를 끝까지 증명 + 고유 팩트]
+1문장: 돼지갈비 시켰는데 밑반찬만 11가지 깔리는 가평 1티어 갈비집을 찾았습니다.
+2문장: 양념게장부터 잡채, 샐러드까지 상다리 휘어지게 깔려서 고기 익기도 전에 젓가락이 바쁩니다.
+3문장: 여기에 참숯 향 입힌 두툼한 갈비 한 점 올려 직접 담근 겉절이랑 싸 먹으면 조합이 끝내줍니다.
+4문장: 리뷰에서도 "반찬 리필만 두 번 하고 배 터지게 먹고 왔다"는 호평이 쏟아지는 곳입니다.
+5문장: 이번 주말 가성비 끝판왕 갈비 먹으러 갈 사람, 지금 [저장]하고 '가평 효정명인갈비' 검색해 보세요.
+(Good 예시도 문장 틀만 참고하세요: 반찬 이름·리뷰 인용은 이 매장 입력에 있을 때만 쓰고, 없으면 있는 사실로만 쓰세요.)"""
 
 
 def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
-                   hook_hints=None, core_concept: str = "", region: str = ""):
+                   hook_hints=None, core_concept: str = "", region: str = "", groups=None):
     from core.llm import generate_json, repair_scene_lines
     from core.script_guard import script_violation_finder
 
     type_label = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])["label"]
     contents: List[Any] = []
-    for i, path in enumerate(media[:len(roles)]):
-        img = _media_preview_image(path, thumb_dir)
-        if img is not None:
-            contents += [f"[씬 {i + 1} 미디어]", img]
+    if groups:
+        for i, g in enumerate(groups):
+            for j, mi in enumerate(g):
+                img = _media_preview_image(media[mi], thumb_dir)
+                if img is not None:
+                    contents += [f"[씬 {i + 1} 미디어{f' {j + 1}/{len(g)} (같은 문장 동안 연달아 나옴)' if len(g) > 1 else ''}]", img]
+    else:
+        for i, path in enumerate(media[:len(roles)]):
+            img = _media_preview_image(path, thumb_dir)
+            if img is not None:
+                contents += [f"[씬 {i + 1} 미디어]", img]
     n = len(roles)
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
     concept_guidelines = build_one_concept_guidelines("owner", n, type_label, cta_line, OWNER_POLICY)
@@ -543,6 +607,9 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 - 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {OWNER_POLICY.min_chars + 6}~{OWNER_POLICY.max_chars - 2}자 (최대 {OWNER_POLICY.max_chars}자). 한 문장에 한 가지 이야기만 하세요.
 - 씬마다 새로운 장면·근거를 말하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다 (씬 1 대사는 헤드라인을 받아 '이유'로 이어 갑니다).
 - 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'.
+- [문장 역할 (CTA 포함 {n}문장, 대본 전체 공백 포함 150~190자)]: 1문장=후킹(핵심 주제 하나를 던짐) → 2문장=공감·떡밥 전개 → 3문장=1메시지 핵심 증거
+  → 4문장=손님 후기·리뷰 팩트 검증(입력에 리뷰 문구가 있을 때만 인용, 없으면 입력된 사실로 확인해 주는 문장) → 마지막=저장 유도 + 상호명 검색 CTA.
+  씬이 5개가 아니면 같은 흐름으로 늘리거나 줄이되, 1문장의 주제는 CTA 직전 문장까지 이어 가세요.
 - [카피 규칙: 설명이 아니라 세일즈 카피]
   * 조리 과정·행동 묘사 금지: '~구워요', '~잘라요', '그릇에 담아요', '집게로 뒤집을수록' 같은 일기장식 설명문은 쓰지 마세요.
   * 대신 손님이 얻는 감각과 이유를 쓰세요: 육즙, 숯불 향, 식감, 윤기, 살얼음처럼 미각·후각·시각을 건드리는 단어를 씬마다 하나 이상 넣으세요.
@@ -550,6 +617,7 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
   * 씬 1 첫 문장은 후킹: 지역명({short_region(region) or '지역명'}) 또는 누구를 위한 곳인지(타깃)를 짚으세요.
     (구조 예: '{short_region(region) or '동네'} 사람들이 ○○ 생각날 때 찾는 곳이에요!' — 문구는 이 매장 정보로 새로 쓰기)
   * 마지막 씬은 위 '정확히' 지정한 문구(저장 명분 + 검색 유도) 그대로 쓰세요.
+{FEWSHOT_BLOCK}
 - 사장님이 적은 특장점(USP)과 첨부 사진에 없는 메뉴·반찬·조리 방식·시설·서비스는 지어내지 마세요 (예: 적히지 않은 계란찜·냉면·미리 손질).
   매장 운영 방식(손님이 직접 굽는지, 구워서 내는지 등)은 USP에 있는 한 가지로만 일관되게 쓰고, 모르면 방식을 단정하지 말고 맛·분위기·상황으로 말하세요.
 - '~할 수 있어요' 어미는 영상 전체에서 2번까지만, 나머지는 '~해요/~예요/~죠'로 단정하세요. 웃음 표기(^^, ㅎㅎ)와 이모티콘은 쓰지 마세요.
@@ -559,13 +627,13 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시지", "story": "기승전결 전체 스토리 요약", "scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
 """)
     # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py)
-    data, engine = generate_json(contents, OWNER_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="사장님 광고 대본")
+    data, engine = generate_json(contents, OWNER_SCRIPT_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="사장님 광고 대본")
     # 모드 전용 Hard Limit 글자 수 초과 및 판에 박힌 패턴/어미 리듬 위반 줄 재작성 요청
     vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)] if isinstance(data, dict) else []
     hook_line = str(((data.get("scenes") or [{}])[0] or {}).get("hook_title") or "") if isinstance(data, dict) else ""
     violation_checker = create_length_violation_checker(
-        OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line))
-    data, fixes = repair_scene_lines(data, violation_checker, OWNER_SYSTEM, OWNER_POLICY.repair_instruction, gemini_api_key=api_key)
+        OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True))
+    data, fixes = repair_scene_lines(data, violation_checker, OWNER_SCRIPT_SYSTEM, OWNER_POLICY.repair_instruction, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[owner 대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data

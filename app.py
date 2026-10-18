@@ -1201,6 +1201,9 @@ if is_owner_mode:
         usp_desc = st.text_input("✨ 우리 가게 자랑 (USP)", key="owner_usp",
                                  placeholder="예: 성수역 2분 / 단체석 30명 / 숙성 삼겹살",
                                  help="네이버 플레이스 소개글이 기본값으로 들어가며, 필요시 자유롭게 수정해 주세요.")
+    if len(re.findall(r"[가-힣A-Za-z0-9]{2,}", usp_desc or "")) < 4:
+        st.caption("💡 대본의 고유함은 여기 적은 사실에서 나와요. 반찬·메뉴 이름, 손질·숙성 방식, 손님 리뷰 문구, 숫자(가짓수·두께)를 "
+                   "구체적으로 적을수록 '어느 가게나 쓰는 문구' 대신 우리 가게만의 대본이 나옵니다. (적지 않은 사실은 지어내지 않아요)")
     o5, o6 = st.columns([2, 1], vertical_alignment="bottom")
     with o5:
         owner_address = st.text_input("📍 주소·지역 (선택, 엔딩 카드에 표시)", key="owner_address", placeholder="예: 서울 성동구 성수일로")
@@ -1770,6 +1773,8 @@ if st.session_state.storyboard:
                     st.markdown(f"**{s_num:02d} · {role_label}** · ⏱ {scene.get('duration_sec', 2.5)}초"
                                 + (f" · 🎯 {SHOT_LABELS.get(scene['shot'], scene['shot'])}" if is_commerce_mode and scene.get("shot") else ""))
 
+                    if scene.get("extra_media"):
+                        st.caption(f"🎞️ 이 문장 동안 컷 {1 + len(scene['extra_media'])}장이 이어서 나와요 (문장 중간에 사진 전환)")
                     img_p = scene.get("image_path")
                     video_media = scene.get("media") if (scene.get("media") or {}).get("type") == "video" else None
                     if video_media and os.path.exists(video_media.get("path", "")):

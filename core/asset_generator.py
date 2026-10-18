@@ -258,15 +258,16 @@ class AssetGenerator:
         self,
         scene: Dict[str, Any],
         force: bool = False,
-        gallery_image_path: Optional[str] = None
+        gallery_image_path: Optional[str] = None,
+        suffix: str = ""
     ) -> str:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
-        out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.png")
+        out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}{suffix}.png")      # suffix: 한 문장 안의 추가 컷(_c2…)용 별도 파일
 
         # 스마트폰 직접 촬영 영상 씬: 대표 프레임을 키프레임(갤러리/누끼 합성용)으로 사용
         video_media = self.scene_video_media(scene)
         if video_media:
-            thumb_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}_thumb.jpg")
+            thumb_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}{suffix}_thumb.jpg")
             if force or not self.is_cached(thumb_path) or os.path.getmtime(thumb_path) < os.path.getmtime(video_media["path"]):
                 extract_thumbnail(video_media["path"], thumb_path, at=float(video_media.get("trim_start", DEFAULT_TRIM_START)) + 0.3)
             return thumb_path
@@ -742,13 +743,13 @@ class AssetGenerator:
         """키프레임 이미지를 바탕으로 Ken Burns 모션 비디오 클립 생성 (기존 호환 래퍼)"""
         return self._create_ken_burns_video(image_path, duration_sec, out_path)
 
-    def generate_video(self, scene: Dict[str, Any], image_path: str, force: bool = False) -> str:
+    def generate_video(self, scene: Dict[str, Any], image_path: str, force: bool = False, suffix: str = "") -> str:
         """
         외부 유료 비디오 생성 API(Veo 등)를 영구 차단하고,
         오직 로컬 OpenCV/Pillow/ffmpeg 기반의 2D 이미지 Ken Burns(줌인/줌아웃/좌우/상하 패닝) 합성으로 비디오를 생성합니다.
         """
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
-        out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}.mp4")
+        out_path = os.path.join(self.cache_dir, f"scene_{scene_num:02d}{suffix}.mp4")
 
         video_media = self.scene_video_media(scene)
         if video_media:

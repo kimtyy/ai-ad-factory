@@ -30,7 +30,7 @@ out = clamp_line_to_policy(over, COMMERCE_POLICY)
 check("있어요" not in out.replace("수 있어요", "") and out == over, f"완결되게 줄일 수 없으면 원문 보존 (어미 땜질 없음): {out[:30]}…")
 two = "텐트 치기 전에 화로대부터 펴요. 3초면 불 피울 준비가 끝나서 마음이 한결 편해져요!"
 check(clamp_line_to_policy(two, COMMERCE_POLICY) in ("텐트 치기 전에 화로대부터 펴요.", two), "문장 부호 단위로 완결 문장만 남김")
-check(OWNER_POLICY.max_chars == 32 and COMMERCE_POLICY.max_chars == 32 and TRAVEL_POLICY.max_chars == 30, "정책 글자 수가 톤 규칙(26~30자)과 일치 (30~32자)")
+check(OWNER_POLICY.max_chars == 40 and COMMERCE_POLICY.max_chars == 32 and TRAVEL_POLICY.max_chars == 30, "정책 글자 수: 사장님 5문장 150~190자 대본(최대 40자), 쇼핑 32·숙소 30")
 chk = create_length_violation_checker(COMMERCE_POLICY)
 check(chk("가" * 31) is None and chk("가" * 33) is not None, "길이 검사기: 32자까지 허용, 초과 시 재작성 유도")
 

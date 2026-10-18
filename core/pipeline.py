@@ -102,6 +102,29 @@ def invalidate_scene_derivatives(job, s_num: int) -> None:
             os.remove(p)
 
 
+_EXTRA_MOTIONS = ("pan left", "zoom out", "pan right", "pan down", "zoom in")
+
+
+def _extra_cut_videos(gen, scene: dict, s_num: int, real_media: bool, force: bool) -> List[str]:
+    """한 문장 안에서 이어지는 추가 컷(extra_media) 클립: 대표 컷과 다른 모션으로 각각 만들어 경로 목록 반환 (없으면 빈 목록)"""
+    out: List[str] = []
+    for k, em in enumerate(scene.get("extra_media") or [], 1):
+        ex = {key: val for key, val in scene.items() if key not in ("image_path", "media", "extra_media")}
+        ex["scene_index"] = ex["scene_number"] = s_num
+        ex["video_motion_prompt_en"] = _EXTRA_MOTIONS[(s_num + k) % len(_EXTRA_MOTIONS)]
+        if em.get("media"):
+            ex["media"] = em["media"]
+        else:
+            ex["image_path"] = em.get("image_path")
+        suffix = f"_c{k + 1}"
+        g_cut = em.get("image_path") if real_media else None
+        if g_cut and not os.path.exists(g_cut):
+            g_cut = None
+        img = gen.generate_image(ex, force=force, gallery_image_path=g_cut, suffix=suffix)
+        out.append(gen.generate_video(ex, img, force=force, suffix=suffix))
+    return out
+
+
 def _scene_num(scene: dict, default: int) -> int:
     try:
         return int(scene.get("scene_index") or scene.get("scene_number") or default)
@@ -129,6 +152,16 @@ def assign_media_to_scene(job, scene: dict, path: str, source: str, matched_url:
     invalidate_scene_derivatives(job, _scene_num(scene, 1))
 
 
+def _extra_media_entry(path: str) -> Dict[str, Any]:
+    """한 문장 안의 추가 컷 1개: 사진이면 image_path, 스마트폰 영상이면 media(트림 시작 기본값)"""
+    from core.media import is_video_file, probe_media
+    from core.media.normalize import DEFAULT_TRIM_START
+    if is_video_file(path):
+        probe_media(path)
+        return {"source_path": path, "media": {"type": "video", "path": path, "trim_start": DEFAULT_TRIM_START, "fit": "auto"}}
+    return {"source_path": path, "image_path": path}
+
+
 def assign_uploads_to_scenes(job, scenes: list, paths: list, cycle: bool = False,
                              product_boxes: Optional[Dict[str, Any]] = None) -> None:
     """i번째 미디어 → i번째 씬. cycle=True(쇼핑)면 사진이 씬보다 적을 때 처음부터 돌려 씀 (앵글을 바꿔 잘라냄)"""
@@ -139,6 +172,15 @@ def assign_uploads_to_scenes(job, scenes: list, paths: list, cycle: bool = False
             scene["shot"] = shot
             if (product_boxes or {}).get(p):
                 scene["product_box"] = product_boxes[p]      # Gemini가 찾은 상품 본체 위치
+    if any(s.get("media_group") for s in scenes):
+        # 5문장 : 6~8컷: 씬의 첫 미디어가 대표 컷, 나머지는 같은 문장 안에서 이어지는 추가 컷 (extra_media)
+        for i, scene in enumerate(scenes):
+            group = [k for k in (scene.get("media_group") or [i]) if k < len(paths)]
+            if not group:
+                continue
+            assign_media_to_scene(job, scene, paths[group[0]], "uploaded")
+            scene["extra_media"] = [_extra_media_entry(paths[k]) for k in group[1:]]
+        return
     for scene, p in zip(scenes, paths):
         assign_media_to_scene(job, scene, p, "uploaded")
 
@@ -353,9 +395,10 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     for idx, ((scene, s_num, img), audio) in enumerate(zip(pending, audios)):
         step(30 + int(idx / total * 40), f"[{idx + 1}/{total}] 씬 {s_num} 영상 생성 중...")
         video = gen.generate_video(scene, img, force=force)
+        extra_videos = _extra_cut_videos(gen, scene, s_num, real_media, force)
         vo = (scene.get("voiceover") or scene.get("subtitle") or scene.get("caption") or "").strip()
         manifest.append({**scene, "scene_index": s_num, "scene_number": s_num, "image_path": img, "audio_path": audio,
-                         "video_path": video, "voiceover": vo, "subtitle": vo, "caption": vo})
+                         "video_path": video, "extra_videos": extra_videos, "voiceover": vo, "subtitle": vo, "caption": vo})
 
     step(75, "타임라인 조립, 자막·오버레이 렌더링 중...")
     importlib.reload(core.compositor)

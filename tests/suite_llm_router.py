@@ -259,6 +259,7 @@ def claude_seq(contents, system, temperature, max_tokens):
     step["n"] += 1
     if step["n"] == 1:
         seen_prompt["p"] = contents[-1]
+        seen_prompt["sys"] = system
         assert ("3자 큐레이터" in contents[-1] or "사장님" in contents[-1] or "1컨셉" in contents[-1]) and ("엄격 금지" in contents[-1] or "금지" in contents[-1] or "절대" in contents[-1])
         return json.dumps(plan_reply, ensure_ascii=False)
     return json.dumps({"fixes": [{"scene_index": 1, "voiceover": "가평에서 맥주 한 잔 하기 좋은 밤, 여기예요."},
@@ -273,6 +274,10 @@ rt._overrides = {}
 _pp = seen_prompt.get("p", "")
 check("지역: 가평" in _pp and "육즙" in _pp and "조리 과정·행동 묘사 금지" in _pp and "지역명(가평)" in _pp and "지금 저장하고 가평 설맥을 검색해 보세요!" in _pp,
       "사장님 프롬프트: 설명조 금지·감각어(육즙·숯불 향)·지역 후킹·저장 명분 CTA 규칙과 지역명이 전달됨")
+check("Few-Shot" in _pp and "그대로 가져오지 마세요" in _pp and "[Bad" in _pp and "[Good" in _pp and "문장 역할" in _pp,
+      "사장님 프롬프트: Few-Shot(Bad→Good)에 '예시 문구 복사 금지' 안내 + 문장 역할(후킹→전개→증거→리뷰→CTA)")
+check("떡밥 회수 강제" in seen_prompt.get("sys", "") and "AI 상투어 사용 금지" in seen_prompt.get("sys", "") and "매장 고유 명사 필수 삽입" in seen_prompt.get("sys", ""),
+      "사장님 대본 시스템 프롬프트: 본론 락인·상투어 금지·고유 명사 3대 규칙 포함")
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
 check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4,
