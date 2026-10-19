@@ -612,6 +612,36 @@ def photo_sync_issues(lines: List[str], line_tags: List[str]) -> Dict[int, str]:
     return issues
 
 
+# 컨셉에 없는 다른 메뉴로 갈아타는 것을 잡는 요리·메뉴 어휘 (1컨셉 1메시지: 사진에 냉면·버섯이 보여도 대본이 다른 메뉴 소개로 넘어가면 안 됨)
+DISH_WORDS = MENU_VOCAB + ("물냉면", "비빔냉면", "버섯", "통버섯", "공기밥", "볶음밥", "쌈밥", "떡볶이", "치킨", "피자", "파스타", "초밥", "회")
+
+
+def menu_switch_issues(lines: List[str], core_concept: str = "") -> Dict[int, str]:
+    """
+    1문장·컨셉에 없는 다른 메뉴를 소개하는 문장 → {줄 번호: 고칠 방향} (최대 2줄). 1컨셉 1메시지: 선택한 메시지 하나만 끝까지 증명
+    """
+    if len(lines) < 2:
+        return {}
+    base = re.sub(r"\s+", "", f"{core_concept or ''}{lines[0] or ''}")
+    issues: Dict[int, str] = {}
+    for i in range(1, len(lines)):
+        t = re.sub(r"\s+", "", lines[i] or "")
+        hit = next((w for w in DISH_WORDS if w in t and w not in base), None)
+        if hit:
+            issues[i] = f"1컨셉에서 다른 메뉴('{hit}') 이야기로 주제를 바꿈 → 선택한 하나의 메시지를 다른 각도(대비·증거·체감)로 계속 증명하기"
+            if len(issues) >= 2:
+                break
+    return issues
+
+
+def valid_cta(text: str, target: str = "") -> bool:
+    """LLM이 쓴 마지막 CTA 문장 검증: '저장' 명분 + 상호(검색어) 공개 + '검색해 보세요!' 끝, 너무 길지 않음. 못 믿으면 고정 템플릿을 씀"""
+    t = (text or "").strip()
+    tg = re.sub(r"\s+", "", target or "")
+    return bool(t) and len(t) <= 56 and t.endswith("검색해 보세요!") and "저장" in t and (not tg or tg in re.sub(r"\s+", "", t)) \
+        and not find_banned_style(t)
+
+
 def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -> Dict[int, str]:
     """
     1문장(후킹)에서 던진 주제를 2문장 이후(CTA 제외)에서도 이어서 증명하는지. 1문장·컨셉의 내용어가 한 번도 안 나오는 줄 → {줄 번호: 고칠 방향}
@@ -632,9 +662,10 @@ def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -
                 out.add(t)
         return out
 
-    # 주제 앵커: 1문장 + 컨셉 + 사장님이 입력한 특장점(그 사실을 말하는 줄은 주제를 증명하는 줄로 인정 — 반찬 이름 같은 동의어 오탐 방지)
-    anchors = tokens(lines[0]) | tokens(core_concept) | tokens(usp)
-    anchor_stems = content_stems(lines[0]) | content_stems(core_concept) | content_stems(usp)
+    # 주제 앵커: 1문장 + 컨셉. 컨셉이 정해져 있으면 특장점 문구는 앵커로 쓰지 않는다 (특장점에 있는 다른 메뉴 얘기로 새는 것도 이탈)
+    use_usp = not (core_concept or "").strip()
+    anchors = tokens(lines[0]) | tokens(core_concept) | (tokens(usp) if use_usp else set())
+    anchor_stems = content_stems(lines[0]) | content_stems(core_concept) | (content_stems(usp) if use_usp else set())
     issues: Dict[int, str] = {}
     for i in range(1, len(lines)):
         t = lines[i] or ""
@@ -692,15 +723,14 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
             fake = find_invented_menu(t, evidence)
             if fake:
                 flagged.setdefault(lines[i], f"입력에 없는 메뉴·가짜 명사('{fake}') → 입력된 메뉴·사진 속 음식만 쓰고, 맛·향·식감 표현으로 생생하게")
-    if line_tags:
-        for i, msg in photo_conflict_issues(lines, line_tags, line_tags).items():
-            flagged.setdefault(lines[i], msg)
     if lock_topic:
         for i, msg in hook_situation_issues(lines, region).items():
             flagged.setdefault(lines[i], msg)
         for i, msg in adjacent_repeat_issues(lines, core_concept).items():
             flagged.setdefault(lines[i], msg)
         for i, msg in topic_lock_issues(lines, core_concept, usp).items():
+            flagged.setdefault(lines[i], msg)
+        for i, msg in menu_switch_issues(lines, core_concept).items():
             flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():

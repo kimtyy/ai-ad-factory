@@ -1794,6 +1794,8 @@ if st.session_state.storyboard:
     elif _eng in ("template", "mock"):
         st.warning("⚠️ 이 대본은 AI가 아니라 **업종 기본 문구(템플릿)**로 만들어졌어요. Mock 모드가 켜져 있거나 AI 호출이 실패했을 수 있어요. "
                    "사이드바 'Mock 모드'를 끄고 다시 기획해 보세요.")
+    if (st.session_state.storyboard[0] or {}).get("photo_reordered"):
+        st.caption("🎞️ 선택한 1컨셉을 가장 잘 보여 주는 사진을 앞쪽 컷에, 가게 외관은 마지막(CTA) 컷에 배치했어요. (대본은 사진이 아니라 1컨셉을 따라갑니다)")
     st.markdown("💡 *씬마다 나레이션 대사와 지속시간을 바로 수정하세요. 대사는 화면 자막과 음성에 똑같이 쓰입니다.*")
     if st.session_state.get("storyboard_mode", pipeline_mode) != pipeline_mode:
         st.warning(f"⚠️ 이 콘티는 '{MODE_LABELS.get(st.session_state.get('storyboard_mode'), '다른')}' 모드로 기획되었습니다. "

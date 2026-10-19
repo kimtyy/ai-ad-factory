@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (VO_HARD_MAX, find_example_copy, find_invented_menu, find_name_leak, complete_sentence, diversify_exclamations, find_promo_tone,
+from core.script_guard import (VO_HARD_MAX, valid_cta, find_example_copy, find_invented_menu, find_name_leak, complete_sentence, diversify_exclamations, find_promo_tone,
                                 find_banned_style, find_concept_drift,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo,
                                 concept_fallback_line, repeated_line_issues)
@@ -135,6 +135,17 @@ def short_region(region: str) -> str:
     return last[:-1] if len(last) > 2 and last.endswith(("시", "군")) else last
 
 
+def owner_cta_tail(search_keyword: str, region: str = "") -> str:
+    """CTA 끝 문구: '지금 저장하고 가평 효정명인갈비를 검색해 보세요!' (LLM이 쓰는 마지막 문장도 이 꼬리로 끝나야 함)"""
+    from core.script_guard import with_josa
+    kw = (search_keyword or "").strip()
+    if not kw:
+        return "지금 저장하고 네이버에서 검색해 보세요!"
+    reg = short_region(region)
+    target = f"{reg} {kw}" if reg and reg not in kw else kw
+    return f"지금 저장하고 {with_josa(target, '을/를')} 검색해 보세요!"
+
+
 def owner_cta(search_keyword: str, region: str = "", business_type: str = "") -> str:
     """마지막 씬 CTA: 저장 명분 + [지역명+상호명] 검색 ('주말 외식 장소로 나중에 찾으면 늦어요, 지금 저장하고 가평 효정명인갈비를 검색해 보세요!')"""
     from core.script_guard import with_josa
@@ -177,6 +188,34 @@ def _media_preview_image(path: str, thumb_dir: Optional[str]):
 
 # 6~8컷은 5문장에 비대칭으로 묶는다 (문장 호흡과 컷 전환이 엇갈려 지루하지 않게): 후킹·핵심 증거·후기 검증 문장에 컷 2장씩, 전개·CTA는 1장
 MEDIA_GROUP_SIZES = {6: [2, 1, 1, 1, 1], 7: [2, 1, 2, 1, 1], 8: [2, 1, 2, 2, 1]}
+
+
+EXTERIOR_WORDS = ("외관", "간판", "건물", "입구", "출입구", "가게 전경", "매장 전경")
+
+
+def order_media_for_concept(media: List[str], photo_tags: Dict[str, str], concept: str) -> List[int]:
+    """
+    선택한 1컨셉을 가장 잘 보여 주는 사진(사진 태그에 컨셉 단어가 많은 순)을 본론 컷(앞쪽)에, 가게 외관은 마지막(CTA) 컷에 둔다.
+    태그나 컨셉이 없거나 컨셉과 맞는 사진이 하나도 없으면 올린 순서 그대로. 반환: media 인덱스 순서
+    """
+    n = len(media)
+    ident = list(range(n))
+    if not n or not photo_tags or not (concept or "").strip():
+        return ident
+    from core.script_guard import content_stems
+    keys = content_stems(concept)
+    keys_full = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", concept)}
+    scored = []
+    for i, p in enumerate(media):
+        tag = photo_tags.get(p, "")
+        ext = any(w in tag for w in EXTERIOR_WORDS)
+        sc = sum(1 for k in keys if k in tag) + sum(1 for w in keys_full if w in tag)
+        scored.append((i, sc, ext))
+    if not any(sc > 0 for _, sc, ext in scored if not ext):
+        return ident
+    main = sorted([t for t in scored if not t[2]], key=lambda t: (-t[1], t[0]))
+    ext_ = [t for t in scored if t[2]]
+    return [t[0] for t in main] + [t[0] for t in ext_]
 
 
 def media_groups(n_media: int) -> List[List[int]]:
@@ -227,8 +266,13 @@ def plan_owner_storyboard(
     """
     business_name = (business_name or "").strip()
     search_keyword = (search_keyword or "").strip() or business_name
-    media = list(media_paths or [])[:8]
+    media_orig = list(media_paths or [])[:8]
+    order = order_media_for_concept(media_orig, photo_tags or {}, core_concept)
+    media = [media_orig[k] for k in order]                       # 컨셉 순서로 정렬한 미디어 (대본 프롬프트·컷 묶음은 이 순서)
+    reordered = order != list(range(len(media_orig)))
     groups = media_groups(len(media)) if len(media) >= 2 else []
+    if reordered and not groups:
+        groups = [[k] for k in range(len(media))]
     count = len(groups) if groups else max(int(num_scenes or 4), 2)
     roles = _roles_for(business_type, count)
     cta_line = owner_cta(search_keyword, region, business_type)
@@ -243,7 +287,8 @@ def plan_owner_storyboard(
         try:
             llm = _plan_with_llm(business_name, usp, business_type, roles, media, cta_line,
                                  tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region,
-                                 groups=groups, store_facts=store_facts, photo_tags=photo_tags)
+                                 groups=groups, store_facts=store_facts, photo_tags=photo_tags,
+                                 search_keyword=search_keyword)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
@@ -252,7 +297,8 @@ def plan_owner_storyboard(
     for i, role in enumerate(roles):
         is_last = i == len(roles) - 1
         item = (llm or [])[i] if llm and i < len(llm) else {}
-        text = cta_line if is_last else str(item.get("voiceover") or "").strip() or (
+        llm_cta = str(item.get("voiceover") or "").strip() if is_last else ""
+        text = (llm_cta if (llm_cta and valid_cta(llm_cta, search_keyword)) else cta_line) if is_last else str(item.get("voiceover") or "").strip() or (
             concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # 엔진 실패 시에도 컨셉을 유지
         if not is_last:
             text = to_haeyo(text)   # 말투 통일: 합쇼체 → 해요체
@@ -304,8 +350,8 @@ def plan_owner_storyboard(
                 logger.info(f"[후킹 반복 차단] 헤드라인 '{hook}' ≈ 서브 '{text}' → 기본 후킹으로 교체")
                 hook = default_hook
         scenes.append(_scene(i, "cta" if is_last else role, text, hook))
-        if groups and any(len(g) > 1 for g in groups):
-            scenes[-1]["media_group"] = list(groups[i])          # 이 문장 동안 보여 줄 미디어 번호들 (첫 번째가 대표, 나머지는 문장 중간 전환 컷)
+        if groups and (reordered or any(len(g) > 1 for g in groups)):
+            scenes[-1]["media_group"] = [order[k] for k in groups[i]]   # 이 문장 동안 보여 줄 '올린 순서' 기준 미디어 번호들 (첫 번째가 대표, 나머지는 문장 중간 전환 컷)
         if i == 0 and hook_hints:
             scenes[0]["hook_reference"] = hook_hints.summary()
             used = hook_hints.pattern_used((llm[0] if llm else {}).get("hook_pattern_used"))
@@ -336,6 +382,8 @@ def plan_owner_storyboard(
         scenes[0]["core_concept"] = final_concept
     if llm_story and scenes:
         scenes[0]["story"] = llm_story
+    if scenes and reordered:
+        scenes[0]["photo_reordered"] = True
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
@@ -530,46 +578,38 @@ JSON만 출력:
 
 OWNER_SYSTEM = build_ad_system_prompt("동네 매장·플레이스", mode="owner")
 # 대본 생성 전용: 공용 시스템 프롬프트 + 본론 락인·상투어 금지·고유 명사 규칙 (컨셉 제안·특징 요약 호출에는 붙이지 않음)
-LOCKIN_BLOCK = """[대본 생성 핵심 규칙: 1문장 상호명 숨김 + 팩트 기반 미각 묘사 + 20~28자 리듬 유지]
-1. 상호명 최후반 공개: 1~4문장에서는 매장 상호명을 절대 언급하지 마라. 1문장은 반드시 지역/상황(예: 가평 나들이, 주말 가족 외식)의 고민이나 호기심을 자극하는 후킹으로 시작하고, 상호명은 오직 5문장(마지막 저장·검색 유도 CTA)에서만 공개하라.
-2. 가짜 메뉴 명사 금지 vs 진짜 피사체 미각 묘사 허용:
-   - 입력된 USP나 사진 태그(photo_tags)에 없는 '가짜 메뉴/반찬 이름'을 지어내는 것은 절대 금지한다.
-   - 단, 사진에 실제로 보이는 음식(입력 팩트에 있는 고기·불판·버섯·냉면 등)을 묘사할 때는 "이름부터 믿음직하죠", "맛을 내요", "이어져요" 같은 건조한 설명문 말투를 버리고, "촘촘한 칼집 사이로 달큰한 양념이 쏙 배어든", "시뻘건 참숯 불향을 입혀 노릇하게 구운 뒤 시원한 냉면에 싸 먹는"처럼 침샘을 자극하는 생생한 미각·시각 표현을 적극 사용하라. (이 표현들은 예시이며, 실제 입력 팩트·사진에 있는 피사체에만 붙여라.)
-3. 단어 중복 금지 및 문장 길이 유지: 인접한 문장에서 동일한 어구(예: 같은 '○○ 위 고기'를 연속 사용)를 반복하지 마라. 문장마다 사진 흐름에 따라 초점을 옮겨라(원육·양념 → 불판 조리 → 구운 결과와 곁들임). 각 문장은 공백 포함 20~28자 내외로 작성하여 화면 하단(72%)에 최대 2줄씩 2분할로 깔끔하게 표시되게 하라.
-4. 1문장 떡밥은 4문장까지 이어서 증명하고, "팡 터지는 육즙", "감칠맛 폭발", "겉바속촉", "정갈한 밑반찬", "극락 그 자체", "윤기부터 남달라요", "감탄이 절로" 같은 추상적 맛집 클리셰는 쓰지 마라. 프롬프트 예시의 문구·단어를 그대로 복사하지 마라."""
+LOCKIN_BLOCK = """[절대 원칙: "쇼츠는 광고다. 광고는 1컨셉 1메시지다."]
+1. 단일 메시지 100% 관통: 선택된 단 하나의 코어 컨셉(1메시지)을 1문장부터 5문장까지 절대 바꾸지 말고 끝까지 파고들어 증명하라. 업로드된 사진에 다른 서브 메뉴(냉면, 반찬, 버섯 등)가 보이더라도 대본 중간에 다른 메뉴 소개로 주제를 전환하는 것을 엄격히 금지한다.
+2. 1컨셉 5문장 설득 공식:
+   - 1문장(후킹): 상호명을 절대 쓰지 말고, 오직 선택된 1메시지 주제와 직결된 질문·결핍·통념 깨기로 시작하라.
+   - 2문장(공감/대비): 그 1메시지 영역에서 손님이 평소 겪는 아쉬움이나 실패 경험을 짚어라.
+   - 3문장(핵심 증거): 매장의 추출된 팩트 중 선택된 1메시지를 증명하는 단 하나의 핵심 강점만 구체적으로 제시하라.
+   - 4문장(체감 가치): 그 강점 때문에 손님이 한 입 먹었을 때 느끼는 결정적 차이를 서술하라.
+   - 5문장(CTA): 선택된 1메시지를 다시 한 번 요약하며 지금 저장하고 [지역명 + 상호명]을 검색하게 유도하라.
+3. 문장 길이 및 중복 제한: 인접 문장에 같은 단어를 반복하지 말고, 각 문장은 공백 포함 20~28자 내외로 작성하여 하단(72%)에 1~2줄씩 2분할로 표시되게 하라.
+4. 입력된 USP·메뉴·사진 태그에 없는 가짜 메뉴·반찬 이름은 지어내지 마라. 입력 팩트에 있는 것은 칼집·양념·불향처럼 침샘을 자극하는 미각·시각 표현으로 생생하게 쓰고, "이름부터 믿음직하죠", "맛을 내요", "이어져요" 같은 건조한 캡션 말투와 "팡 터지는 육즙", "감칠맛 폭발", "겉바속촉", "정갈한 밑반찬", "극락 그 자체" 같은 클리셰는 쓰지 마라. 프롬프트 예시의 문구·단어를 그대로 복사하지 마라."""
 OWNER_SCRIPT_SYSTEM = OWNER_SYSTEM + "\n\n" + LOCKIN_BLOCK
-FEWSHOT_BLOCK = """[Few-Shot: 문장 구조 예시 — <꺾쇠> 안은 이 매장의 입력 팩트로 채우세요]
-※ 아래 예시에는 실제 메뉴·반찬·손질법·리뷰 문구를 일부러 넣지 않았습니다. 구조와 밀도만 배우고, <꺾쇠> 자리는 반드시 이 매장의 special_menus·review_nouns·photo_tags·특장점에 있는 단어로만 채우세요. 예시에서 본 단어를 지어내지 마세요.
+FEWSHOT_BLOCK = """[Few-Shot: 1컨셉 1메시지 5문장 구조 예시 — <꺾쇠> 안은 이 매장의 입력 팩트로 채우세요]
+※ 실제 메뉴·반찬·손질법·리뷰 문구는 일부러 넣지 않았습니다. 구조만 배우고 <꺾쇠>는 이 매장의 special_menus·review_nouns·특장점·컨셉에 있는 단어로만 채우세요.
 
-패턴 2 (핀셋 타깃·상황 지정형)
-[Bad: 본론에서 컨셉 이탈 + 상투어 + 화면과 무관한 말]
-1문장: <지역>에서 <타깃 상황>을 앞둔 분들, 딱 15초만 집중하세요.
-2문장: <타깃>도 편하게 드실 만큼 <핵심 주제>가 남다른 곳이에요.
-3문장: 한 입 먹으면 감칠맛이 폭발해요. (상투어, 사진 속 피사체와 무관)
-4문장: 정갈한 밑반찬에 <화면과 무관한 다른 메뉴>까지 한 상 가득이에요. (백화점식 나열, 사진 속 피사체와 무관)
-5문장: 지금 저장해 두고 네이버에서 확인해 보세요.
-[Good: 1문장 주제를 끝까지 + 문장마다 그 화면 사진의 피사체를 직접 + 입력 팩트만]
-1문장: <지역>에서 <타깃 상황>을 앞둔 분들, 딱 15초만 집중하세요.   (사진 1·2: <photo_tags 1·2>)
-2문장: <타깃>도 편하게 드실 만큼 <핵심 주제>가 남다른 곳이에요.       (사진 3: <photo_tags 3>를 직접 가리킴)
-3문장: <special_menus 또는 특장점의 원재료·손질·조리 방식>이라 <핵심 주제>가 가능해요.  (사진 4·5: <photo_tags 4·5>)
-4문장: <review_nouns 또는 입력된 손님 반응>까지 맞물려서 <핵심 주제>가 확인돼요.  (사진 6·7: <photo_tags 6·7> — 그 피사체 이야기)
-5문장: <저장 명분>, 지금 [저장]하고 '<지역> <상호>' 검색해 보세요.   (사진 8: 외관)
-
-패턴 3 (숫자 충격·가성비형)
-[Bad: 숫자 주제 실종 + 상투어]
-1문장: <상호 없이도 말할 수 있는 숫자 팩트>가 깔리는 <지역> 맛집을 찾았어요.
-2문장: 윤기부터 남달라요. (숫자 주제 실종, 상투어)
-3문장: 겉은 바삭하고 속은 촉촉해서 감탄이 절로 나와요. (상투어)
-[Good: 숫자 주제를 증명]
-1문장: <입력된 숫자 팩트>가 깔리는 <지역> <업종>을 찾았어요.
-2문장: <숫자 팩트의 구성 — 입력된 메뉴·반찬 이름만 나열하지 말고 사진 속 것을 짚어서>
-3문장·4문장: <review_nouns 또는 특장점>으로 그 숫자의 값어치를 확인.
-5문장: <저장 명분> + <지역> <상호> 검색."""
+[Bad: 사진을 따라가며 주제가 바뀌는 백화점식 나열]
+1문장: <지역>에서 <상황> 찾는 분들, 주목하세요.
+2문장: <메뉴 A>가 불판 위에서 노릇하게 익어가요.
+3문장: <메뉴 B>도 곁들여 한 상 가득이에요.      (다른 메뉴로 주제 전환)
+4문장: <메뉴 C>까지 깔끔하게 이어져요.          (또 전환 + 건조한 어미)
+5문장: 지금 저장하고 검색해 보세요.
+[Good: 하나의 메시지 <1컨셉>을 5문장 내내 다른 각도로 증명]
+1문장(후킹, 상호 없음): <1컨셉>과 직결된 질문·결핍·통념 깨기   예) <흔한 아쉬움>인데 왜 어떤 집은 <결과>일까요?
+2문장(공감/대비): 그 영역에서 손님이 평소 겪는 아쉬움·실패 경험
+3문장(핵심 증거): <1컨셉>을 증명하는 이 매장의 단 하나의 강점 (입력된 팩트·손질·조리 방식)
+4문장(체감 가치): 그 강점 덕분에 한 입 먹을 때 느끼는 결정적 차이 (미각·시각 표현)
+5문장(CTA): <1컨셉 한 구절 요약> 찾으신다면 지금 저장하고 <지역> <상호>를 검색해 보세요!"""
 
 
 def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
                    hook_hints=None, core_concept: str = "", region: str = "", groups=None,
-                   store_facts: Optional[Dict[str, Any]] = None, photo_tags: Optional[Dict[str, str]] = None):
+                   store_facts: Optional[Dict[str, Any]] = None, photo_tags: Optional[Dict[str, str]] = None,
+                   search_keyword: str = ""):
     from core.llm import generate_json, repair_scene_lines
     from core.script_guard import script_violation_finder
     from core.store_facts import facts_prompt_block
@@ -597,13 +637,14 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
         parts = [(k, tags_by_path.get(media[k], "")) for k in g if k < len(media)]
         line_tags.append(" / ".join(t for _, t in parts if t))
         for k, t in parts:
-            photo_lines.append(f"사진 {k + 1}번 (문장 {i + 1}에서 나옴): {t or '(태그 없음 — 첨부 사진에 실제로 보이는 것만 말하기)'}")
+            photo_lines.append(f"사진 {k + 1}번 (문장 {i + 1} 구간 화면): {t or '(태그 없음)'}")
     facts_block = facts_prompt_block(store_facts or {}, photo_lines)
     evidence = " ".join([usp or "", " ".join((store_facts or {}).get("special_menus") or []),
                          " ".join((store_facts or {}).get("review_nouns") or []), (store_facts or {}).get("location_context") or "",
                          " ".join(tags_by_path.values())])
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
-    concept_guidelines = build_one_concept_guidelines("owner", n, type_label, cta_line, OWNER_POLICY)
+    cta_tail = owner_cta_tail(search_keyword, region)
+    concept_guidelines = build_one_concept_guidelines("owner", n, type_label, f"<선택한 1메시지를 한 구절로 요약> 찾으신다면 {cta_tail}", OWNER_POLICY)
 
     concept_override_prompt = ""
     if core_concept and core_concept.strip():
@@ -630,26 +671,26 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 {concept_guidelines}
 
 [추가 세부 지침]
-- 총 {n}개 씬. 위에 첨부된 [씬 i 미디어]의 사진 내용(매대, 쇼케이스, 간판 등)을 보되, 사물을 단순 나열하지 말고 선정한 '단 하나의 코어 컨셉'을 입증하는 배경과 증거로만 엮으세요!
+- 총 {n}개 씬. 사진은 화면에 지나갈 뿐입니다: 사진에 다른 메뉴(냉면·반찬·버섯 등)가 보여도 나레이션은 그 사진을 설명하거나 다른 메뉴 소개로 넘어가지 말고, 오직 선택한 '단 하나의 코어 컨셉'을 1문장부터 마지막까지 증명하세요!
 - 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
 - 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내).
 - 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {OWNER_POLICY.min_chars + 6}~{OWNER_POLICY.max_chars - 2}자 (최대 {OWNER_POLICY.max_chars}자). 한 문장에 한 가지 이야기만 하세요.
-- 씬마다 새로운 장면·근거를 말하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다 (씬 1 대사는 헤드라인을 받아 '이유'로 이어 갑니다).
+- 씬마다 같은 메시지를 다른 각도(대비·증거·체감)로 증명하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다.
 - 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'.
 - [길이·자막 가독성] 마지막 CTA를 뺀 각 문장은 공백 포함 20~28자로 간결하게 (절대 30자를 넘기지 마세요). 자막이 최대 2줄씩 나뉘어 읽혀야 합니다.
   늘어지는 서술어('~하는 분들은 여기서 확인해 보세요', '~충분해요, 이게 이유예요')는 빼고, 핵심 명사와 짧은 동사 위주로 끊어 쓰세요.
   나쁜 예(31자): "<지역>에서 <메뉴> 고민되면, <상호> <대표 메뉴> 한 상부터 확인해 보세요!"
   좋은 예(22자): "<지역> <메뉴> 고민될 땐, <상호> <대표 메뉴> 한 상이면 끝납니다!"   (<꺾쇠>는 이 매장 정보로 채우기)
-- [문장 역할 (CTA 포함 {n}문장)]: 1문장=후킹(핵심 주제 하나를 던짐) → 2문장=공감·떡밥 전개 → 3문장=1메시지 핵심 증거
-  → 4문장=손님 후기·리뷰 팩트 검증(입력에 리뷰 문구가 있을 때만 인용, 없으면 입력된 사실로 확인해 주는 문장) → 마지막=저장 유도 + 상호명 검색 CTA.
-  씬이 5개가 아니면 같은 흐름으로 늘리거나 줄이되, 1문장의 주제는 CTA 직전 문장까지 이어 가세요.
+- [1컨셉 5문장 설득 공식 (CTA 포함 {n}문장)]: 1문장=후킹(상호 없이, 1메시지와 직결된 질문·결핍·통념 깨기) → 2문장=공감·대비(그 영역에서 손님이 겪는 아쉬움)
+  → 3문장=핵심 증거(이 매장의 단 하나의 강점) → 4문장=체감 가치(그 강점 덕에 한 입 먹을 때 느끼는 결정적 차이) → 마지막=1메시지 요약 + 저장 유도 + 상호명 검색 CTA.
+  씬이 5개가 아니면 같은 흐름으로 늘리거나 줄이되, 1문장의 메시지는 CTA 직전 문장까지 끝까지 이어 가세요.
 - [카피 규칙: 설명이 아니라 세일즈 카피]
   * 조리 과정·행동 묘사 금지: '~구워요', '~잘라요', '그릇에 담아요', '집게로 뒤집을수록' 같은 일기장식 설명문은 쓰지 마세요.
   * 대신 손님이 얻는 감각과 이유를 쓰세요: 육즙, 숯불 향, 식감, 윤기, 살얼음처럼 미각·후각·시각을 건드리는 단어를 씬마다 하나 이상 넣으세요.
     단, 감각어는 USP·사진에 있는 메뉴와 조리 방식에 붙는 것만 쓰고, 없는 재료·'비법'·가격·수치 같은 새 사실은 만들지 마세요.
   * 씬 1 첫 문장은 후킹: 지역명({short_region(region) or '지역명'}) 또는 누구를 위한 곳인지(타깃)를 짚으세요.
     (구조 예: '{short_region(region) or '동네'} 사람들이 ○○ 생각날 때 찾는 곳이에요!' — 문구는 이 매장 정보로 새로 쓰기)
-  * 마지막 씬은 위 '정확히' 지정한 문구(저장 명분 + 검색 유도) 그대로 쓰세요.
+  * 마지막 씬은 선택한 1메시지를 한 구절로 요약한 뒤 반드시 '{cta_tail}'로 끝내세요 (상호명·지역은 이 문장에서만 공개).
 {FEWSHOT_BLOCK}
 - 사장님이 적은 특장점(USP)과 첨부 사진에 없는 메뉴·반찬·조리 방식·시설·서비스는 지어내지 마세요 (예: 적히지 않은 계란찜·냉면·미리 손질).
   매장 운영 방식(손님이 직접 굽는지, 구워서 내는지 등)은 USP에 있는 한 가지로만 일관되게 쓰고, 모르면 방식을 단정하지 말고 맛·분위기·상황으로 말하세요.
@@ -666,7 +707,7 @@ JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시�
     hook_line = str(((data.get("scenes") or [{}])[0] or {}).get("hook_title") or "") if isinstance(data, dict) else ""
     violation_checker = create_length_violation_checker(
         OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True,
-                                              line_tags=line_tags[:len(vo_lines)], evidence=evidence + " " + (core_concept or ""),
+                                              evidence=evidence + " " + (core_concept or ""),
                                               business_name=business_name, region=short_region(region)))
     data, fixes = repair_scene_lines(data, violation_checker, OWNER_SCRIPT_SYSTEM, OWNER_POLICY.repair_instruction, gemini_api_key=api_key)
     for f in fixes:

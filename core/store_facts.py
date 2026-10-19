@@ -247,6 +247,6 @@ def facts_prompt_block(facts: Dict[str, Any], photo_lines: List[str]) -> str:
     lines.append(f"- review_nouns(리뷰에서 2회 이상 반복된 명사): {', '.join(rn) if rn else '(없음)'}")
     lines.append(f"- location_context(방문 상황): {facts.get('location_context') or '(없음)'}")
     if photo_lines:
-        lines.append("- photo_tags(사진 속에 실제로 보이는 것):")
+        lines.append("- photo_tags(사진 속에 실제로 보이는 것 — 컷 배치 참고용. 나레이션이 사진을 따라가며 주제를 바꾸면 안 됩니다):")
         lines += [f"    {ln}" for ln in photo_lines]
     return "\n".join(lines)

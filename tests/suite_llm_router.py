@@ -276,14 +276,17 @@ rt._overrides = {}
 _pp = seen_prompt.get("p", "")
 check("지역: 가평" in _pp and "육즙" in _pp and "조리 과정·행동 묘사 금지" in _pp and "지역명(가평)" in _pp and "지금 저장하고 가평 설맥을 검색해 보세요!" in _pp,
       "사장님 프롬프트: 설명조 금지·감각어(육즙·숯불 향)·지역 후킹·저장 명분 CTA 규칙과 지역명이 전달됨")
-check("Few-Shot" in _pp and "<꺾쇠>" in _pp and "[Bad" in _pp and "[Good" in _pp and "문장 역할" in _pp
+check("Few-Shot" in _pp and "<꺾쇠>" in _pp and "[Bad" in _pp and "[Good" in _pp and "1컨셉 5문장 설득 공식" in _pp
       and not any(w in _pp for w in ("양념게장", "과일 양념", "속이 편하다", "수제 칼집", "근막", "겉절이", "더덕무침")),
       "사장님 프롬프트: Few-Shot은 <꺾쇠> 자리만 둔 구조 예시 (복붙할 실제 단어 없음) + 문장 역할(후킹→전개→증거→리뷰→CTA)")
 check("눈꽃버섯 갈비탕" in _pp and "격자 칼집" in _pp and "사진 4번" in _pp and "유기그릇 물냉면" in _pp and "photo_tags" in _pp,
       "사장님 프롬프트: 이 매장의 special_menus·review_nouns·사진별 photo_tags(번호별 피사체)가 대본 프롬프트에 전달됨")
-check("상호명 최후반 공개" in seen_prompt.get("sys", "") and "가짜 메뉴 명사 금지 vs 진짜 피사체 미각 묘사 허용" in seen_prompt.get("sys", "")
-      and "단어 중복 금지 및 문장 길이 유지" in seen_prompt.get("sys", "") and "프롬프트 예시의 문구·단어를 그대로 복사하지 마라" in seen_prompt.get("sys", ""),
-      "사장님 대본 시스템 프롬프트: 상호명은 CTA에서만·가짜 메뉴만 금지(미각 묘사 허용)·인접 어구 반복 금지·예시 복붙 금지")
+_sys = seen_prompt.get("sys", "")
+check("쇼츠는 광고다. 광고는 1컨셉 1메시지다" in _sys and "단일 메시지 100% 관통" in _sys and "1컨셉 5문장 설득 공식" in _sys
+      and "문장 길이 및 중복 제한" in _sys and "프롬프트 예시의 문구·단어를 그대로 복사하지 마라" in _sys and "상호명을 절대 쓰지 말고" in _sys,
+      "사장님 대본 시스템 프롬프트: 1컨셉 1메시지 단일 관통·5문장 설득 공식(상호명은 CTA에서만)·문장 길이/중복 제한·예시 복붙 금지")
+check("사진은 화면에 지나갈 뿐" in _pp and "다른 메뉴 소개로 넘어가지 말고" in _pp and "{cta_tail}" not in _pp and "지금 저장하고 가평 설맥을 검색해 보세요!" in _pp,
+      "사장님 프롬프트: 사진을 따라 주제를 바꾸지 않고 1컨셉만 증명, 마지막 문장은 1메시지 요약 + 저장·검색 꼬리 문구")
 check("1~4문장에서는 절대 말하지 마세요" in _pp, "사장님 프롬프트: 상호명 줄에 '1~4문장 절대 금지, CTA에서만 공개' 명시")
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
