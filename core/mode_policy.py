@@ -57,6 +57,11 @@ class ModePolicy:
     tone_instruction: str      # LLM 프롬프트에 주입할 모드별 고유 대본 규칙
     repair_instruction: str    # 초과 시 LLM 재작성 규칙
 
+    # 6. 자막 배치 보조 (기본값은 기존 동작 그대로)
+    caption_max_width: float = 0.72      # 자막 줄 폭 상한 (화면 너비 대비)
+    caption_chunk_chars: int = 0         # 0이 아니면: 이 글자 수(공백 포함)를 넘는 문장은 자막을 앞/뒤 덩어리로 나눠 순차 표시 (TTS는 그대로)
+    landscape_fg_center_y: float = 0.50  # 가로 영상을 흐린 배경 위에 얹을 때 원본의 세로 중심 (0.50 = 정중앙)
+
 
 # =================================================================
 # 공통 표준: "쇼츠는 광고다. 광고는 1컨셉 1메시지다"
@@ -111,20 +116,23 @@ def build_one_concept_guidelines(mode: str, n_scenes: int, category_name: str, c
 OWNER_POLICY = ModePolicy(
     mode="owner",
     name_ko="매장/플레이스 직영",
-    min_chars=16,
-    target_chars=30,
-    max_chars=40,               # 5문장 150~190자(CTA 포함) 대본: 본론 문장은 씬당 24~38자, 온전한 서술어 보존 위해 최대 40자 허용
+    min_chars=14,
+    target_chars=24,
+    max_chars=30,               # 본론 문장 20~28자 (자막 2줄 덩어리로 나눠 읽기 쉽게). CTA는 정해진 문구라 예외
     min_scene_sec=2.8,
     max_scene_sec=3.3,
     default_scene_sec=3.0,
     tts_rate="+10%",            # 자연스럽고 여유 있는 템포
     xfade_sec=0.25,
     tail_sec=0.20,
-    caption_font_ratio=0.074,   # 18~25자 자막에 맞춘 가독성 최적 비율
+    caption_font_ratio=0.064,   # 예전 0.074에서 약 13.5% 축소: 한 줄 11~12자, 최대 2줄 덩어리
     caption_stroke_ratio=0.0075,
-    center_y=0.50,
+    center_y=0.72,              # 정중앙(0.50)이 음식 사진을 가려서 하단 안전 영역으로 (쇼츠 하단 UI 0.82 위)
     bold_impact=True,
     single_voice_only=True,
+    caption_max_width=0.76,
+    caption_chunk_chars=18,
+    landscape_fg_center_y=0.43,
     tone_instruction="""[매장/플레이스 1컨셉 1메시지 광고 규칙 (필수 준수)]
 - [1컨셉 1메시지 집중]: 매장의 여러 품목을 이것저것 단순 나열하지 말고, 30초 전체를 관통하는 단 하나의 핵심 메시지(Core USP)를 관통시키세요.
 - [사진을 입증 근거로 활용]: 서로 다른 사진이 나오더라도, 각 씬의 대사는 선정된 단 하나의 핵심 컨셉(Core USP)을 입증하는 배경과 혜택으로만 수렴하세요.

@@ -199,9 +199,26 @@ class AdCompositor:
         return words
 
 
+    def caption_chunks(self, text: str, mode: str, width: int = 1080) -> List[str]:
+        """자막 문장 → 화면에 순서대로 띄울 덩어리 (정책의 caption_chunk_chars를 넘을 때만, 덩어리마다 실제 폰트로 2줄 이내). TTS는 영향 없음"""
+        from core.mode_policy import get_mode_policy
+        from core.render.caption_chunks import split_caption
+        policy = get_mode_policy(mode)
+        t = (text or "").strip()
+        if not t or not policy.caption_chunk_chars or mode not in CENTER_CAPTION_MODES:
+            return [t] if t else []
+        draw = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+        try:
+            font = ImageFont.truetype(self.serif_font_path if mode == "book" else self.font_path, int(width * policy.caption_font_ratio))
+        except Exception:
+            return [t]
+        max_w = int(width * policy.caption_max_width)
+        return split_caption(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2, chunk_chars=policy.caption_chunk_chars)
+
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
                        center_y: float = CAPTION_CENTER_Y, font_path: Optional[str] = None,
-                       caption_ratio: float = CAPTION_FONT_RATIO, stroke_ratio: Optional[float] = None) -> np.ndarray:
+                       caption_ratio: float = CAPTION_FONT_RATIO, stroke_ratio: Optional[float] = None,
+                       max_width_ratio: float = CAPTION_MAX_WIDTH) -> np.ndarray:
         """
         travel/owner 공통 하단 자막 (배경 박스 없음):
         - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
@@ -221,12 +238,12 @@ class AdCompositor:
         groups = []   # (줄 목록, 폰트, 글자색, 줄 높이)
         if hook_title and hook_title.strip():
             hf = font(int(width * HOOK_FONT_RATIO))
-            lines = self._wrap_text(hook_title.strip(), draw, hf, max_width=int(width * CAPTION_MAX_WIDTH))
+            lines = self._wrap_text(hook_title.strip(), draw, hf, max_width=int(width * max_width_ratio))
             if lines:
                 groups.append((lines, hf, HOOK_HEADLINE_COLOR + (255,), int(hf.size * 1.2)))
         if caption_text and caption_text.strip():
             cf = font(int(width * caption_ratio))
-            lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * CAPTION_MAX_WIDTH))
+            lines = self._wrap_text(caption_text.strip(), draw, cf, max_width=int(width * max_width_ratio))
             if lines:
                 groups.append((lines, cf, (255, 255, 255, 255), int(cf.size * 1.28)))
         if not groups:
@@ -643,7 +660,7 @@ class AdCompositor:
             st_ratio = kwargs.get("stroke_ratio") or policy.caption_stroke_ratio
             return self._caption_block(caption_text, hook_title, width, height, center_y=float(center),
                                        font_path=self.serif_font_path if mode == "book" else None,
-                                       caption_ratio=cap_ratio, stroke_ratio=st_ratio)
+                                       caption_ratio=cap_ratio, stroke_ratio=st_ratio, max_width_ratio=policy.caption_max_width)
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
@@ -924,6 +941,12 @@ class AdCompositor:
                         logger.info(f"씬 {scene_num} 후킹 단독 0~{hook_sec:.2f}초 '{hook_title}' → 서브 자막 '{caption_text}'")
                     else:
                         segments = [(0.0, scene_target_duration, caption_text, None if is_partial_echo else hook_title)]
+                        chunks = self.caption_chunks(caption_text, mode, w) if (mode in CENTER_CAPTION_MODES and caption_text) else []
+                        if len(chunks) > 1:
+                            # 긴 문장은 최대 2줄씩 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율)
+                            from core.render.caption_chunks import chunk_windows
+                            wins = chunk_windows(chunks, audio_duration, scene_target_duration)
+                            segments = [(s0, e0 - s0, c, None) for c, (s0, e0) in zip(chunks, wins)]
                         if mode in CENTER_CAPTION_MODES:
                             logger.info(f"씬 {scene_num} 중앙 자막 렌더링 (화면 50%): '{caption_text}'")
                         elif hook_title and hook_title.strip():

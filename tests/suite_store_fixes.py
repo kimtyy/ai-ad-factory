@@ -187,7 +187,7 @@ try:
     wp = []
     for t in (0.7, 1.0, 1.6):
         _, arr = orange_px(res_on.final_path, t)
-        wp.append(int((arr[int(1920 * 0.40):int(1920 * 0.60)].min(axis=2) > 235).sum()))
+        wp.append(int((arr[int(1920 * 0.62):int(1920 * 0.84)].min(axis=2) > 235).sum()))
     check(all(w > 1500 for w in wp) and max(wp) < 2.0 * min(wp),
           f"커버 이후 씬 1 자막: 0.7/1.0/1.6초 모두 같은 본문 자막 (흰 글자 {wp}px, 후킹 조각으로 바뀌지 않음)")
     check(res_on.cover_path and os.path.basename(res_on.cover_path) == "thumbnail.jpg" and os.path.exists(res_on.cover_path),
@@ -302,7 +302,7 @@ try:
     subprocess.run([FF, "-y", "-hide_banner", "-loglevel", "error", "-ss", "0.3", "-i", out, "-frames:v", "1", fr], check=True)
     arr = np.asarray(Image.open(fr).convert("RGB"))
     yellow = int(((arr[:, :, 0] > 220) & (arr[:, :, 1] > 180) & (arr[:, :, 2] < 70)).sum())
-    white = int((arr[int(1920 * 0.40):int(1920 * 0.60)].min(axis=2) > 235).sum())
+    white = int((arr[int(1920 * 0.62):int(1920 * 0.84)].min(axis=2) > 235).sum())
     check(white > 1500 and yellow < 300, f"직가공: 0.3초에 후킹 헤드라인 없이 본문 자막이 바로 나옴 (흰 {white}px, 노랑 {yellow}px)")
 
 finally:

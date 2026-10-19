@@ -47,11 +47,12 @@ spec_cap = comp.create_overlay_image(spec_text, "", W, H, mode="owner")
 check(spec_cap[:, :, 3].max() >= 200, "특수기호(1+1·2+1) 포함 자막 오버레이 생성 성공")
 check(clamp_line_to_policy(spec_text, OWNER_POLICY) == spec_text, "첫 씬 특수문자 완결 대사 정책 클램프 시 원문 보존")
 
-for name, arr in (("후킹 단독", hook_only), ("서브 자막", cap), ("긴 자막", long_cap), ("특수 자막", spec_cap)):
+# travel은 화면 정중앙(50%), owner는 음식·매장 사진을 가리지 않게 하단 안전 영역(72%)
+for name, arr, lo, hi in (("후킹 단독", hook_only, 0.48, 0.52), ("서브 자막", cap, 0.68, 0.76), ("긴 자막", long_cap, 0.48, 0.52), ("특수 자막", spec_cap, 0.68, 0.76)):
     t_, b_ = alpha_rows(arr)
     cols = np.where(arr[:, :, 3].max(axis=0) >= 100)[0] / W
-    check(0.48 <= (t_ + b_) / 2 <= 0.52 and b_ < 0.65 and cols.min() >= 0.12 and cols.max() <= 0.88,
-          f"{name}: 세로 중심 {(t_ + b_) / 2:.2f} (48~52%), 아래 끝 {b_:.2f} < 쇼츠 하단 UI(약 65%~), 가로 {cols.min():.2f}~{cols.max():.2f} (우측 버튼 열 회피)")
+    check(lo <= (t_ + b_) / 2 <= hi and b_ < 0.82 and cols.min() >= 0.10 and cols.max() <= 0.90,
+          f"{name}: 세로 중심 {(t_ + b_) / 2:.2f} ({int(lo * 100)}~{int(hi * 100)}%), 아래 끝 {b_:.2f} < 쇼츠 하단 UI(약 82%~), 가로 {cols.min():.2f}~{cols.max():.2f} (우측 버튼 열 회피)")
 yellow = (hook_only[:, :, 0] > 230) & (hook_only[:, :, 1] > 190) & (hook_only[:, :, 2] < 60) & (hook_only[:, :, 3] > 200)
 ys = np.where(yellow.any(axis=1))[0] / H
 check(len(ys) and ys.min() > 0.4 and not ((cap[:, :, 0] > 230) & (cap[:, :, 2] < 60) & (cap[:, :, 3] > 200)).any(),

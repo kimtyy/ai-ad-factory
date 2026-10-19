@@ -187,6 +187,11 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             segs = [(0.0, hs, None, hook), (hs, dur, caption, None)]
         else:
             segs = [(0.0, dur, caption, None if is_partial_echo else hook)]
+            chunks = comp.caption_chunks(caption, mode, W) if (mode in center_modes and caption) else []
+            if len(chunks) > 1:
+                # 긴 문장은 최대 2줄씩 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율, 마지막 덩어리는 씬 끝까지)
+                from core.render.caption_chunks import chunk_windows
+                segs = [(s0, e0, c, None) for c, (s0, e0) in zip(chunks, chunk_windows(chunks, a_dur, dur))]
         pngs = []
         for j, (s, e, cap, hk) in enumerate(segs):
             if not (cap or hk or brand or disclosure or bars or label or quote or item.get("info_line")):

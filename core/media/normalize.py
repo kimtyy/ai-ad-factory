@@ -95,10 +95,12 @@ def normalize_ugc_clip(
     width: int = 1080,
     height: int = 1920,
     fps: int = 24,
-    fit: str = "auto"
+    fit: str = "auto",
+    fg_center_y: float = 0.5
 ) -> str:
     """
     UGC 영상을 [start, start+duration] 구간의 규격 클립으로 변환하여 dst에 저장합니다.
+    fg_center_y: 'blur' 배치에서 원본(가로 영상)의 세로 중심 비율 (0.5 = 정중앙, 매장 모드는 자막이 아래에 들어가도록 0.43)
     fit: 'cover'(꽉 채워 크롭) | 'blur'(흐린 배경 채움) | 'auto'(세로면 cover, 아니면 blur)
     """
     info = probe_media(src)
@@ -129,7 +131,7 @@ def normalize_ugc_clip(
             f"[a]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
             f"gblur=sigma=40,eq=brightness=-0.08[bg];"
             f"[b]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps},format=yuv420p,setsar=1[v]"
+            f"[bg][fg]overlay=(W-w)/2:H*{float(fg_center_y):.3f}-h/2,fps={fps},format=yuv420p,setsar=1[v]"
         )
     else:
         graph = (

@@ -839,12 +839,15 @@ class AssetGenerator:
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         # Ken Burns와 동일하게 나레이션 + 테일 마진을 덮는 길이로 생성 (compositor가 오디오 길이에 맞춰 컷)
         duration_sec = max(float(scene.get("duration_sec", 3.0)) + 2.0, 5.0)
+        from core.mode_policy import get_mode_policy
+        fg_cy = float(get_mode_policy(self.mode).landscape_fg_center_y)          # 가로 영상은 위쪽에 배치해 하단 자막 자리 확보 (매장 0.43)
         signature = {
             "src": os.path.abspath(media["path"]),
             "src_mtime": os.path.getmtime(media["path"]),
             "trim_start": float(media.get("trim_start", DEFAULT_TRIM_START)),
             "fit": media.get("fit", "auto"),
             "duration": duration_sec,
+            "fg_center_y": fg_cy,
         }
         sig_path = out_path + ".json"
         if not force and self.is_cached(out_path) and os.path.exists(sig_path):
@@ -863,7 +866,8 @@ class AssetGenerator:
             duration=duration_sec,
             start=signature["trim_start"],
             fps=24,
-            fit=signature["fit"]
+            fit=signature["fit"],
+            fg_center_y=fg_cy
         )
         with open(sig_path, "w", encoding="utf-8") as f:
             json.dump(signature, f)
