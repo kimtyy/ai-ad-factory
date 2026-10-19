@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from core.store_facts import extract_review_nouns, extract_special_menus, location_context
+from core.store_facts import extract_review_nouns, extract_special_menus, food_vocab_hits, location_context
 
 logger = logging.getLogger("ad_factory.store_research")
 
@@ -51,7 +51,8 @@ def naver_blog_snippets(name: str, client_id: str, client_secret: str, display: 
         attempts = [(f"https://naverapihub.apigw.ntruss.com/search/v1/{kind}", {"X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": client_secret})]
         if kind == "blog":
             attempts.append((LEGACY_BLOG_URL, {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}))
-        for suffix in (("메뉴 솔직후기", "후기", "맛집") if kind == "blog" else ("메뉴",)):         # 검색어를 바꿔 요약문을 더 모음
+        # 검색어를 바꿔 요약문을 더 모음: 도입부 인사말만 오지 않게 본문 중간 키워드(밑반찬·냉면 갈비탕·메뉴판)도 포함
+        for suffix in (("메뉴 솔직후기", "후기", "맛집", "밑반찬", "냉면 갈비탕", "메뉴판") if kind == "blog" else ("메뉴", "메뉴판")):
             q = f"{name.strip()} {suffix}"
             hit = False
             for url, headers in attempts:
@@ -187,6 +188,10 @@ def merge_research(local: List[Dict[str, Any]], blog_snippets: List[str], ground
             confirmed["special_menus"].append(m)
     for n in _drop_noise(extract_review_nouns(blog_text), noise, name):
         if n not in confirmed["review_nouns"]:
+            confirmed["review_nouns"].append(n)
+    # 공식 API 요약문은 실제 방문자 기록이라 Gemini와 교차 확인되지 않아도 음식·반찬·조리·시설 어휘가 1회 이상 나오면 확정
+    for n in _drop_noise(food_vocab_hits(blog_text), noise, name):
+        if n not in confirmed["review_nouns"] and not any(n in c or c in n for c in confirmed["review_nouns"]):
             confirmed["review_nouns"].append(n)
 
     # Gemini 그라운딩: 검색 근거 링크가 있거나(진짜 검색), 블로그 요약문에도 나오면 확인됨. 그 외는 미확인

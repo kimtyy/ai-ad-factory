@@ -195,6 +195,9 @@ COPY_TONE_RULES = """[대본 톤 - 3자 큐레이터가 시청자에게 '이런 
 # 판에 박힌 패턴 (요청: 엄격 금지) → 생성 직후 한 번 다시 쓰게 하고, 그래도 남으면 안전 문구로 교체
 BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"거든요", "'~거든요' 어미"),
+    (r"이름부터\s*믿음", "올드한 홍보 문구 '이름부터 믿음직'"),
+    (r"맛을\s*내요|맛을\s*냅니다", "무미건조한 서술 '맛을 내요' (맛·향·식감을 생생하게)"),
+    (r"이어져요|이어집니다", "무미건조한 서술 '~이어져요'"),
     # 전국 매장 공용 AI 맛집 상투어 (상호명만 가리면 어느 가게에나 쓸 수 있는 문구)
     (r"팡\s*터지는\s*육즙|육즙이\s*미쳤", "AI 상투어 '팡 터지는 육즙' (이 매장만의 사실로 바꾸기)"),
     (r"감칠맛\s*(이\s*)?폭발", "AI 상투어 '감칠맛 폭발'"),
@@ -502,6 +505,96 @@ def find_example_copy(text: str, evidence: str = "") -> Optional[str]:
     return None
 
 
+# 대본에 '지어내면 안 되는' 요리·반찬 이름 (입력 팩트·사진에 없는데 대사에 나오면 가짜 메뉴). 조리·미각 표현(숯불·칼집·육즙 등)은 여기에 넣지 않는다
+MENU_VOCAB = ("양념게장", "간장게장", "잡채", "계란찜", "된장찌개", "김치찌개", "비빔밥", "육회", "한우", "보쌈", "족발", "수육", "파전", "도토리묵",
+              "샐러드", "겉절이", "더덕무침", "명이나물", "동치미", "잔치국수", "칼국수", "막국수", "곰탕", "설렁탕", "순두부", "불고기", "삼겹살",
+              "목살", "항정살", "냉면", "갈비탕", "소불고기", "떡갈비", "돈까스", "닭갈비", "해물탕", "전골", "쌈채소", "나물", "어묵", "순대")
+
+
+def find_invented_menu(text: str, evidence: str = "") -> Optional[str]:
+    """
+    입력 팩트(특장점·메뉴·리뷰 명사·사진 태그)에 없는 요리·반찬 이름, 근거 없는 'N가지' 가짓수 → 지어낸 말 반환.
+    사진·팩트에 있는 음식을 맛있게 묘사하는 수식어·동사는 건드리지 않는다.
+    """
+    t = re.sub(r"\s+", "", text or "")
+    ev = re.sub(r"\s+", "", evidence or "")
+    for w in MENU_VOCAB:
+        if w in t and w not in ev:
+            return w
+    m = re.search(r"\d+가지|열한가지|열두가지|열가지", t)
+    if m and m.group(0) not in ev:
+        return m.group(0)
+    return None
+
+
+def find_name_leak(text: str, business_name: str = "") -> Optional[str]:
+    """1~4문장에서 상호명(또는 고유 부분)이 나오면 걸린 표현 (상호명은 마지막 CTA에서만 공개)"""
+    name = re.sub(r"\s+", "", business_name or "")
+    if len(name) < 3:
+        return None
+    t = re.sub(r"\s+", "", text or "")
+    if name in t:
+        return name
+    core = re.sub(r"(갈비|식당|맛집|횟집|한식|고기집|카페|본점|[0-9]+호점)", "", name)
+    for i in range(0, max(len(core) - 1, 0), 2):          # '효정명인' → '효정', '명인' 조각도 상호 노출로 봄
+        chunk = core[i:i + 2]
+        if len(chunk) == 2 and chunk in t:
+            return chunk
+    return None
+
+
+_SITUATION = re.compile(r"(나들이|외식|주말|여행|가족|부모님|퇴근|점심|저녁|데이트|모임|회식|들르|찾으신다면|찾는|고르|고민|\?)")
+
+
+def hook_situation_issues(lines: List[str], region: str = "") -> Dict[int, str]:
+    """1문장은 방문 상황 지목 또는 손실 회피 질문으로 시작해야 함 (상황어·지역·물음표가 하나도 없으면 밋밋한 설명문)"""
+    if not lines or not (lines[0] or "").strip():
+        return {}
+    first = lines[0]
+    if _SITUATION.search(first) or (region and region in first):
+        return {}
+    return {0: "1문장은 방문 상황 지목('주말 가족 외식 찾으신다면')이나 손실 회피 질문('잘못 고르면 그날 기분 망치죠?')으로 시작하기 (밋밋한 설명 금지)"}
+
+
+def adjacent_repeat_issues(lines: List[str], concept: str = "") -> Dict[int, str]:
+    """바로 앞 문장과 핵심 명사구를 또 쓰는 문장 ('석쇠 위 고기' → '숯불 석쇠 위 양념 고기'). 컨셉 단어는 모든 문장에 들어가므로 제외"""
+    skip = content_stems(concept)
+    issues: Dict[int, str] = {}
+    prev: set = set()
+    for i, t in enumerate(lines):
+        cur = content_stems(t or "") - skip
+        if i and len(cur & prev) >= 2:
+            issues[i] = "앞 문장과 같은 어구 반복 → 사진 흐름에 맞춰 다른 피사체·조리 단계로 초점 옮기기 (같은 명사구 연속 금지)"
+        prev = cur
+    return issues
+
+
+def photo_conflict_issues(lines: List[str], line_tags: List[str], all_tags: List[str]) -> Dict[int, str]:
+    """
+    사진-대사 충돌만 지적: 이 문장 화면 사진의 피사체는 한 번도 안 말하면서, 다른 장면 사진의 피사체(냉면 사진인데 갈비 식감 등)만 말하는 문장.
+    피사체를 맛있게 묘사하는 수식어만 있고 이름을 안 쓰는 문장은 허용한다.
+    """
+    def words(s: str) -> set:
+        return {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", s or "") if w not in _STEM_STOP}
+
+    issues: Dict[int, str] = {}
+    for i, (line, tags) in enumerate(zip(lines, line_tags)):
+        own = words(tags)
+        if not own or not (line or "").strip():
+            continue
+        if any(w in line for w in own) or any(w[:2] in line for w in own):
+            continue
+        foreign = set()
+        for j, other in enumerate(all_tags):
+            if j != i:
+                foreign |= words(other)
+        foreign -= own
+        hit = [w for w in foreign if len(w) >= 2 and w in line]
+        if hit:
+            issues[i] = f"이 장면 사진에는 '{tags.strip()[:40]}'이(가) 보이는데 다른 장면 피사체('{hit[0]}') 이야기만 함 → 이 사진 속 피사체를 맛있게 묘사하기"
+    return issues
+
+
 def photo_sync_issues(lines: List[str], line_tags: List[str]) -> Dict[int, str]:
     """
     사진-대사 1:1 일치: 각 대사가 그 시간대 화면 사진의 피사체(photo_tags)를 한 번은 직접 가리키는지.
@@ -572,7 +665,8 @@ def unique_fact_issues(lines: List[str], usp: str = "", need: int = 2) -> Dict[i
 
 
 def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None,
-                            usp: str = "", lock_topic: bool = False, line_tags: Optional[List[str]] = None, evidence: str = ""):
+                            usp: str = "", lock_topic: bool = False, line_tags: Optional[List[str]] = None, evidence: str = "",
+                            business_name: str = "", region: str = ""):
     """
     대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
     씬 간 반복(훅 포함) + 1컨셉 연관성(core_concept를 넘긴 경우)
@@ -588,13 +682,25 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
             ph = find_example_copy(t, evidence)
             if ph:
                 flagged.setdefault(lines[i], f"예시 문구 복붙('{ph}') → 이 매장의 입력 팩트(special_menus·review_nouns·photo_tags)에 있는 말로만 다시 쓰기")
+    if business_name:
+        for i, t in enumerate(lines):
+            leak = find_name_leak(t, business_name)
+            if leak:
+                flagged.setdefault(lines[i], f"1~4문장에 상호명('{leak}') 노출 → 상호명은 마지막 CTA에서만 공개, 이 문장은 상호 없이 쓰기")
+    if evidence:
+        for i, t in enumerate(lines):
+            fake = find_invented_menu(t, evidence)
+            if fake:
+                flagged.setdefault(lines[i], f"입력에 없는 메뉴·가짜 명사('{fake}') → 입력된 메뉴·사진 속 음식만 쓰고, 맛·향·식감 표현으로 생생하게")
     if line_tags:
-        for i, msg in photo_sync_issues(lines, line_tags).items():
+        for i, msg in photo_conflict_issues(lines, line_tags, line_tags).items():
             flagged.setdefault(lines[i], msg)
     if lock_topic:
-        for i, msg in topic_lock_issues(lines, core_concept, usp).items():
+        for i, msg in hook_situation_issues(lines, region).items():
             flagged.setdefault(lines[i], msg)
-        for i, msg in unique_fact_issues(lines, usp).items():
+        for i, msg in adjacent_repeat_issues(lines, core_concept).items():
+            flagged.setdefault(lines[i], msg)
+        for i, msg in topic_lock_issues(lines, core_concept, usp).items():
             flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():

@@ -58,6 +58,12 @@ os.environ["STORE_RESEARCH_DISABLE"] = "1"
 check(research_store(NAME, gemini_api_key="x", naver_id="a", naver_secret="b")["steps"]["naver_blog"] == 0, "STORE_RESEARCH_DISABLE=1 이면 외부 호출 없음")
 os.environ["STORE_RESEARCH_DISABLE"] = ""
 
+# 공식 API 요약문에 한 번만 나와도 음식·반찬·시설 어휘는 즉시 확정 (Gemini 교차 확인 없이)
+rv = research_store(NAME, "", region="가평", local_fn=lambda q: LOCAL, gemini_fn=lambda q, rg: {},
+                    blog_fn=lambda q: [f"{NAME} 가평 설악 갔는데 밑반찬으로 양념게장이 나왔어요. 주차장도 넓었어요."])
+check("양념게장" in rv["confirmed"]["review_nouns"] and "주차장" in rv["confirmed"]["review_nouns"] and rv["unconfirmed"]["review_nouns"] == [],
+      f"공식 API 요약문에 1회만 나온 반찬·시설도 확정: {rv['confirmed']['review_nouns']}")
+
 # ---------------------------------------------------------------- 2. 네이버 블로그 검색 (공식 API HUB, 가짜 응답): 같은 이름 다른 지역 글·다른 가게 글 제외
 calls = []
 
@@ -82,6 +88,7 @@ kinds_called = {u.rsplit("/", 1)[-1] for u, _, _ in calls}
 check(len(sn) == 1 and "양념돼지갈비" in sn[0] and len({q for _, q, _ in calls}) >= 3 and "X-NCP-APIGW-API-KEY-ID" in calls[0][2]
       and calls[0][0].endswith("/search/v1/blog") and {"blog", "webkr", "cafearticle", "news"} <= kinds_called,
       f"네이버 검색: 상호+지역이 맞는 글만(다른 지역·다른 가게 제외), 블로그 검색어 3종 + 웹문서·카페글·뉴스, 중복 제거, API HUB 헤더 ({len(sn)}건)")
+check({q.split(" ", 1)[1] for _, q, _ in calls if q} >= {"밑반찬", "냉면 갈비탕", "메뉴판"}, "블로그 검색어에 본문 중간 키워드(밑반찬·냉면 갈비탕·메뉴판) 포함")
 # 앱에서 켜지 않은 검색 종류(401)는 건너뛰고 블로그만으로 진행
 nl.requests.get = lambda url, params=None, headers=None, timeout=None: (R() if url.endswith("/blog") else type("E", (), {"status_code": 401, "json": lambda self: {}})())
 try:

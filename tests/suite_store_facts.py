@@ -101,5 +101,24 @@ p = sent.get("prompt", "")
 check(len(sc) == 5 and "눈꽃버섯 갈비탕" in p and "격자 칼집" in p and "사진 1번" in p and "사진 8번" in p and "문장 4에서 나옴" in p
       and "참숯 불판 위 노릇한 갈비" in p and sc[0].get("photo_tags"),
       "기획: 자동 사진 태깅 → 팩트·사진 번호별 피사체가 프롬프트에 들어가고 문장 번호와 맞물림, 화면 확인용 photo_tags 저장")
+# ---------------------------------------------------------------- 상호명은 마지막 CTA에서만: LLM이 1~4문장에 상호를 써도 제거, 가짜 메뉴는 안전 문구로
+from core.planners.owner import plan_owner_storyboard
+
+
+def claude_leaky(contents, system, temperature, max_tokens):
+    return json.dumps({"story": "...", "scenes": [{"scene_index": i + 1, "role": "exterior", "hook_title": "가평 갈비 가는 길이에요" if i == 0 else "",
+                                                    "voiceover": ["가평 효정명인갈비, 이름부터 믿음직하죠!", "촘촘한 칼집 사이로 달큰한 양념이 쏙 배어들어요.",
+                                                                  "양념게장이 한 상 가득 나와요.", "시뻘건 참숯 불향에 노릇하게 구워내요.", "x"][i]} for i in range(5)]},
+                      ensure_ascii=False)
+
+
+rt._overrides = {"claude": claude_leaky}
+sl = plan_owner_storyboard("효정명인갈비", "숯불 양념 생갈비, 칼집, 참숯 불판", "food", "효정명인갈비", ups[:5], api_key="g", region="경기 가평군",
+                           store_facts={"special_menus": [], "review_nouns": [], "location_context": ""}, photo_tags={})
+rt._overrides = {}
+body = [x["voiceover"] for x in sl[:-1]]
+check(not any("효정명인갈비" in v or "효정" in v for v in body) and "효정명인갈비" in sl[-1]["voiceover"] and sl[-1]["role"] == "cta"
+      and not any("양념게장" in v for v in body) and any("칼집" in v for v in body),
+      f"상호명은 마지막 CTA에서만 공개 (1~4문장의 상호 제거), 입력에 없는 '양념게장'은 안전 문구로, 칼집·양념 미각 묘사는 유지: {body[:2]}")
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)

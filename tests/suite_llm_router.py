@@ -281,9 +281,10 @@ check("Few-Shot" in _pp and "<꺾쇠>" in _pp and "[Bad" in _pp and "[Good" in _
       "사장님 프롬프트: Few-Shot은 <꺾쇠> 자리만 둔 구조 예시 (복붙할 실제 단어 없음) + 문장 역할(후킹→전개→증거→리뷰→CTA)")
 check("눈꽃버섯 갈비탕" in _pp and "격자 칼집" in _pp and "사진 4번" in _pp and "유기그릇 물냉면" in _pp and "photo_tags" in _pp,
       "사장님 프롬프트: 이 매장의 special_menus·review_nouns·사진별 photo_tags(번호별 피사체)가 대본 프롬프트에 전달됨")
-check("예시 단어 복붙(할루시네이션) 절대 금지" in seen_prompt.get("sys", "") and "사진-대사 1:1 일치 강제" in seen_prompt.get("sys", "")
-      and "1문장 떡밥 회수 및 AI 상투어 금지" in seen_prompt.get("sys", "") and "5문장 : 8컷" in seen_prompt.get("sys", ""),
-      "사장님 대본 시스템 프롬프트: 예시 복붙 금지·사진-대사 1:1·떡밥 회수/상투어 금지·5문장:8컷 4대 규칙 포함")
+check("상호명 최후반 공개" in seen_prompt.get("sys", "") and "가짜 메뉴 명사 금지 vs 진짜 피사체 미각 묘사 허용" in seen_prompt.get("sys", "")
+      and "단어 중복 금지 및 문장 길이 유지" in seen_prompt.get("sys", "") and "프롬프트 예시의 문구·단어를 그대로 복사하지 마라" in seen_prompt.get("sys", ""),
+      "사장님 대본 시스템 프롬프트: 상호명은 CTA에서만·가짜 메뉴만 금지(미각 묘사 허용)·인접 어구 반복 금지·예시 복붙 금지")
+check("1~4문장에서는 절대 말하지 마세요" in _pp, "사장님 프롬프트: 상호명 줄에 '1~4문장 절대 금지, CTA에서만 공개' 명시")
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
 check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4,
