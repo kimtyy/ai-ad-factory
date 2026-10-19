@@ -527,6 +527,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
+           "owner_menu_text", "owner_review_text", "photo_tags",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -1072,12 +1073,24 @@ if is_commerce_mode and CoupangPartners().enabled:
 def _fill_store_points(api_key_: str, mock_: bool):
     """'사진으로 매장 특징 정리' 버튼 콜백 (위젯 값 변경은 콜백에서 해야 같은 실행에서 오류가 나지 않음)"""
     existing = st.session_state.get("owner_usp", "").strip()
+    from core.store_facts import build_store_facts, facts_to_points, tag_photos
+    facts = build_store_facts(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
+                              address=st.session_state.get("owner_address", ""))
+    fact_pts = [p for p in facts_to_points(facts) if p and p not in existing]
+    if not mock_ and st.session_state.uploaded_paths:
+        # 사진마다 실제로 보이는 피사체를 적어 둠 (대본이 화면 사진과 어긋나지 않게)
+        tags = tag_photos(st.session_state.uploaded_paths, business_name=st.session_state.get("owner_name", ""), api_key=api_key_,
+                          thumb_dir=current_job().assets_dir, cache_path=current_job().asset_path("photo_tags.json"))
+        st.session_state.photo_tags = tags
     pts = suggest_store_points(st.session_state.get("owner_name", ""), st.session_state.get("owner_type", DEFAULT_BUSINESS_TYPE),
                                st.session_state.uploaded_paths, existing, api_key=api_key_, thumb_dir=current_job().assets_dir,
                                mock=mock_)
+    pts = fact_pts + [p for p in pts if p not in fact_pts]
     if pts:
         st.session_state.owner_usp = " / ".join([x for x in [existing] + pts if x])
-        st.session_state.store_points_msg = f"🤖 사진을 보고 매장 특징 {len(pts)}개를 보탰어요. 사실과 다르면 고쳐 주세요."
+        n_tag = len(st.session_state.get("photo_tags") or {})
+        st.session_state.store_points_msg = (f"🤖 매장 특징 {len(pts)}개를 보탰어요" + (f" (사진 {n_tag}장의 피사체도 기록)" if n_tag else "")
+                                             + ". 사실과 다르면 고쳐 주세요.")
     else:
         st.session_state.store_points_msg = ("사진이 없거나(먼저 사진·영상을 올려 주세요) 정리할 특징을 찾지 못했어요."
                                              if not mock_ else "Mock 모드에서는 AI 특징 정리를 건너뜁니다.")
@@ -1204,6 +1217,18 @@ if is_owner_mode:
     if len(re.findall(r"[가-힣A-Za-z0-9]{2,}", usp_desc or "")) < 4:
         st.caption("💡 대본의 고유함은 여기 적은 사실에서 나와요. 반찬·메뉴 이름, 손질·숙성 방식, 손님 리뷰 문구, 숫자(가짓수·두께)를 "
                    "구체적으로 적을수록 '어느 가게나 쓰는 문구' 대신 우리 가게만의 대본이 나옵니다. (적지 않은 사실은 지어내지 않아요)")
+    with st.expander("📋 메뉴판·손님 리뷰 글 붙여넣기 (선택) — 대본이 우리 가게 고유 메뉴·리뷰 단어로 쓰여요", expanded=False):
+        st.caption("네이버 플레이스·리뷰 페이지는 자동으로 가져올 수 없어요(접근이 막혀 있음). 사장님이 보시는 메뉴판 글, 스마트플레이스의 영수증 리뷰를 "
+                   "그대로 복사해 붙여 넣으면 ① 독특한 메뉴명(눈꽃버섯 갈비탕처럼 수식어가 붙은 것) ② 리뷰에서 형용사를 빼고 2번 이상 반복된 "
+                   "명사만 뽑아 대본에 써요. 붙여 넣은 글에 없는 말은 지어내지 않아요.")
+        st.text_area("메뉴판 글", key="owner_menu_text", height=110, placeholder="예: 눈꽃버섯 갈비탕 15,000원 / 굴돌솥비빔밥 12,000원 … (한 줄에 메뉴 하나)")
+        st.text_area("영수증 리뷰 글 (여러 개 붙여 넣기)", key="owner_review_text", height=140, placeholder="리뷰 문장을 그대로 붙여 넣어 주세요 (3~10개 정도면 충분해요)")
+        from core.store_facts import build_store_facts as _bsf
+        _pf = _bsf(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
+                   address=st.session_state.get("owner_address", ""))
+        if _pf["special_menus"] or _pf["review_nouns"] or _pf["location_context"]:
+            st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_pf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
+                       + (", ".join(_pf["review_nouns"]) or "없음") + " · 방문 상황: " + (_pf["location_context"] or "없음"))
     o5, o6 = st.columns([2, 1], vertical_alignment="bottom")
     with o5:
         owner_address = st.text_input("📍 주소·지역 (선택, 엔딩 카드에 표시)", key="owner_address", placeholder="예: 서울 성동구 성수일로")
@@ -1551,6 +1576,13 @@ with col_plan_desc:
     concept_badge = f" | 🎯 1컨셉: **{st.session_state.get('selected_core_concept', '')}**" if st.session_state.get('selected_core_concept') else ""
     st.caption(f"모드: **{production_mode}** | 화자: **{script_style_options.get(selected_script_style, '')}** | 말투: **{selected_tone_label}**{concept_badge}")
 
+def _owner_store_facts() -> dict:
+    """붙여 넣은 메뉴판·리뷰 글과 주소에서 뽑은 매장 고유 팩트 (글을 고치면 바로 반영되도록 매번 다시 뽑음)"""
+    from core.store_facts import build_store_facts
+    return build_store_facts(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
+                             address=st.session_state.get("owner_address", ""))
+
+
 def current_spec(bgm_path=None) -> pipeline.JobSpec:
     """지금 화면 입력값 → 공용 제작 엔진 입력 (캘린더 스케줄러는 같은 JobSpec을 일정 설명란에서 채움)"""
     ss = st.session_state
@@ -1569,6 +1601,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         book_publisher=ss.get("book_publisher", ""),
         affiliate_program=ss.get("affiliate_program", ""),
         core_concept=core_concept_val,
+        store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)

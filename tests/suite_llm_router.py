@@ -269,15 +269,21 @@ def claude_seq(contents, system, temperature, max_tokens):
 rt._overrides = {"claude": claude_seq}
 sb = plan_owner_storyboard("설맥 가평현리점", "맥주얼음 맥주, 넓은 매장", "food", search_keyword="설맥",
                            media_paths=[fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("photo_pool.jpg"), fixture("photo_room.jpg")], api_key="g",
-                           region="경기 가평군")
+                           region="경기 가평군",
+                           store_facts={"special_menus": ["눈꽃버섯 갈비탕"], "review_nouns": ["격자 칼집", "유기그릇 물냉면"], "location_context": "가평 나들이·여행 중에 가족과 들르는 외식"},
+                           photo_tags={fixture("photo_pool.jpg"): "참숯 불판 위 노릇한 갈비", fixture("photo_room.jpg"): "살얼음 뜬 유기그릇 물냉면"})
 rt._overrides = {}
 _pp = seen_prompt.get("p", "")
 check("지역: 가평" in _pp and "육즙" in _pp and "조리 과정·행동 묘사 금지" in _pp and "지역명(가평)" in _pp and "지금 저장하고 가평 설맥을 검색해 보세요!" in _pp,
       "사장님 프롬프트: 설명조 금지·감각어(육즙·숯불 향)·지역 후킹·저장 명분 CTA 규칙과 지역명이 전달됨")
-check("Few-Shot" in _pp and "그대로 가져오지 마세요" in _pp and "[Bad" in _pp and "[Good" in _pp and "문장 역할" in _pp,
-      "사장님 프롬프트: Few-Shot(Bad→Good)에 '예시 문구 복사 금지' 안내 + 문장 역할(후킹→전개→증거→리뷰→CTA)")
-check("떡밥 회수 강제" in seen_prompt.get("sys", "") and "AI 상투어 사용 금지" in seen_prompt.get("sys", "") and "매장 고유 명사 필수 삽입" in seen_prompt.get("sys", ""),
-      "사장님 대본 시스템 프롬프트: 본론 락인·상투어 금지·고유 명사 3대 규칙 포함")
+check("Few-Shot" in _pp and "<꺾쇠>" in _pp and "[Bad" in _pp and "[Good" in _pp and "문장 역할" in _pp
+      and not any(w in _pp for w in ("양념게장", "과일 양념", "속이 편하다", "수제 칼집", "근막", "겉절이", "더덕무침")),
+      "사장님 프롬프트: Few-Shot은 <꺾쇠> 자리만 둔 구조 예시 (복붙할 실제 단어 없음) + 문장 역할(후킹→전개→증거→리뷰→CTA)")
+check("눈꽃버섯 갈비탕" in _pp and "격자 칼집" in _pp and "사진 4번" in _pp and "유기그릇 물냉면" in _pp and "photo_tags" in _pp,
+      "사장님 프롬프트: 이 매장의 special_menus·review_nouns·사진별 photo_tags(번호별 피사체)가 대본 프롬프트에 전달됨")
+check("예시 단어 복붙(할루시네이션) 절대 금지" in seen_prompt.get("sys", "") and "사진-대사 1:1 일치 강제" in seen_prompt.get("sys", "")
+      and "1문장 떡밥 회수 및 AI 상투어 금지" in seen_prompt.get("sys", "") and "5문장 : 8컷" in seen_prompt.get("sys", ""),
+      "사장님 대본 시스템 프롬프트: 예시 복붙 금지·사진-대사 1:1·떡밥 회수/상투어 금지·5문장:8컷 4대 규칙 포함")
 vo = [s["voiceover"] for s in sb]
 check(sb[0]["script_engine"] == "claude" and step["n"] == 2, f"사장님 대본: Claude로 생성 + 규칙 보정 1회 (엔진 기록 {sb[0]['script_engine']})")
 check(vo[0].startswith("가평에서 맥주") and vo[1] == "퇴근길에 시원한 한 잔이 당기는 날 있죠?" and len(vo) == 4,

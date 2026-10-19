@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (VO_HARD_MAX, complete_sentence, diversify_exclamations, find_promo_tone,
+from core.script_guard import (VO_HARD_MAX, find_example_copy, complete_sentence, diversify_exclamations, find_promo_tone,
                                 find_banned_style, find_concept_drift,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo,
                                 concept_fallback_line, repeated_line_issues)
@@ -216,6 +216,8 @@ def plan_owner_storyboard(
     hook_hints: Optional[HookHints] = None,
     core_concept: str = "",
     region: str = "",
+    store_facts: Optional[Dict[str, Any]] = None,
+    photo_tags: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -233,13 +235,15 @@ def plan_owner_storyboard(
     lines = MOCK_LINES.get(business_type, MOCK_LINES[DEFAULT_BUSINESS_TYPE])
     default_hook = f"{business_name} 가봤어요?" if business_name else "여기 진짜 가볼 만해요!"
 
+    fact_evidence = " ".join([usp or "", " ".join((store_facts or {}).get("special_menus") or []),
+                              " ".join((store_facts or {}).get("review_nouns") or []), " ".join((photo_tags or {}).values())])
     llm = None
     llm_story = ""
     if not mock and script_llm_ready(api_key):   # Gemini 키 없이 Claude·GPT 키만 있어도 대본 엔진 사용
         try:
             llm = _plan_with_llm(business_name, usp, business_type, roles, media, cta_line,
                                  tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region,
-                                 groups=groups)
+                                 groups=groups, store_facts=store_facts, photo_tags=photo_tags)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
@@ -264,6 +268,10 @@ def plan_owner_storyboard(
             banned = find_banned_style(text)
             if banned:
                 logger.info(f"[판에 박힌 패턴 차단] 씬 {i + 1}: {banned} (대사: {text}) → 컨셉 안전 문구로 교체")
+                text = safe()
+            copied = find_example_copy(text, fact_evidence)
+            if copied:
+                logger.info(f"[예시 문구 복붙 차단] 씬 {i + 1}: '{copied}' (대사: {text}) → 컨셉 안전 문구로 교체")
                 text = safe()
             text = strip_brochure_words(text)
             text = sanitize_signboard_words(text)
@@ -517,49 +525,48 @@ JSON만 출력:
 
 OWNER_SYSTEM = build_ad_system_prompt("동네 매장·플레이스", mode="owner")
 # 대본 생성 전용: 공용 시스템 프롬프트 + 본론 락인·상투어 금지·고유 명사 규칙 (컨셉 제안·특징 요약 호출에는 붙이지 않음)
-LOCKIN_BLOCK = """[핵심 제약 조건: 본론(2~4문장) 1컨셉 락인 및 상투어 금지]
-1. 떡밥 회수 강제: 1문장(후킹)에서 제시한 구체적 주제(예: 특정 반찬 가짓수, 부모님 동반, 특정 부위 두께 등)를 2, 3, 4문장에서도 절대 벗어나지 말고 끝까지 증명하라. 1문장 주제와 무관한 만능 문장(갑작스러운 냉면 육쌈 언급, 일반적인 숯불 향 칭찬 등)으로 주제를 흐리는 것을 엄격히 금지한다.
-2. AI 상투어 사용 금지: "팡 터지는 육즙", "감칠맛 폭발", "겉은 바삭하고 속은 촉촉", "정갈한 밑반찬", "윤기부터 남달라요", "극락 그 자체", "감탄이 절로"와 같은 추상적 맛집 클리셰는 절대 사용하지 마라.
-3. 매장 고유 명사 필수 삽입: 추상적인 맛 표현 대신, 입력된 매장 정보와 영수증 리뷰에 존재하는 실제 고유 명사(구체적인 밑반찬 이름, 손질/숙성 방식, 실제 리뷰 인용 문구)를 2~4문장 안에 최소 2개 이상 반드시 포함하여 오직 이 매장만의 대본을 완성하라.
-   (입력된 특장점·사장님이 적은 리뷰 문구·사진에 없는 사실은 지어내지 마라. 입력된 사실이 2개보다 적으면 있는 사실만 쓰고, 추상적인 미사여구로 채우지 마라.)"""
+LOCKIN_BLOCK = """[핵심 제약 조건: 팩트 기반 1컨셉 락인 및 사진-대사 1:1 완전 동기화]
+1. 예시 단어 복붙(할루시네이션) 절대 금지: 프롬프트 내부 예시 문장에 적힌 단어를 절대 복사하지 마라. 오직 현재 매장의 입력 데이터(special_menus, review_nouns, photo_tags, location_context, 특장점)에 실제로 존재하는 단어만 사용하라.
+2. 사진-대사 1:1 일치 강제: 1문장부터 5문장까지 각 문장은 반드시 해당 구간에 매칭된 사진(photo_tags) 속 피사체를 직접 가리키며 서술해야 한다. (예: 6~7번 사진이 '유기그릇 물냉면'이면 4문장은 반드시 그 냉면의 특징과 갈비의 조합을 서술할 것. 냉면 화면에서 고기 식감만 말하는 행위 금지.)
+3. 1문장 떡밥 회수 및 AI 상투어 금지: 1문장(후킹)에서 제시한 핵심 주제를 본론 끝까지 유지하고, "팡 터지는 육즙", "감칠맛 폭발", "겉바속촉", "정갈한 밑반찬", "극락 그 자체", "윤기부터 남달라요" 같은 추상적 맛집 클리셰는 절대 사용하지 마라.
+4. 18초 [5문장 : 8컷] 비대칭 배분: 1문장(사진 1,2번 각 1.5초), 2문장(사진 3번 3.5초), 3문장(사진 4,5번 각 2.2초/2.3초), 4문장(사진 6,7번 각 2.0초), 5문장(사진 8번 3.0초) 구조로 매칭하라.
+   (입력된 특장점·메뉴·리뷰·사진에 없는 사실은 지어내지 마라. 입력된 사실이 부족하면 있는 사실만 쓰고, 추상적인 미사여구로 채우지 마라.)"""
 OWNER_SCRIPT_SYSTEM = OWNER_SYSTEM + "\n\n" + LOCKIN_BLOCK
-FEWSHOT_BLOCK = """[Few-Shot: 기존 출력(Bad) vs 목표 출력(Good)] — 아래는 문장 구조·밀도·톤만 배우는 예시입니다.
-※ 예시 속 상호·지역·반찬·손질법·리뷰 문구는 예시일 뿐입니다. 실제 대본에는 이 매장의 입력 정보와 사진에 있는 사실만 쓰고, 예시 문장·메뉴를 그대로 가져오지 마세요.
+FEWSHOT_BLOCK = """[Few-Shot: 문장 구조 예시 — <꺾쇠> 안은 이 매장의 입력 팩트로 채우세요]
+※ 아래 예시에는 실제 메뉴·반찬·손질법·리뷰 문구를 일부러 넣지 않았습니다. 구조와 밀도만 배우고, <꺾쇠> 자리는 반드시 이 매장의 special_menus·review_nouns·photo_tags·특장점에 있는 단어로만 채우세요. 예시에서 본 단어를 지어내지 마세요.
 
-패턴 2 (핀셋 타깃·상황 지정형 / 주제: 부모님 효도 외식·부드러운 식감)
-[Bad: 본론에서 컨셉 이탈 + 상투어]
-1문장: 이번 주말 가평에서 부모님 모시고 갈비 뜯을 분들, 딱 15초만 집중하세요.
-2문장: 질긴 고기 딱 질색이신 어르신들도 잇몸으로 드실 만큼 부드러운 인생 갈비집입니다.
-3문장: 칼집 사이사이로 숯불 향이 꽉 차서 씹을 때마다 감칠맛이 폭발해요. (상투어)
-4문장: 정갈한 밑반찬에 시원한 냉면까지 한 상 가득 차려집니다. (백화점식 나열)
-5문장: 가족 모임 장소로 실패 없게 지금 저장해 두고 네이버에서 확인해 보세요.
-[Good: 1문장 컨셉을 4문장까지 관통 + 고유 팩트]
-1문장: 이번 주말 가평에서 부모님 모시고 갈비 뜯을 분들, 딱 15초만 집중하세요.
-2문장: 질긴 고기 딱 질색이신 어르신들도 잇몸으로 드실 만큼 부드러운 갈비집입니다.
-3문장: 기름기랑 질긴 근막을 일일이 손으로 다 발라내고 촘촘하게 수제 칼집을 넣었거든요.
-4문장: 자극적이지 않은 과일 양념이라 부모님들이 '속이 편하다'며 공기밥까지 싹 비우십니다.
-5문장: 가족 모임 장소로 실패 없게 지금 [저장] 누르고 '가평 효정명인갈비' 검색해 보세요.
+패턴 2 (핀셋 타깃·상황 지정형)
+[Bad: 본론에서 컨셉 이탈 + 상투어 + 화면과 무관한 말]
+1문장: <지역>에서 <타깃 상황>을 앞둔 분들, 딱 15초만 집중하세요.
+2문장: <타깃>도 편하게 드실 만큼 <핵심 주제>가 남다른 곳이에요.
+3문장: 한 입 먹으면 감칠맛이 폭발해요. (상투어, 사진 속 피사체와 무관)
+4문장: 정갈한 밑반찬에 <화면과 무관한 다른 메뉴>까지 한 상 가득이에요. (백화점식 나열, 사진 속 피사체와 무관)
+5문장: 지금 저장해 두고 네이버에서 확인해 보세요.
+[Good: 1문장 주제를 끝까지 + 문장마다 그 화면 사진의 피사체를 직접 + 입력 팩트만]
+1문장: <지역>에서 <타깃 상황>을 앞둔 분들, 딱 15초만 집중하세요.   (사진 1·2: <photo_tags 1·2>)
+2문장: <타깃>도 편하게 드실 만큼 <핵심 주제>가 남다른 곳이에요.       (사진 3: <photo_tags 3>를 직접 가리킴)
+3문장: <special_menus 또는 특장점의 원재료·손질·조리 방식>이라 <핵심 주제>가 가능해요.  (사진 4·5: <photo_tags 4·5>)
+4문장: <review_nouns 또는 입력된 손님 반응>까지 맞물려서 <핵심 주제>가 확인돼요.  (사진 6·7: <photo_tags 6·7> — 그 피사체 이야기)
+5문장: <저장 명분>, 지금 [저장]하고 '<지역> <상호>' 검색해 보세요.   (사진 8: 외관)
 
-패턴 3 (숫자 충격·가성비형 / 주제: 밑반찬 11가지 한 상 가성비)
-[Bad: 반찬 얘기 실종 + 상투어]
-1문장: 돼지갈비 시켰는데 밑반찬만 11가지 깔리는 가평 1티어 갈비집을 찾았습니다.
-2문장: 참숯 위에 두툼한 양념 생갈비 얹어 노릇하게 구워내는데 윤기부터 남달라요. (반찬 내용 실종)
-3문장: 겉은 바삭하고 속은 촉촉해서 한 입 넣자마자 감탄이 절로 나옵니다. (상투어)
-4문장: 마지막 한 점까지 냉면에 돌돌 말아 남김없이 싹 비우게 되는 곳!
-5문장: 친구 태그하고 이번 주말 갈비 먹으러 갈 사람, 지금 저장하고 검색해 보세요.
-[Good: 반찬 주제를 끝까지 증명 + 고유 팩트]
-1문장: 돼지갈비 시켰는데 밑반찬만 11가지 깔리는 가평 1티어 갈비집을 찾았습니다.
-2문장: 양념게장부터 잡채, 샐러드까지 상다리 휘어지게 깔려서 고기 익기도 전에 젓가락이 바쁩니다.
-3문장: 여기에 참숯 향 입힌 두툼한 갈비 한 점 올려 직접 담근 겉절이랑 싸 먹으면 조합이 끝내줍니다.
-4문장: 리뷰에서도 "반찬 리필만 두 번 하고 배 터지게 먹고 왔다"는 호평이 쏟아지는 곳입니다.
-5문장: 이번 주말 가성비 끝판왕 갈비 먹으러 갈 사람, 지금 [저장]하고 '가평 효정명인갈비' 검색해 보세요.
-(Good 예시도 문장 틀만 참고하세요: 반찬 이름·리뷰 인용은 이 매장 입력에 있을 때만 쓰고, 없으면 있는 사실로만 쓰세요.)"""
+패턴 3 (숫자 충격·가성비형)
+[Bad: 숫자 주제 실종 + 상투어]
+1문장: <상호 없이도 말할 수 있는 숫자 팩트>가 깔리는 <지역> 맛집을 찾았어요.
+2문장: 윤기부터 남달라요. (숫자 주제 실종, 상투어)
+3문장: 겉은 바삭하고 속은 촉촉해서 감탄이 절로 나와요. (상투어)
+[Good: 숫자 주제를 증명]
+1문장: <입력된 숫자 팩트>가 깔리는 <지역> <업종>을 찾았어요.
+2문장: <숫자 팩트의 구성 — 입력된 메뉴·반찬 이름만 나열하지 말고 사진 속 것을 짚어서>
+3문장·4문장: <review_nouns 또는 특장점>으로 그 숫자의 값어치를 확인.
+5문장: <저장 명분> + <지역> <상호> 검색."""
 
 
 def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
-                   hook_hints=None, core_concept: str = "", region: str = "", groups=None):
+                   hook_hints=None, core_concept: str = "", region: str = "", groups=None,
+                   store_facts: Optional[Dict[str, Any]] = None, photo_tags: Optional[Dict[str, str]] = None):
     from core.llm import generate_json, repair_scene_lines
     from core.script_guard import script_violation_finder
+    from core.store_facts import facts_prompt_block
 
     type_label = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])["label"]
     contents: List[Any] = []
@@ -575,6 +582,20 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
             if img is not None:
                 contents += [f"[씬 {i + 1} 미디어]", img]
     n = len(roles)
+    # 문장별 화면 사진의 피사체 태그 (사진-대사 1:1 일치의 근거): 문장 i = 그 문장 동안 나오는 사진들
+    sentence_groups = groups or [[i] for i in range(min(n, len(media)))]
+    tags_by_path = photo_tags or {}
+    line_tags: List[str] = []
+    photo_lines: List[str] = []
+    for i, g in enumerate(sentence_groups):
+        parts = [(k, tags_by_path.get(media[k], "")) for k in g if k < len(media)]
+        line_tags.append(" / ".join(t for _, t in parts if t))
+        for k, t in parts:
+            photo_lines.append(f"사진 {k + 1}번 (문장 {i + 1}에서 나옴): {t or '(태그 없음 — 첨부 사진에 실제로 보이는 것만 말하기)'}")
+    facts_block = facts_prompt_block(store_facts or {}, photo_lines)
+    evidence = " ".join([usp or "", " ".join((store_facts or {}).get("special_menus") or []),
+                         " ".join((store_facts or {}).get("review_nouns") or []), (store_facts or {}).get("location_context") or "",
+                         " ".join(tags_by_path.values())])
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
     concept_guidelines = build_one_concept_guidelines("owner", n, type_label, cta_line, OWNER_POLICY)
 
@@ -594,6 +615,8 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 - 업종: {type_label}
 - 사장님이 직접 적은 특장점(USP): {usp or '(없음)'}
 - 지역: {short_region(region) or '(알 수 없음)'}
+
+{facts_block}
 - 톤 참고: {tone_instruction or '친근하고 경쾌한 사장님 직영 홍보 톤'}
 
 {concept_override_prompt}
@@ -632,7 +655,8 @@ JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시�
     vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)] if isinstance(data, dict) else []
     hook_line = str(((data.get("scenes") or [{}])[0] or {}).get("hook_title") or "") if isinstance(data, dict) else ""
     violation_checker = create_length_violation_checker(
-        OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True))
+        OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True,
+                                              line_tags=line_tags[:len(vo_lines)], evidence=evidence))
     data, fixes = repair_scene_lines(data, violation_checker, OWNER_SCRIPT_SYSTEM, OWNER_POLICY.repair_instruction, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[owner 대본 규칙 보정] {f}")

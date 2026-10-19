@@ -68,6 +68,9 @@ class JobSpec:
     api_key: Optional[str] = None
     mock: bool = False
     hook_hints: Any = None
+    # 사장님: 매장 고유 팩트 (메뉴판·리뷰 글에서 추출한 special_menus·review_nouns, 주소 상권) + 사진별 피사체 태그 {사진 경로: '보이는 것'}
+    store_facts: Dict[str, Any] = field(default_factory=dict)
+    photo_tags: Dict[str, str] = field(default_factory=dict)
 
     @property
     def is_bundle(self) -> bool:
@@ -198,11 +201,23 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     if spec.mode == "owner":
         if not spec.name.strip():
             raise ValueError("상호명을 입력해 주세요.")
+        from core.store_facts import location_context, tag_photos
+        facts = dict(spec.store_facts or {})
+        if not facts.get("location_context"):
+            facts["location_context"] = location_context(spec.address)
+        photo_tags = dict(spec.photo_tags or {})
+        if not photo_tags and spec.media_paths and not spec.mock:
+            # 사진을 직접 보고 피사체를 적어 둠 (캐시: 같은 사진은 다시 부르지 않음) → 대사가 화면 사진과 어긋나지 않게
+            photo_tags = tag_photos(spec.media_paths, business_name=spec.name, api_key=spec.api_key, thumb_dir=job.assets_dir,
+                                    cache_path=job.asset_path("photo_tags.json"))
         scenes = plan_owner_storyboard(business_name=spec.name, usp=spec.usp, business_type=spec.business_type,
                                        search_keyword=spec.search_keyword or spec.name, media_paths=spec.media_paths,
                                        num_scenes=spec.num_scenes or DEFAULT_SCENES, hook_hints=spec.hook_hints,
                                        core_concept=spec.core_concept, tone_instruction=spec.tone_instruction,
-                                       region=region_of(spec.address) if spec.address else "", **common)
+                                       region=region_of(spec.address) if spec.address else "",
+                                       store_facts=facts, photo_tags=photo_tags, **common)
+        if photo_tags and scenes:
+            scenes[0]["photo_tags"] = {os.path.basename(k): v for k, v in photo_tags.items()}      # 화면 확인용
     elif spec.mode == "book":
         scenes = plan_book_storyboard(store_name=spec.name, book_title=spec.book_title, author=spec.book_author,
                                       book_info=spec.usp, quote=spec.book_quote, media_paths=spec.media_paths,

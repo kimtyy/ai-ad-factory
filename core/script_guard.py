@@ -487,6 +487,38 @@ def repeated_ending_issues(lines: List[str]) -> Dict[int, str]:
     return issues
 
 
+# 예전 프롬프트 예시·지시서 샘플에 나온 구체 표현: 이 매장의 입력 팩트(특장점·메뉴·리뷰·사진 태그)에 없는데 대사에 있으면 예시를 베낀 것
+EXAMPLE_PHRASES = ("양념게장", "과일 양념", "속이 편하다", "직접 낸 칼집", "손으로 직접", "수제 칼집", "근막", "겉절이", "더덕무침", "상다리",
+                   "리필만 두 번", "배 터지게 먹고", "인생 갈비집", "가평 1티어", "잇몸으로", "어르신들도", "공기밥까지", "자극적이지 않은")
+
+
+def find_example_copy(text: str, evidence: str = "") -> Optional[str]:
+    """프롬프트 예시 문구를 그대로 베낀 대사 → 걸린 표현 (입력 팩트에 그 말이 있으면 정상)"""
+    t = re.sub(r"\s+", " ", text or "")
+    ev = re.sub(r"\s+", " ", evidence or "")
+    for ph in EXAMPLE_PHRASES:
+        if ph in t and ph not in ev:
+            return ph
+    return None
+
+
+def photo_sync_issues(lines: List[str], line_tags: List[str]) -> Dict[int, str]:
+    """
+    사진-대사 1:1 일치: 각 대사가 그 시간대 화면 사진의 피사체(photo_tags)를 한 번은 직접 가리키는지.
+    태그가 있는데 태그의 내용어가 하나도 대사에 없으면 → {줄 번호: 고칠 방향}. 태그가 없는 줄은 검사하지 않음
+    """
+    issues: Dict[int, str] = {}
+    for i, (line, tags) in enumerate(zip(lines, line_tags)):
+        if not (tags or "").strip() or not (line or "").strip():
+            continue
+        words = [w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", tags) if w not in _STEM_STOP]
+        stems = {w[:2] for w in words}
+        if any(w in line for w in words) or (stems and any(s in line for s in stems)):
+            continue
+        issues[i] = f"이 장면 사진에는 '{tags.strip()[:40]}'이(가) 보임 → 이 문장은 사진 속 그 피사체를 직접 가리키며 서술하기 (다른 메뉴·고기 식감 이야기 금지)"
+    return issues
+
+
 def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -> Dict[int, str]:
     """
     1문장(후킹)에서 던진 주제를 2문장 이후(CTA 제외)에서도 이어서 증명하는지. 1문장·컨셉의 내용어가 한 번도 안 나오는 줄 → {줄 번호: 고칠 방향}
@@ -540,7 +572,7 @@ def unique_fact_issues(lines: List[str], usp: str = "", need: int = 2) -> Dict[i
 
 
 def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None,
-                            usp: str = "", lock_topic: bool = False):
+                            usp: str = "", lock_topic: bool = False, line_tags: Optional[List[str]] = None, evidence: str = ""):
     """
     대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
     씬 간 반복(훅 포함) + 1컨셉 연관성(core_concept를 넘긴 경우)
@@ -551,6 +583,14 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
         flagged.setdefault(lines[i], msg)
     for i, msg in repeated_ending_issues(lines).items():
         flagged.setdefault(lines[i], msg)
+    if evidence:
+        for i, t in enumerate(lines):
+            ph = find_example_copy(t, evidence)
+            if ph:
+                flagged.setdefault(lines[i], f"예시 문구 복붙('{ph}') → 이 매장의 입력 팩트(special_menus·review_nouns·photo_tags)에 있는 말로만 다시 쓰기")
+    if line_tags:
+        for i, msg in photo_sync_issues(lines, line_tags).items():
+            flagged.setdefault(lines[i], msg)
     if lock_topic:
         for i, msg in topic_lock_issues(lines, core_concept, usp).items():
             flagged.setdefault(lines[i], msg)

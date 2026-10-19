@@ -82,6 +82,14 @@ try:
           and sb2[0]["hook_title"] == hook0 and sb2[0].get("role") == role0 and sb2[3]["voiceover"] == sb[3]["voiceover"],
           "카드 수정 즉시 반영: 대사=자막 일치, 지속시간 반영, 숨은 필드(hook_title·role)와 다른 씬 보존")
 
+    # 메뉴판·리뷰 붙여넣기 → 고유 팩트 표시 (자동 추출, 붙여 넣은 글에 있는 말만)
+    at.session_state.owner_menu_text = "눈꽃버섯 갈비탕 15,000원 / 돼지갈비 14,000"
+    at.session_state.owner_review_text = "격자 칼집이 인상적이에요. 격자 칼집 덕분에 양념이 잘 배요. 통새송이버섯 나와요. 통새송이버섯 좋아요."
+    at.run()
+    sf = [x.value for x in at.success if "뽑힌 고유 팩트" in (x.value or "")]
+    check(not at.exception and sf and "눈꽃버섯 갈비탕" in sf[0] and "격자 칼집" in sf[0] and "통새송이버섯" in sf[0],
+          "메뉴판·리뷰 붙여넣기 → 특이 메뉴·리뷰 반복 명사 자동 추출 표시")
+
     # 화자 시점 ↔ 성우·말투 프리셋 연동 (시점을 바꿀 때 적용, 이후 수동 변경은 유지)
     at.sidebar.radio(key="script_style_radio").set_value("review").run()
     check(not at.exception and at.session_state.selected_actor == "female_20s" and at.session_state.voice_tone == "lively",
