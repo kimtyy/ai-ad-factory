@@ -156,8 +156,32 @@ def _photo_key(path: str) -> str:
         return hashlib.md5(path.encode()).hexdigest()[:12]
 
 
-BUCKET_LABELS = {1: "다 구워진 메인 요리 클로즈업·고기 자르기", 2: "전체 상차림·굽기 전 칼집/양념 원육", 3: "불판·석쇠 위에서 구워지는 조리 장면",
+BUCKET_LABELS = {1: "완전히 익은 하이라이트 — 석쇠 아래 붉게 타오르는 숯불 열기가 보이거나, 표면이 노릇노릇 구워진 고기(구움 자국·육즙 윤기), 집게·가위로 구운 고기를 자르는 장면",
+                 2: "준비·원육 — 굽기 전 생고기(양념이 묻어 있어도), 접시에 담긴 고기, 전체 상차림",
+                 3: "조리 진행 — 석쇠·불판 위에서 구워지는 중인 장면(아직 다 익지 않음)",
                  4: "냉면·찌개·탕·밑반찬 같은 곁들임", 5: "가게 외관·간판·내부 전경·주차장"}
+
+# 날고기(굽기 전)를 '다 구워진 고기(버킷 1)'로 잘못 분류하는 것을 막는 단서 낱말 (피사체 설명에 이 말이 있으면 1번에서 내림)
+_RAW_HINT = ("생갈비", "날고기", "원육", "굽기 전", "생고기", "접시에 담", "접시 위", "생버섯", "올려진 생", "막 올린", "막 올려", "조리 전", "익지 않")
+_COOKED_HINT = ("노릇", "구워진", "구운 ", "익은", "자르", "자른", "가위", "집게", "숯불 열기", "불꽃", "이글", "붉게 타", "구움 자국", "육즙")
+
+
+def fix_bucket(bucket: int, subject: str = "", doneness: str = "") -> int:
+    """
+    비전이 준 버킷 보정: 1번(다 익은 하이라이트)은 완전히 익은 고기만. 굽기 전 생고기·접시에 담긴 원육이면 2번, 아직 구워지는 중이면 3번으로 내린다.
+    (돼지갈비는 굽기 전에도 갈색 양념이 묻어 있어 비전이 1번으로 착각하기 쉬움)
+    """
+    if bucket != 1:
+        return bucket
+    d = (doneness or "").strip().lower()
+    subj = subject or ""
+    if d in ("raw", "uncooked", "날고기", "생"):
+        return 2
+    if d in ("grilling", "cooking", "굽는중", "조리중"):
+        return 3
+    if any(h in subj for h in _RAW_HINT) and not any(h in subj for h in _COOKED_HINT):
+        return 2
+    return 1
 
 
 def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
@@ -181,7 +205,7 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
         v = cache.get(_photo_key(p))
         return v if isinstance(v, dict) else ({"s": v} if v else {})          # 옛 캐시(문자열)는 피사체만 있는 것으로
 
-    todo = [p for p in media if not entry(p).get("asked")]               # 이미 물어본 사진은 다시 부르지 않음 (엔진이 버킷을 안 줘도 반복 호출 방지)
+    todo = [p for p in media if entry(p).get("v") != 2]                   # 이미 (현재 기준으로) 물어본 사진은 다시 부르지 않음. 기준이 바뀐 옛 캐시는 다시 분류
     if todo:
         from core.llm import generate_json
         from core.planners.owner import _media_preview_image
@@ -201,8 +225,14 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
    맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 절대 쓰지 마세요.
 2) bucket: 아래 5단계 중 가장 알맞은 번호 하나.
 {rubric}
-   (가게 외관·간판·주차장·매장 내부 전경은 반드시 5번. 먹음직스럽게 다 구워진 고기 클로즈업이나 고기 자르는 장면은 1번.)
-JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1}}, ...]}}""")
+   (가게 외관·간판·주차장·매장 내부 전경은 반드시 5번.)
+3) doneness: 고기·메인 요리가 보이면 "raw"(굽기 전 생고기·접시에 담긴 원육·조리 시작 전), "grilling"(석쇠 위에서 구워지는 중이나 아직 다 익지 않음), "cooked"(완전히 익음) 중 하나, 요리가 아니면 "none".
+
+[비전 사진 분류 핵심 주의사항: '양념 생고기(날고기)'와 '다 구워진 고기' 엄격 구분]
+돼지갈비·양념육 사진은 굽기 전에도 갈색 양념이 묻어 있으므로 아래 기준으로 1번과 2번을 엄격히 구분하라.
+- 1번(첫 3초 후킹·썸네일 1순위, 완전히 익은 하이라이트): 반드시 석쇠 아래에 '붉게 타오르는 숯불 열기'가 보이거나, 고기 조각이 한 입 크기로 잘려 '표면이 노릇노릇하게 구워진 상태(구움 자국·육즙 윤기)'이거나, '집게·가위로 구운 고기를 자르는 장면'이어야 한다.
+- 2번(준비·원육): 고기에 갈색 양념이 묻어 있더라도 ① 흰 접시에 담겨 있는 상태, ② 고기 단면이나 칼집 사이가 아직 익지 않은 선홍빛·붉은빛 날고기, ③ 함께 올린 새송이버섯이 구워지지 않은 생버섯(새하얀 단면), ④ 석쇠에 그을음이 전혀 없는 조리 시작 전 상태 — 이 중 하나라도 해당하면 절대 1번으로 분류하지 말고 무조건 2번으로 분류하라.
+JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "doneness": "cooked"}}, ...]}}""")
             try:
                 data, _ = generate_json(contents, "당신은 사진에 보이는 사실만 기록하는 꼼꼼한 사진 분석가입니다. 응답은 JSON만 출력합니다.",
                                         temperature=0.2, gemini_api_key=api_key, purpose="사진 피사체 태깅")
@@ -215,11 +245,14 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1}}, ...]
                         bk = 0
                     if 0 <= k < len(order):
                         e = dict(entry(order[k]))
-                        e["asked"] = True
+                        e["v"] = 2
                         if subj:
                             e["s"] = subj[:60]
                         if bk in BUCKET_LABELS:
-                            e["b"] = bk
+                            fixed = fix_bucket(bk, subj, str(item.get("doneness") or ""))
+                            if fixed != bk:
+                                logger.info(f"[사진 버킷 보정] 사진 {k + 1}: {bk} → {fixed} (익지 않은 고기: '{subj}' / {item.get('doneness')})")
+                            e["b"] = fixed
                         cache[_photo_key(order[k])] = e
             except Exception as e:
                 logger.warning(f"사진 피사체·버킷 분석 실패 (분석 없이 진행): {e}")

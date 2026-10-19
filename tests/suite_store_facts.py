@@ -178,5 +178,40 @@ rt._overrides = {}
 rt.generate_json = _orig_gj
 _llm_pkg.generate_json = _orig_gj
 check(list(b1.values()) == [5, 1, 3] and b1 == b2 and len(calls_b) == 1, f"비전이 사진마다 버킷(1~5)을 매기고 같은 사진은 캐시 사용 ({list(b1.values())}, 호출 {len(calls_b)}회)")
+# ---------------------------------------------------------------- 날고기(굽기 전) vs 다 구워진 고기: 1번(첫 3초·썸네일)에는 익은 고기만
+from core.store_facts import fix_bucket
+check(fix_bucket(1, "은색 석쇠 위에 막 올린 양념 생갈비", "raw") == 2 and fix_bucket(1, "접시에 담긴 양념 갈비", "") == 2
+      and fix_bucket(1, "참숯 불 위에서 노릇하게 구워진 갈비", "cooked") == 1 and fix_bucket(1, "가위로 고기 자르는 장면", "") == 1
+      and fix_bucket(1, "석쇠 위 갈비", "grilling") == 3 and fix_bucket(3, "접시에 담긴 갈비", "raw") == 3 and fix_bucket(1, "양념 갈비", "") == 1,
+      "버킷 보정: 굽기 전 생고기·접시 원육은 1번에서 2번으로, 구워지는 중은 3번으로 내리고 다 익은 고기·자르는 장면만 1번")
+seen_v = {}
+
+
+def claude_doneness(contents, system, temperature, max_tokens):
+    last = contents[-1] if isinstance(contents[-1], str) else ""
+    seen_v["prompt"] = last
+    n = sum(1 for c in contents if isinstance(c, str) and c.startswith("[사진"))
+    rows = [{"index": 1, "subject": "은색 석쇠 위에 막 올린 양념 생갈비", "bucket": 1, "doneness": "raw"},
+            {"index": 2, "subject": "참숯 불 위에서 노릇하게 구워진 갈비", "bucket": 1, "doneness": "cooked"},
+            {"index": 3, "subject": "접시에 담긴 양념 갈비", "bucket": 1, "doneness": ""}]
+    return json.dumps({"photos": rows[:n]}, ensure_ascii=False)
+
+
+rt._overrides = {"claude": claude_doneness}
+cache_d = os.path.join(work, "doneness.json")
+td, bd = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_d)
+rt._overrides = {}
+pv = seen_v.get("prompt", "")
+check([bd[ups[k]] for k in range(3)] == [2, 1, 2] and "'양념 생고기(날고기)'와 '다 구워진 고기' 엄격 구분" in pv and "붉게 타오르는 숯불 열기" in pv
+      and "흰 접시에 담겨 있는 상태" in pv and "doneness" in pv,
+      f"비전 분류: 굽기 전 생갈비·접시 원육이 1번으로 오면 2번으로 보정, 익은 고기만 1번, 프롬프트에 구분 기준 포함 {[bd[ups[k]] for k in range(3)]}")
+json.dump({**json.load(open(cache_d, encoding="utf-8")), "stale": {}}, open(cache_d, "w", encoding="utf-8"))
+old_cache = {k: {"s": v["s"], "b": 1, "asked": True} for k, v in json.load(open(cache_d, encoding="utf-8")).items() if isinstance(v, dict) and v.get("s")}
+json.dump(old_cache, open(cache_d, "w", encoding="utf-8"))
+calls_d = []
+rt._overrides = {"claude": lambda c, sy, t, m: (calls_d.append(1), claude_doneness(c, sy, t, m))[1]}
+td2, bd2 = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_d)
+rt._overrides = {}
+check(len(calls_d) == 1 and [bd2[ups[k]] for k in range(3)] == [2, 1, 2], "기준이 바뀌기 전 옛 캐시(버전 없음)는 다시 분류해서 잘못된 1번을 바로잡음")
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)
