@@ -23,6 +23,8 @@ def check(c, m):
     print(f"{'PASS' if c else 'FAIL'} {m}")
 
 
+os.environ["STORE_RESEARCH_DISABLE"] = "1"          # 이 스위트는 네이버 지역 검색 가짜 응답만 검증 (웹 검색·블로그 호출은 별도 스위트)
+
 # ---------------------------------------------------------------- 1. 목록 연산
 check(add_media(["a", "b"], ["b", "c"]) == ["a", "b", "c"] and len(add_media([], [str(i) for i in range(20)])) == MAX_MEDIA,
       "추가: 뒤에 붙이고 중복 제외, 최대 개수 제한")

@@ -22,7 +22,7 @@ logger = logging.getLogger("ad_factory.store_facts")
 # ---------------------------------------------------------------- ① 특이 메뉴명 (결정적 추출: 입력 글에 있는 표현만)
 BASE_MENU_WORDS = ("갈비탕", "갈비찜", "갈비", "비빔밥", "짜글이", "냉면", "국밥", "찌개", "전골", "구이", "삼겹살", "불고기", "칼국수", "수제비",
                    "돈까스", "돈가스", "파스타", "피자", "치킨", "순대", "족발", "보쌈", "해장국", "설렁탕", "곰탕", "막국수", "만두", "라면", "덮밥",
-                   "샐러드", "스테이크", "라떼", "커피", "케이크", "빵", "초밥", "우동", "죽", "탕", "밥", "면")
+                   "샐러드", "스테이크", "라떼", "커피", "케이크", "초밥", "우동")      # 한 글자 기본어(밥·면·탕·죽·빵)는 문장 조각이 잡혀서 뺌
 GENERIC_MENU_NAMES = {"돼지갈비", "소갈비", "갈비탕", "갈비", "된장찌개", "김치찌개", "비빔밥", "냉면", "물냉면", "비빔냉면", "공기밥", "국밥", "삼겹살",
                       "불고기", "라면", "음료", "콜라", "사이다", "소주", "맥주", "커피", "아메리카노", "라떼", "치킨", "피자", "파스타", "돈까스", "돈가스",
                       "순대국", "설렁탕", "곰탕", "칼국수", "만두", "김밥", "떡볶이", "볶음밥", "된장", "김치"}
@@ -44,6 +44,10 @@ def extract_special_menus(menu_text: str, limit: int = 6) -> List[str]:
             modifier = p.replace(" ", "")[: -len(base)]
             if len(modifier) < 2 or p.replace(" ", "") in GENERIC_MENU_NAMES or modifier in ("맛", "특", "매운", "순한", "큰", "작은", "한", "두"):
                 continue
+            if _VERBISH.search(modifier) or modifier.endswith(("면", "고", "서", "는", "은", "게", "의", "에", "도", "만")):
+                continue                     # '하나면 밥'처럼 문장 조각이 수식어로 잡힌 것
+            if len(base) == 1 and len(modifier) < 3:
+                continue                     # 한 글자 기본어(밥·면·탕)는 수식어가 충분히 구체적일 때만
             if p not in found:
                 found.append(p)
     return found[:limit]
@@ -188,6 +192,19 @@ def build_store_facts(*, menu_text: str = "", review_text: str = "", address: st
     """메뉴판·리뷰 글·주소에서 ①②④ 추출 (③ 사진 태그는 tag_photos가 따로)"""
     return {"special_menus": extract_special_menus(menu_text), "review_nouns": extract_review_nouns(review_text),
             "location_context": location_context(address)}
+
+
+def merge_facts(*parts: Dict[str, Any], limit: int = 8) -> Dict[str, Any]:
+    """여러 출처의 팩트를 합침 (앞쪽 출처가 우선, 중복 제거). location_context는 처음 있는 값"""
+    out: Dict[str, Any] = {"special_menus": [], "review_nouns": [], "location_context": ""}
+    for part in parts:
+        for key in ("special_menus", "review_nouns"):
+            for v in (part or {}).get(key) or []:
+                if v and v not in out[key] and len(out[key]) < limit:
+                    out[key].append(v)
+        if not out["location_context"] and (part or {}).get("location_context"):
+            out["location_context"] = part["location_context"]
+    return out
 
 
 def facts_to_points(facts: Dict[str, Any]) -> List[str]:

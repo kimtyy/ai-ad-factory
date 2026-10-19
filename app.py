@@ -38,7 +38,7 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # 제외: core.longform(백그라운드 분석 작업 레지스트리 보관), core.llm.router·core.media.audio_stt(테스트 주입점·캐시 상태),
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
-    "core.script_guard", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
+    "core.script_guard", "core.store_facts", "core.store_research", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
@@ -471,7 +471,7 @@ def reset_mode_session_state(prev_mode: str, new_mode: str):
     # 4. 이전 모드의 고유 폼 입력 필드들 안전 초기화 (None 방지)
     keys_to_clear = [
         # owner
-        "owner_name", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "naver_place_url",
+        "owner_name", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "naver_place_url", "store_research",
         # commerce
         "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom", "product_boxes",
         *[f"bundle_{f}_{k}" for f in ("name", "usp", "link") for k in range(3)],
@@ -527,7 +527,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags",
+           "owner_menu_text", "owner_review_text", "photo_tags", "store_research", "use_unconfirmed_facts",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -1074,8 +1074,7 @@ def _fill_store_points(api_key_: str, mock_: bool):
     """'사진으로 매장 특징 정리' 버튼 콜백 (위젯 값 변경은 콜백에서 해야 같은 실행에서 오류가 나지 않음)"""
     existing = st.session_state.get("owner_usp", "").strip()
     from core.store_facts import build_store_facts, facts_to_points, tag_photos
-    facts = build_store_facts(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
-                              address=st.session_state.get("owner_address", ""))
+    facts = _merged_store_facts()
     fact_pts = [p for p in facts_to_points(facts) if p and p not in existing]
     if not mock_ and st.session_state.uploaded_paths:
         # 사진마다 실제로 보이는 피사체를 적어 둠 (대본이 화면 사진과 어긋나지 않게)
@@ -1107,6 +1106,43 @@ def _fill_place(it: dict):
     if place_desc:
         st.session_state.owner_usp = place_desc
     st.session_state.place_results = []
+
+
+def _merged_store_facts() -> dict:
+    """자동 수집(네이버 공식 API·웹 검색)에서 확인된 팩트 + 붙여 넣은 메뉴판·리뷰 글에서 뽑은 팩트 (+ 켠 경우 미확인 항목). 매번 다시 합침"""
+    from core.store_facts import build_store_facts, merge_facts
+    auto = st.session_state.get("store_research") or {}
+    pasted = build_store_facts(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
+                               address=st.session_state.get("owner_address", ""))
+    facts = merge_facts(auto.get("confirmed") or {}, pasted)
+    if st.session_state.get("use_unconfirmed_facts"):
+        facts = merge_facts(facts, auto.get("unconfirmed") or {})
+    return facts
+
+
+def _run_store_research(name: str, address: str = ""):
+    """상호명(+주소)으로 공식 API·웹 검색 그라운딩을 병렬 수집 → 주소(비어 있을 때)·가게 자랑(USP)·🔎 고유 팩트에 자동 반영. Mock 모드에서는 건너뜀"""
+    if mock_mode or not (name or "").strip():
+        return
+    import core.store_research as _sr
+    from core.planners.owner import short_region
+    from core.store_facts import facts_to_points
+    region = short_region(region_of(address)) if address else ""
+    with st.spinner("🌐 상호명으로 주소·대표 메뉴·후기 팩트를 모으는 중... (네이버 공식 API + 웹 검색, 10~20초)"):
+        res = _sr.research_store(name.strip(), address, region=region, gemini_api_key=api_key,
+                                 naver_id=os.getenv("NAVER_CLIENT_ID", ""), naver_secret=os.getenv("NAVER_CLIENT_SECRET", ""))
+    st.session_state.store_research = res
+    if not st.session_state.get("owner_address", "").strip():
+        addr = res.get("address") or res.get("address_candidate") or ""
+        if addr:
+            st.session_state.owner_address = addr
+            st.session_state.research_addr_note = ("공식 지역 검색 결과" if res.get("address_from") == "naver" else "AI 웹 검색 결과 (맞는지 확인해 주세요)")
+    if not st.session_state.get("owner_type_touched") and res.get("business_type"):
+        st.session_state.owner_type = res["business_type"]
+    existing = st.session_state.get("owner_usp", "").strip()
+    pts = [p for p in facts_to_points(res.get("confirmed") or {}) if p and p not in existing]
+    if pts:
+        st.session_state.owner_usp = " / ".join([x for x in [existing] + pts if x])
 
 
 # ==============================================================================
@@ -1163,6 +1199,7 @@ if is_owner_mode:
                 st.info("네이버 검색 API 키(NCP NAVER API HUB의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)를 .env에 넣으면 "
                         "상호명·업종·주소가 자동으로 채워져요. "
                         "지금은 아래에 직접 입력해 주세요." + ("" if link_mode else " (상호명은 입력하신 값으로 채워 두었어요)"))
+                _run_store_research(st.session_state.get("owner_name", "").strip() or q, st.session_state.get("owner_address", ""))
             else:
                 query = st.session_state.get("owner_name", "").strip() if link_mode else q
                 if not query:
@@ -1173,10 +1210,14 @@ if is_owner_mode:
                         st.session_state.place_results = found
                         if not found:
                             st.info("검색 결과가 없어요. 상호명에 지역을 붙여(예: 성수 불판) 다시 찾거나 아래에 직접 입력해 주세요.")
+                            _run_store_research(query, "")          # 지역 검색에 없어도 웹 검색으로 메뉴·후기 팩트는 시도
                         elif len(found) == 1:
                             # 결과가 하나면 고를 필요 없이 바로 채움 (한 번 클릭으로 끝)
                             _fill_place(found[0])
                             st.success(f"'{found[0]['name']}' 정보를 채웠어요 ({found[0]['category']}). 사진·영상은 아래에서 직접 올려 주세요.")
+                            _run_store_research(found[0]["name"], st.session_state.get("owner_address", ""))
+                        else:
+                            _run_store_research(query, "")          # 여러 곳이면 고르기 전에도 이름만으로 웹 검색 (고른 뒤 주소로 다시 수집)
                     except NaverAPIError as ne:
                         st.error(str(ne))
         for i, it in enumerate(st.session_state.get("place_results", [])):
@@ -1187,7 +1228,8 @@ if is_owner_mode:
             with r2:
                 if st.button("이 가게로 채우기", key=f"place_pick_{i}", use_container_width=True):
                     _fill_place(it)
-                    st.toast("상호명·업종·주소·소개글을 채웠어요. 사진·영상은 아래에서 직접 올려 주세요.", icon="🏢")
+                    _run_store_research(it["name"], st.session_state.get("owner_address", ""))
+                    st.toast("상호명·업종·주소·소개글·대표 메뉴를 채웠어요. 사진·영상은 아래에서 직접 올려 주세요.", icon="🏢")
                     st.rerun()
         st.caption("📷 사진·영상은 아래에서 직접 올려 주세요. 사장님이 올리신 미디어를 분석해 맞춤형 씬을 구성합니다.")
 
@@ -1218,17 +1260,29 @@ if is_owner_mode:
         st.caption("💡 대본의 고유함은 여기 적은 사실에서 나와요. 반찬·메뉴 이름, 손질·숙성 방식, 손님 리뷰 문구, 숫자(가짓수·두께)를 "
                    "구체적으로 적을수록 '어느 가게나 쓰는 문구' 대신 우리 가게만의 대본이 나옵니다. (적지 않은 사실은 지어내지 않아요)")
     with st.expander("📋 메뉴판·손님 리뷰 글 붙여넣기 (선택) — 대본이 우리 가게 고유 메뉴·리뷰 단어로 쓰여요", expanded=False):
-        st.caption("네이버 플레이스·리뷰 페이지는 자동으로 가져올 수 없어요(접근이 막혀 있음). 사장님이 보시는 메뉴판 글, 스마트플레이스의 영수증 리뷰를 "
+        st.caption("상호명으로 자동 수집한 결과 위에 더 보탤 때 쓰세요. 사장님이 보시는 메뉴판 글, 스마트플레이스의 영수증 리뷰를 "
                    "그대로 복사해 붙여 넣으면 ① 독특한 메뉴명(눈꽃버섯 갈비탕처럼 수식어가 붙은 것) ② 리뷰에서 형용사를 빼고 2번 이상 반복된 "
                    "명사만 뽑아 대본에 써요. 붙여 넣은 글에 없는 말은 지어내지 않아요.")
         st.text_area("메뉴판 글", key="owner_menu_text", height=110, placeholder="예: 눈꽃버섯 갈비탕 15,000원 / 굴돌솥비빔밥 12,000원 … (한 줄에 메뉴 하나)")
         st.text_area("영수증 리뷰 글 (여러 개 붙여 넣기)", key="owner_review_text", height=140, placeholder="리뷰 문장을 그대로 붙여 넣어 주세요 (3~10개 정도면 충분해요)")
-        from core.store_facts import build_store_facts as _bsf
-        _pf = _bsf(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
-                   address=st.session_state.get("owner_address", ""))
-        if _pf["special_menus"] or _pf["review_nouns"] or _pf["location_context"]:
-            st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_pf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
-                       + (", ".join(_pf["review_nouns"]) or "없음") + " · 방문 상황: " + (_pf["location_context"] or "없음"))
+    _mf = _merged_store_facts()
+    if _mf["special_menus"] or _mf["review_nouns"] or _mf["location_context"]:
+        st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_mf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
+                   + (", ".join(_mf["review_nouns"]) or "없음") + " · 방문 상황: " + (_mf["location_context"] or "없음"))
+    _sr_state = st.session_state.get("store_research") or {}
+    _unc = _sr_state.get("unconfirmed") or {}
+    if _sr_state:
+        _stp = _sr_state.get("steps") or {}
+        st.caption("🌐 자동 수집: " + " · ".join([
+            "네이버 지역 검색 " + ("✅" if _stp.get("naver_local") else "—"),
+            f"블로그 요약 {_stp.get('naver_blog', 0)}건",
+            "웹 검색(Gemini) " + ("✅ 출처 확인" if _stp.get("grounded") else ("✅ 요약만" if _stp.get("gemini") else "—")),
+        ]) + (f" · 주소: {st.session_state.get('research_addr_note')}" if st.session_state.get("research_addr_note") else ""))
+    if _unc.get("special_menus") or _unc.get("review_nouns") or _unc.get("location_context"):
+        st.checkbox("확인 못 한 검색 요약도 대본에 쓰기 (근거 링크·블로그에서 다시 확인되지 않은 AI 요약 항목)", key="use_unconfirmed_facts")
+        st.caption("❔ 미확인(출처 확인 전): " + (", ".join((_unc.get("special_menus") or []) + (_unc.get("review_nouns") or [])) or "없음")
+                   + (f" · 주변: {_unc.get('location_context')}" if _unc.get("location_context") else "")
+                   + " — 사실이 맞으면 위 체크를 켜거나 가게 자랑 칸에 직접 적어 주세요.")
     o5, o6 = st.columns([2, 1], vertical_alignment="bottom")
     with o5:
         owner_address = st.text_input("📍 주소·지역 (선택, 엔딩 카드에 표시)", key="owner_address", placeholder="예: 서울 성동구 성수일로")
@@ -1578,9 +1632,7 @@ with col_plan_desc:
 
 def _owner_store_facts() -> dict:
     """붙여 넣은 메뉴판·리뷰 글과 주소에서 뽑은 매장 고유 팩트 (글을 고치면 바로 반영되도록 매번 다시 뽑음)"""
-    from core.store_facts import build_store_facts
-    return build_store_facts(menu_text=st.session_state.get("owner_menu_text", ""), review_text=st.session_state.get("owner_review_text", ""),
-                             address=st.session_state.get("owner_address", ""))
+    return _merged_store_facts()
 
 
 def current_spec(bgm_path=None) -> pipeline.JobSpec:
