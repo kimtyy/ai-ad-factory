@@ -961,10 +961,14 @@ class AdCompositor:
                         except Exception:
                             end_card_base_frame = None
                         # 마지막 씬 자막·워터마크는 엔딩 카드가 페이드인되기 시작하는 시점에 끝냄 (카드 화면은 검색 안내만 단독으로)
-                        cut_at = max(0.5, scene_target_duration - XFADE)
+                    # 자막은 씬 끝 XFADE 전에 먼저 끄고(디졸브 구간에서 앞뒤 자막이 겹쳐 보이지 않게), 고정 요소는 따로 끝까지 유지
+                    cut_at = max(0.5, scene_target_duration - XFADE)
+                    if (not is_last_scene) or has_end_card:
                         segments = [(s0, max(0.1, min(d0, cut_at - s0)), c0, h0) for s0, d0, c0, h0 in segments]
                     layers = [synced_video]
                     for seg_start, seg_dur, seg_caption, seg_hook in segments:
+                        if not ((seg_caption and str(seg_caption).strip()) or (seg_hook and str(seg_hook).strip())):
+                            continue
                         overlay_img_arr = self.create_overlay_image(
                             caption_text=seg_caption,
                             hook_title=seg_hook,
@@ -973,37 +977,40 @@ class AdCompositor:
                             mode=mode,
                             center_y=item.get("caption_center_y") or (BUNDLE_CAPTION_CY if bars else None)
                         )
-                        if brand or disclosure or bars or label or item.get("quote_card") or item.get("info_line"):
-                            merged = Image.fromarray(overlay_img_arr).convert("RGBA")
-                            if label:
-                                key = ("label", w, h)
-                                if key not in watermark_cache:
-                                    watermark_cache[key] = self.render_book_label(label, w, h)
-                                merged.alpha_composite(watermark_cache[key])
-                            if item.get("info_line"):
-                                merged.alpha_composite(self.render_info_line(item["info_line"], w, h))
-                            if item.get("quote_card"):
-                                merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h,
-                                                                              cy=item.get("quote_cy"),
-                                                                              header=item.get("card_header", "")))
-                            if bars:
-                                key = ("bars", w, h)
-                                if key not in watermark_cache:
-                                    watermark_cache[key] = self.render_bundle_bars(bars[0], bars[1], w, h)
-                                merged.alpha_composite(watermark_cache[key])
-                            if brand:
-                                if (w, h) not in watermark_cache:
-                                    watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
-                                merged.alpha_composite(watermark_cache[(w, h)])
-                            if disclosure:
-                                key = ("disclosure", w, h)
-                                if key not in watermark_cache:
-                                    watermark_cache[key] = self.render_disclosure(disclosure, w, h)
-                                merged.alpha_composite(watermark_cache[key])
-                            overlay_img_arr = np.array(merged)
                         sub_clip = ImageClip(overlay_img_arr, ismask=False).set_start(seg_start).set_duration(seg_dur)
                         opened_clips.append(sub_clip)
                         layers.append(sub_clip)
+                    if brand or disclosure or bars or label or item.get("quote_card") or item.get("info_line"):
+                        merged = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                        if label:
+                            key = ("label", w, h)
+                            if key not in watermark_cache:
+                                watermark_cache[key] = self.render_book_label(label, w, h)
+                            merged.alpha_composite(watermark_cache[key])
+                        if item.get("info_line"):
+                            merged.alpha_composite(self.render_info_line(item["info_line"], w, h))
+                        if item.get("quote_card"):
+                            merged.alpha_composite(self.render_quote_card(item["quote_card"], item.get("quote_source", ""), w, h,
+                                                                          cy=item.get("quote_cy"),
+                                                                          header=item.get("card_header", "")))
+                        if bars:
+                            key = ("bars", w, h)
+                            if key not in watermark_cache:
+                                watermark_cache[key] = self.render_bundle_bars(bars[0], bars[1], w, h)
+                            merged.alpha_composite(watermark_cache[key])
+                        if brand:
+                            if (w, h) not in watermark_cache:
+                                watermark_cache[(w, h)] = brand.render_watermark(w, h, font_path=self.font_path)
+                            merged.alpha_composite(watermark_cache[(w, h)])
+                        if disclosure:
+                            key = ("disclosure", w, h)
+                            if key not in watermark_cache:
+                                watermark_cache[key] = self.render_disclosure(disclosure, w, h)
+                            merged.alpha_composite(watermark_cache[key])
+                        static_dur = max(0.1, cut_at) if (is_last_scene and has_end_card) else scene_target_duration
+                        static_clip = ImageClip(np.array(merged), ismask=False).set_start(0).set_duration(static_dur)
+                        opened_clips.append(static_clip)
+                        layers.append(static_clip)
                     # 비디오 위에 오버레이 클립 합성
                     synced_video = CompositeVideoClip(layers).set_duration(scene_target_duration)
 

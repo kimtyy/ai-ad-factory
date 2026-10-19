@@ -96,4 +96,42 @@ center50 = (fg50.min() + fg50.max()) / 2 / H
 check(abs(center - 0.43) < 0.015 and abs(center50 - 0.50) < 0.015,
       f"가로 영상: 매장 모드는 원본 중심 {center:.3f}(≈43%)로 올려 하단 자막 자리 확보, 기본값은 {center50:.3f}(정중앙)")
 
+# ---------------------------------------------------------------- 5. 씬 전환(디졸브) 구간: 앞뒤 자막이 겹쳐 보이지 않음, 워터마크는 끊기지 않음 (ffmpeg·MoviePy 두 경로)
+import core.render.ffmpeg_assemble as fa
+from core.render.brand import BrandOverlay
+brand = BrandOverlay(business_name="효정명인갈비")
+
+
+def two_scene(name, cap1, cap2, force_moviepy=False):
+    c = AdCompositor(output_dir=os.path.join(work, name))
+    m = [{"scene_index": 1, "video_path": black, "audio_path": aud, "caption": cap1, "subtitle": cap1},
+         {"scene_index": 2, "video_path": black, "audio_path": aud, "caption": cap2, "subtitle": cap2}]
+    if force_moviepy:
+        orig = fa.assemble
+        fa.assemble = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("force moviepy"))
+        try:
+            return c.assemble_ad(m, output_filename=f"{name}.mp4", mode="owner", brand=brand)
+        finally:
+            fa.assemble = orig
+    return c.assemble_ad(m, output_filename=f"{name}.mp4", mode="owner", brand=brand)
+
+
+def fr_at(path, t):
+    raw = subprocess.run([ff, "-v", "error", "-ss", f"{t:.3f}", "-i", path, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+    return np.frombuffer(raw, np.uint8).reshape(H, W, 3).astype(int)
+
+
+for label, mp in (("ffmpeg 조립", False), ("MoviePy 대체", True)):
+    with_c1 = two_scene(f"x_{int(mp)}", "첫째 장면이에요", "둘째 장면이에요", mp)
+    no_c1 = two_scene(f"y_{int(mp)}", "", "둘째 장면이에요", mp)
+    # 첫 씬 길이(음성 4.0 + 꼬리 0.2 + 디졸브 0.35 = 4.55초) 끝의 디졸브 구간(4.2~4.55초): 이전 자막은 이미 꺼져 있어야 함 → 첫 자막이 있든 없든 같은 화면
+    t_mid = 4.38
+    d_mid = float(np.abs(fr_at(with_c1, t_mid) - fr_at(no_c1, t_mid)).mean())
+    d_before = float(np.abs(fr_at(with_c1, 3.2) - fr_at(no_c1, 3.2)).mean())
+    mid = fr_at(with_c1, t_mid)
+    wm_top = int((mid[: int(H * 0.2), int(W * 0.5):].max(axis=2) > 120).sum())           # 워터마크(우측 상단) 밝은 픽셀
+    wm_early = int((fr_at(with_c1, 1.0)[: int(H * 0.2), int(W * 0.5):].max(axis=2) > 120).sum())
+    check(d_mid < 0.2 and d_before > 1.0, f"[{label}] 디졸브 중 이전 자막이 이미 꺼져 있음 (자막 유무 차이 {d_mid:.2f}), 그 전엔 보임 ({d_before:.2f})")
+    check(wm_early > 50 and wm_top > 50, f"[{label}] 워터마크는 씬 전환에서도 끊기지 않음 (전환 중 {wm_top}px ≈ 평소 {wm_early}px)")
+
 finish(fails)

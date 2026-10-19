@@ -527,7 +527,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "store_research", "use_unconfirmed_facts",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -1073,14 +1073,15 @@ if is_commerce_mode and CoupangPartners().enabled:
 def _fill_store_points(api_key_: str, mock_: bool):
     """'사진으로 매장 특징 정리' 버튼 콜백 (위젯 값 변경은 콜백에서 해야 같은 실행에서 오류가 나지 않음)"""
     existing = st.session_state.get("owner_usp", "").strip()
-    from core.store_facts import build_store_facts, facts_to_points, tag_photos
+    from core.store_facts import analyze_photos, build_store_facts, facts_to_points
     facts = _merged_store_facts()
     fact_pts = [p for p in facts_to_points(facts) if p and p not in existing]
     if not mock_ and st.session_state.uploaded_paths:
         # 사진마다 실제로 보이는 피사체를 적어 둠 (대본이 화면 사진과 어긋나지 않게)
-        tags = tag_photos(st.session_state.uploaded_paths, business_name=st.session_state.get("owner_name", ""), api_key=api_key_,
-                          thumb_dir=current_job().assets_dir, cache_path=current_job().asset_path("photo_tags.json"))
+        tags, buckets = analyze_photos(st.session_state.uploaded_paths, business_name=st.session_state.get("owner_name", ""), api_key=api_key_,
+                                       thumb_dir=current_job().assets_dir, cache_path=current_job().asset_path("photo_tags.json"))
         st.session_state.photo_tags = tags
+        st.session_state.photo_buckets = buckets
     pts = suggest_store_points(st.session_state.get("owner_name", ""), st.session_state.get("owner_type", DEFAULT_BUSINESS_TYPE),
                                st.session_state.uploaded_paths, existing, api_key=api_key_, thumb_dir=current_job().assets_dir,
                                mock=mock_)
@@ -1654,6 +1655,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         affiliate_program=ss.get("affiliate_program", ""),
         core_concept=core_concept_val,
         store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
+        photo_buckets=dict(ss.get("photo_buckets") or {}) if is_owner_mode else {},
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)

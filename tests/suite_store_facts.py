@@ -126,8 +126,8 @@ tags8 = {ups[0]: "가게 외관 간판", ups[1]: "참깨 뿌린 물냉면", ups[
          ups[5]: "통버섯", ups[6]: "수제 양념 칼집 낸 생갈비", ups[7]: "공기밥"}
 ordr = order_media_for_concept(ups, tags8, "직접 재운 수제양념갈비")
 check(ordr[:3] == [2, 4, 6] and ordr[-1] == 0 and sorted(ordr) == list(range(8)) and order_media_for_concept(ups, {}, "수제양념갈비") == list(range(8))
-      and order_media_for_concept(ups, tags8, "") == list(range(8)),
-      f"사진 배치: 컨셉(수제 양념 갈비)을 보여 주는 사진이 앞쪽 컷, 외관은 마지막(CTA) 컷, 태그·컨셉이 없으면 올린 순서 그대로 {ordr}")
+      and order_media_for_concept(ups, tags8, "") == [1, 2, 3, 4, 5, 6, 7, 0],
+      f"사진 배치: 컨셉(수제 양념 갈비)을 보여 주는 사진이 앞쪽 컷, 외관은 마지막(CTA) 컷, 태그·컨셉이 없으면 올린 순서 그대로(외관만 맨 뒤) {ordr}")
 
 
 def claude_concept(contents, system, temperature, max_tokens):
@@ -144,5 +144,39 @@ rt._overrides = {}
 check(sc_c[-1]["voiceover"].startswith("제대로 재운 수제양념갈비 찾으신다면") and sc_c[-1]["voiceover"].endswith("지금 저장하고 가평 효정명인갈비를 검색해 보세요!")
       and sc_c[0].get("photo_reordered") and [s["media_group"] for s in sc_c] == [[2, 4], [6], [1, 3], [5, 7], [0]],
       f"1컨셉 5문장: 마지막 문장은 1메시지 요약 + 저장 CTA를 채택, 사진은 컨셉 순서로 재배치(올린 순서 번호로 기록): {[s.get('media_group') for s in sc_c]}")
+# ---------------------------------------------------------------- 5단계 버킷 정렬: 무작위 업로드도 1→5 순서, 외관은 마지막 컷에만 (여분의 외관은 제외)
+from core.planners.owner import media_groups
+bk = {ups[0]: 5, ups[1]: 4, ups[2]: 1, ups[3]: 3, ups[4]: 2, ups[5]: 1, ups[6]: 4, ups[7]: 5}          # 외관이 첫 번째로 올라온 무작위 순서 + 외관 2장
+tg = {ups[0]: "가게 외관 간판", ups[1]: "물냉면", ups[2]: "노릇하게 구워진 갈비", ups[3]: "석쇠 위 갈비", ups[4]: "생갈비 칼집", ups[5]: "고기 자르는 장면",
+      ups[6]: "밑반찬", ups[7]: "주차장 바닥"}
+o5 = order_media_for_concept(ups, tg, "수제 양념 갈비", bk)
+check([bk[ups[k]] for k in o5] == [1, 1, 2, 3, 4, 4, 5] and len(o5) == 7 and o5[-1] == 0 and 7 not in o5 and len(media_groups(len(o5))) == 5,
+      f"5단계 버킷 정렬: 외관이 먼저 올라와도 1→5단계 순서, 외관은 마지막 컷 한 장만(남는 외관 제외), 사진 7장 → 5문장 {[bk[ups[k]] for k in o5]}")
+sc_b = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, region="경기 가평군", core_concept="수제 양념 갈비",
+                             photo_tags=tg, photo_buckets=bk)
+check(sc_b[0]["media_group"] == [o5[0], o5[1]] and sc_b[-1]["media_group"] == [0] and sc_b[0].get("photo_reordered"),
+      "기획: 첫 문장(0~3초) 컷은 버킷 1(먹음직한 고기), 마지막 문장 컷은 가게 외관")
+rt._overrides = {"claude": lambda contents, system, temperature, max_tokens: json.dumps({"photos": [
+    {"index": i + 1, "subject": "고기", "bucket": [5, 1, 3][i % 3]} for i in range(sum(1 for c in contents if isinstance(c, str) and c.startswith("[사진")))]}, ensure_ascii=False)}
+from core.store_facts import analyze_photos
+calls_b = []
+_orig_gj = rt.generate_json
+
+
+def _count_gj(*a, **k):
+    calls_b.append(1)
+    return _orig_gj(*a, **k)
+
+
+rt.generate_json = _count_gj
+import core.llm as _llm_pkg
+_llm_pkg.generate_json = _count_gj
+cache_b = os.path.join(work, "buckets.json")
+t1, b1 = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_b)
+t2, b2 = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_b)
+rt._overrides = {}
+rt.generate_json = _orig_gj
+_llm_pkg.generate_json = _orig_gj
+check(list(b1.values()) == [5, 1, 3] and b1 == b2 and len(calls_b) == 1, f"비전이 사진마다 버킷(1~5)을 매기고 같은 사진은 캐시 사용 ({list(b1.values())}, 호출 {len(calls_b)}회)")
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)

@@ -190,32 +190,48 @@ def _media_preview_image(path: str, thumb_dir: Optional[str]):
 MEDIA_GROUP_SIZES = {6: [2, 1, 1, 1, 1], 7: [2, 1, 2, 1, 1], 8: [2, 1, 2, 2, 1]}
 
 
-EXTERIOR_WORDS = ("외관", "간판", "건물", "입구", "출입구", "가게 전경", "매장 전경")
+EXTERIOR_WORDS = ("외관", "간판", "건물", "입구", "출입구", "가게 전경", "매장 전경", "주차장", "내부 전경", "매장 내부")
 
 
-def order_media_for_concept(media: List[str], photo_tags: Dict[str, str], concept: str) -> List[int]:
+def order_media_for_concept(media: List[str], photo_tags: Dict[str, str], concept: str, photo_buckets: Optional[Dict[str, int]] = None) -> List[int]:
     """
-    선택한 1컨셉을 가장 잘 보여 주는 사진(사진 태그에 컨셉 단어가 많은 순)을 본론 컷(앞쪽)에, 가게 외관은 마지막(CTA) 컷에 둔다.
-    태그나 컨셉이 없거나 컨셉과 맞는 사진이 하나도 없으면 올린 순서 그대로. 반환: media 인덱스 순서
+    올린 순서와 상관없이 맛집 5단계 시선 순서로 컷을 정렬한다 (비전이 매긴 버킷):
+      1 다 구워진 메인 요리 클로즈업·고기 자르기(첫 3초 후킹) → 2 전체 상차림·굽기 전 원육 → 3 구워지는 조리 장면 → 4 곁들임(냉면·반찬) → 5 가게 외관·간판(마지막 컷에만)
+    같은 버킷 안에서는 컨셉 단어가 사진 태그에 많은 순, 그다음 올린 순서. 외관(5)은 한 장만 마지막에 쓰고 나머지 외관은 쓰지 않는다
+    (다른 컷이 충분할 때). 버킷이 없으면 태그의 외관 단어로 외관만 마지막으로 보내고 컨셉 점수로 정렬, 태그도 컨셉도 없으면 올린 순서 그대로.
+    반환: media 인덱스 순서 (일부 사진은 빠질 수 있음)
     """
     n = len(media)
     ident = list(range(n))
-    if not n or not photo_tags or not (concept or "").strip():
+    if not n:
         return ident
+    photo_tags = photo_tags or {}
+    photo_buckets = photo_buckets or {}
     from core.script_guard import content_stems
-    keys = content_stems(concept)
-    keys_full = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", concept)}
-    scored = []
+    keys = content_stems(concept or "")
+    keys_full = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", concept or "")}
+    rows = []
     for i, p in enumerate(media):
         tag = photo_tags.get(p, "")
-        ext = any(w in tag for w in EXTERIOR_WORDS)
+        bk = photo_buckets.get(p)
+        is_ext = (bk == 5) or (bk is None and any(w in tag for w in EXTERIOR_WORDS))
         sc = sum(1 for k in keys if k in tag) + sum(1 for w in keys_full if w in tag)
-        scored.append((i, sc, ext))
-    if not any(sc > 0 for _, sc, ext in scored if not ext):
-        return ident
-    main = sorted([t for t in scored if not t[2]], key=lambda t: (-t[1], t[0]))
-    ext_ = [t for t in scored if t[2]]
-    return [t[0] for t in main] + [t[0] for t in ext_]
+        rows.append({"i": i, "b": bk if bk in (1, 2, 3, 4, 5) else (5 if is_ext else 0), "ext": is_ext, "sc": sc})
+    if not photo_buckets and not any(r["sc"] > 0 for r in rows if not r["ext"]) and not any(r["ext"] for r in rows):
+        return ident                                                # 버킷도, 외관 태그도, 컨셉에 맞는 태그도 없음: 올린 순서 유지
+    main = [r for r in rows if not r["ext"]]
+    exts = [r for r in rows if r["ext"]]
+    # 버킷이 있는 사진은 1→4 순서, 버킷이 없는 사진(0)은 컨셉 점수 순으로 그 뒤… 버킷 정보가 없을 때는 컨셉 점수만으로 정렬
+    if photo_buckets:
+        main.sort(key=lambda r: (r["b"] if r["b"] else 9, -r["sc"], r["i"]))
+    else:
+        main.sort(key=lambda r: (-r["sc"], r["i"]))
+    out = [r["i"] for r in main]
+    if exts:
+        out.append(exts[0]["i"])                                    # 외관은 마지막 컷에만 한 장
+        if len(main) < 2:                                           # 다른 컷이 너무 적으면 남는 외관도 뒤에 붙임
+            out += [r["i"] for r in exts[1:]]
+    return out
 
 
 def media_groups(n_media: int) -> List[List[int]]:
@@ -257,6 +273,7 @@ def plan_owner_storyboard(
     region: str = "",
     store_facts: Optional[Dict[str, Any]] = None,
     photo_tags: Optional[Dict[str, str]] = None,
+    photo_buckets: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -267,9 +284,9 @@ def plan_owner_storyboard(
     business_name = (business_name or "").strip()
     search_keyword = (search_keyword or "").strip() or business_name
     media_orig = list(media_paths or [])[:8]
-    order = order_media_for_concept(media_orig, photo_tags or {}, core_concept)
+    order = order_media_for_concept(media_orig, photo_tags or {}, core_concept, photo_buckets or {})
     media = [media_orig[k] for k in order]                       # 컨셉 순서로 정렬한 미디어 (대본 프롬프트·컷 묶음은 이 순서)
-    reordered = order != list(range(len(media_orig)))
+    reordered = order != list(range(len(media_orig)))           # 순서가 바뀌었거나 일부 사진(여분의 외관)을 뺀 경우
     groups = media_groups(len(media)) if len(media) >= 2 else []
     if reordered and not groups:
         groups = [[k] for k in range(len(media))]
@@ -583,10 +600,10 @@ LOCKIN_BLOCK = """[절대 원칙: "쇼츠는 광고다. 광고는 1컨셉 1메�
 2. 1컨셉 5문장 설득 공식:
    - 1문장(후킹): 상호명을 절대 쓰지 말고, 오직 선택된 1메시지 주제와 직결된 질문·결핍·통념 깨기로 시작하라.
    - 2문장(공감/대비): 그 1메시지 영역에서 손님이 평소 겪는 아쉬움이나 실패 경험을 짚어라.
-   - 3문장(핵심 증거): 매장의 추출된 팩트 중 선택된 1메시지를 증명하는 단 하나의 핵심 강점만 구체적으로 제시하라.
+   - 3문장(핵심 증거): 매장의 추출된 팩트 중 선택된 1메시지를 증명하는 단 하나의 핵심 강점만 구체적으로 제시하라. "이것만 기억해요" 같은 추상 어구는 쓰지 말고, 왜 그런지 구체적인 이유 1가지(입력 팩트에 있는 손질·양념·조리 방식)를 담아라. (구조 예: "<자극 없는 양념>에 <깊은 칼집>을 넣어 <질기지 않아요>")
    - 4문장(체감 가치): 그 강점 때문에 손님이 한 입 먹었을 때 느끼는 결정적 차이를 서술하라.
    - 5문장(CTA): 선택된 1메시지를 다시 한 번 요약하며 지금 저장하고 [지역명 + 상호명]을 검색하게 유도하라.
-3. 문장 길이 및 중복 제한: 인접 문장에 같은 단어를 반복하지 말고, 각 문장은 공백 포함 20~28자 내외로 작성하여 하단(72%)에 1~2줄씩 2분할로 표시되게 하라.
+3. 문장 길이 및 중복 제한: 인접 문장에 같은 단어를 반복하지 말고(예: 2문장에 쓴 "만족하는"을 3문장에서 또 쓰지 말고 다른 표현으로), 각 문장은 공백 포함 20~28자 내외로 작성하여 하단(72%)에 1~2줄씩 2분할로 표시되게 하라.
 4. 입력된 USP·메뉴·사진 태그에 없는 가짜 메뉴·반찬 이름은 지어내지 마라. 입력 팩트에 있는 것은 칼집·양념·불향처럼 침샘을 자극하는 미각·시각 표현으로 생생하게 쓰고, "이름부터 믿음직하죠", "맛을 내요", "이어져요" 같은 건조한 캡션 말투와 "팡 터지는 육즙", "감칠맛 폭발", "겉바속촉", "정갈한 밑반찬", "극락 그 자체" 같은 클리셰는 쓰지 마라. 프롬프트 예시의 문구·단어를 그대로 복사하지 마라."""
 OWNER_SCRIPT_SYSTEM = OWNER_SYSTEM + "\n\n" + LOCKIN_BLOCK
 FEWSHOT_BLOCK = """[Few-Shot: 1컨셉 1메시지 5문장 구조 예시 — <꺾쇠> 안은 이 매장의 입력 팩트로 채우세요]

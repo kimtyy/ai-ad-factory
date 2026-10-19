@@ -192,48 +192,60 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 # 긴 문장은 최대 2줄씩 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율, 마지막 덩어리는 씬 끝까지)
                 from core.render.caption_chunks import chunk_windows
                 segs = [(s0, e0, c, None) for c, (s0, e0) in zip(chunks, chunk_windows(chunks, a_dur, dur))]
-        pngs = []
+        # 자막(문장 덩어리)과 고정 요소(워터마크·제휴 표시·고정 바·라벨·인용 카드)를 나눠 만든다:
+        # 씬과 씬이 디졸브로 겹치는 구간에서는 이전 자막이 먼저 꺼져(씬 끝 xfade 전) 앞뒤 자막이 겹쳐 보이지 않고, 고정 요소는 끊기지 않는다
+        has_static = bool(brand or disclosure or bars or label or quote or item.get("info_line"))
+        cap_pngs, static_pngs = [], []
         for j, (s, e, cap, hk) in enumerate(segs):
-            if not (cap or hk or brand or disclosure or bars or label or quote or item.get("info_line")):
+            if not (cap or hk):
                 continue
             layer = Image.fromarray(comp.create_overlay_image(caption_text=cap, hook_title=hk, width=W, height=H, mode=mode,
                                                               center_y=item.get("caption_center_y")
                                                               or (BUNDLE_CAPTION_CY if bars else None))).convert("RGBA")
+            png = os.path.join(work, f"s{idx}_{j}.png")
+            layer.save(png)
+            cap_pngs.append((png, s, e))
+        if has_static:
+            st_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             if brand:
                 if "wm" not in static_layers:
                     static_layers["wm"] = brand.render_watermark(W, H, font_path=comp.font_path)
-                layer.alpha_composite(static_layers["wm"])
+                st_layer.alpha_composite(static_layers["wm"])
             if label:
                 if "label" not in static_layers:
                     static_layers["label"] = comp.render_book_label(label, W, H)
-                layer.alpha_composite(static_layers["label"])
+                st_layer.alpha_composite(static_layers["label"])
             if item.get("info_line"):
-                layer.alpha_composite(comp.render_info_line(item["info_line"], W, H))
+                st_layer.alpha_composite(comp.render_info_line(item["info_line"], W, H))
             if quote:
                 if ("quote", idx) not in static_layers:
                     static_layers[("quote", idx)] = comp.render_quote_card(quote, item.get("quote_source", ""), W, H,
                                                                            cy=item.get("quote_cy"),
                                                                            header=item.get("card_header", ""))
-                layer.alpha_composite(static_layers[("quote", idx)])
+                st_layer.alpha_composite(static_layers[("quote", idx)])
             if bars:
                 if "bars" not in static_layers:
                     static_layers["bars"] = comp.render_bundle_bars(bars[0], bars[1], W, H)
-                layer.alpha_composite(static_layers["bars"])
+                st_layer.alpha_composite(static_layers["bars"])
             if disclosure:
                 if "disc" not in static_layers:
                     static_layers["disc"] = comp.render_disclosure(disclosure, W, H)
-                layer.alpha_composite(static_layers["disc"])
-            png = os.path.join(work, f"s{idx}_{j}.png")
-            layer.save(png)
-            pngs.append((png, s, e))
+                st_layer.alpha_composite(static_layers["disc"])
+            sp = os.path.join(work, f"s{idx}_static.png")
+            st_layer.save(sp)
+            static_pngs.append((sp, 0.0, dur))
+        cut = dur - xfade
+        if not is_last or has_card:
+            cap_pngs = [(p_, s_, max(s_ + 0.1, min(e_, cut))) for p_, s_, e_ in cap_pngs]
+        if is_last and has_card:
+            # 엔딩 카드가 페이드인되기 시작하는 시점에 고정 요소도 끝냄: 카드는 검색 안내만 단독으로
+            static_pngs = [(p_, s_, max(s_ + 0.1, min(e_, cut))) for p_, s_, e_ in static_pngs]
+        pngs = cap_pngs + static_pngs
         if idx == 0 and intro_image and os.path.exists(intro_image):
             ip = os.path.join(work, "intro.png")
             with Image.open(intro_image) as source:
                 ImageOps.exif_transpose(source).convert("RGB").resize((W, H), Image.LANCZOS).save(ip)
             pngs.append((ip, 0.0, min(intro_sec, dur)))
-        if is_last and has_card:
-            # 엔딩 카드가 페이드인되기 시작하는 시점(씬 끝 xfade 전)에 마지막 씬 자막·워터마크를 끝냄: 카드는 검색 안내만 단독으로
-            pngs = [(p_, s_, max(s_ + 0.1, min(e_, dur - xfade))) for p_, s_, e_ in pngs]
         extras = [p for p in (item.get("extra_videos") or []) if p and os.path.exists(p)]
         scenes.append({"video": vp, "audio": ap, "dur": dur, "pngs": pngs, "extras": extras})
 

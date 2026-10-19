@@ -15,7 +15,7 @@ import logging
 import os
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("ad_factory.store_facts")
 
@@ -156,22 +156,32 @@ def _photo_key(path: str) -> str:
         return hashlib.md5(path.encode()).hexdigest()[:12]
 
 
-def tag_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
-               cache_path: Optional[str] = None, mock: bool = False) -> Dict[str, str]:
+BUCKET_LABELS = {1: "다 구워진 메인 요리 클로즈업·고기 자르기", 2: "전체 상차림·굽기 전 칼집/양념 원육", 3: "불판·석쇠 위에서 구워지는 조리 장면",
+                 4: "냉면·찌개·탕·밑반찬 같은 곁들임", 5: "가게 외관·간판·내부 전경·주차장"}
+
+
+def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
+                   cache_path: Optional[str] = None, mock: bool = False) -> Tuple[Dict[str, str], Dict[str, int]]:
     """
-    사진마다 프레임 안에 실제로 보이는 사물만 한 줄로 → {사진 경로: '참숯 불판 위 노릇한 갈비'}. 상상·추측 금지, 안 보이면 빈 값.
-    같은 사진은 파일 옆 캐시(cache_path)로 다시 호출하지 않는다.
+    사진·영상 대표 프레임마다 비전으로 ① 실제로 보이는 피사체 한 줄(subject) ② 맛집 5단계 버킷 번호(bucket 1~5)를 한 번에 받는다
+    → ({경로: 피사체}, {경로: 버킷}). 버킷: 1=다 구워진 메인 요리·고기 자르기 / 2=전체 상차림·굽기 전 원육 / 3=구워지는 조리 장면 /
+    4=냉면·찌개·반찬 같은 곁들임 / 5=가게 외관·간판·내부·주차장. 상상·추측 금지. 같은 사진은 캐시(cache_path)로 다시 부르지 않는다
     """
     media = [p for p in (media_paths or []) if p][:8]
     if mock or not media:
-        return {}
-    cache: Dict[str, str] = {}
+        return {}, {}
+    cache: Dict[str, Any] = {}
     if cache_path and os.path.exists(cache_path):
         try:
             cache = json.load(open(cache_path, encoding="utf-8"))
         except (OSError, ValueError):
             cache = {}
-    todo = [p for p in media if _photo_key(p) not in cache]
+
+    def entry(p: str) -> Dict[str, Any]:
+        v = cache.get(_photo_key(p))
+        return v if isinstance(v, dict) else ({"s": v} if v else {})          # 옛 캐시(문자열)는 피사체만 있는 것으로
+
+    todo = [p for p in media if not entry(p).get("asked")]               # 이미 물어본 사진은 다시 부르지 않음 (엔진이 버킷을 안 줘도 반복 호출 방지)
     if todo:
         from core.llm import generate_json
         from core.planners.owner import _media_preview_image
@@ -183,28 +193,50 @@ def tag_photos(media_paths: List[str], *, business_name: str = "", api_key: Opti
                 contents += [f"[사진 {len(order) + 1}]", img]
                 order.append(p)
         if order:
+            rubric = "\n".join(f"  {k}번: {v}" for k, v in BUCKET_LABELS.items())
             contents.append(f"""[역할: 로컬 매장 고유 팩트 발굴 전문 AI PD]
 가게: {business_name or '(상호 미입력)'}
-위 사진 {len(order)}장 각각에 대해 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내)로 정확히 기술하세요.
-- 보이는 사물·음식·식기·불판·좌석·간판·외관만 (예: '참숯 불판 위 노릇한 갈비', '살얼음 뜬 유기그릇 물냉면', '가게 외관 간판')
-- 맛·분위기·좋다/맛있다 같은 형용사, 사진에 없는 메뉴·재료·수량은 절대 쓰지 마세요. 확실하지 않으면 보이는 것만 쓰고 비워도 됩니다.
-JSON만 출력: {{"photos": [{{"index": 1, "subject": "..."}}, ...]}}""")
+위 사진·영상 대표 프레임 {len(order)}장 각각에 대해 두 가지를 정확히 기록하세요.
+1) subject: 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내). 보이는 사물·음식·식기·불판·좌석·간판·외관만 (예: '참숯 불판 위 노릇한 갈비', '가게 외관 간판').
+   맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 절대 쓰지 마세요.
+2) bucket: 아래 5단계 중 가장 알맞은 번호 하나.
+{rubric}
+   (가게 외관·간판·주차장·매장 내부 전경은 반드시 5번. 먹음직스럽게 다 구워진 고기 클로즈업이나 고기 자르는 장면은 1번.)
+JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1}}, ...]}}""")
             try:
                 data, _ = generate_json(contents, "당신은 사진에 보이는 사실만 기록하는 꼼꼼한 사진 분석가입니다. 응답은 JSON만 출력합니다.",
                                         temperature=0.2, gemini_api_key=api_key, purpose="사진 피사체 태깅")
                 for item in (data.get("photos") if isinstance(data, dict) else None) or []:
                     k = int(item.get("index") or 0) - 1
                     subj = re.sub(r"\s+", " ", str(item.get("subject") or "")).strip()
-                    if 0 <= k < len(order) and subj:
-                        cache[_photo_key(order[k])] = subj[:60]
+                    try:
+                        bk = int(item.get("bucket") or 0)
+                    except (TypeError, ValueError):
+                        bk = 0
+                    if 0 <= k < len(order):
+                        e = dict(entry(order[k]))
+                        e["asked"] = True
+                        if subj:
+                            e["s"] = subj[:60]
+                        if bk in BUCKET_LABELS:
+                            e["b"] = bk
+                        cache[_photo_key(order[k])] = e
             except Exception as e:
-                logger.warning(f"사진 피사체 태깅 실패 (태그 없이 진행): {e}")
+                logger.warning(f"사진 피사체·버킷 분석 실패 (분석 없이 진행): {e}")
         if cache_path:
             try:
                 json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False)
             except OSError:
                 pass
-    return {p: cache[_photo_key(p)] for p in media if cache.get(_photo_key(p))}
+    tags = {p: entry(p)["s"] for p in media if entry(p).get("s")}
+    buckets = {p: int(entry(p)["b"]) for p in media if entry(p).get("b")}
+    return tags, buckets
+
+
+def tag_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
+               cache_path: Optional[str] = None, mock: bool = False) -> Dict[str, str]:
+    """사진마다 실제로 보이는 사물 한 줄 → {경로: 피사체} (analyze_photos의 피사체 부분)"""
+    return analyze_photos(media_paths, business_name=business_name, api_key=api_key, thumb_dir=thumb_dir, cache_path=cache_path, mock=mock)[0]
 
 
 # ---------------------------------------------------------------- 묶음 / 가게 자랑(USP) 반영

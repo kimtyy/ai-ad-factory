@@ -198,6 +198,7 @@ BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"이름부터\s*믿음", "올드한 홍보 문구 '이름부터 믿음직'"),
     (r"맛을\s*내요|맛을\s*냅니다", "무미건조한 서술 '맛을 내요' (맛·향·식감을 생생하게)"),
     (r"이어져요|이어집니다", "무미건조한 서술 '~이어져요'"),
+    (r"이것만\s*기억", "추상 어구 '이것만 기억해요' (왜 그런지 구체적 이유로)"),
     # 전국 매장 공용 AI 맛집 상투어 (상호명만 가리면 어느 가게에나 쓸 수 있는 문구)
     (r"팡\s*터지는\s*육즙|육즙이\s*미쳤", "AI 상투어 '팡 터지는 육즙' (이 매장만의 사실로 바꾸기)"),
     (r"감칠맛\s*(이\s*)?폭발", "AI 상투어 '감칠맛 폭발'"),
@@ -556,16 +557,36 @@ def hook_situation_issues(lines: List[str], region: str = "") -> Dict[int, str]:
     return {0: "1문장은 방문 상황 지목('주말 가족 외식 찾으신다면')이나 손실 회피 질문('잘못 고르면 그날 기분 망치죠?')으로 시작하기 (밋밋한 설명 금지)"}
 
 
+def _long_words(text: str) -> set:
+    """어미·조사를 뗀 3글자 이상 낱말 (인접 문장에서 같은 낱말이 또 나오는지 볼 때 사용)"""
+    out = set()
+    for tok in re.findall(r"[가-힣A-Za-z0-9]+", text or ""):
+        t = tok
+        for suf in _STEM_TRIM:
+            if len(t) - len(suf) >= 3 and t.endswith(suf):
+                t = t[:-len(suf)]
+                break
+        if len(t) >= 3 and t not in _STEM_STOP:
+            out.add(t[:4] if re.match(r"[가-힣]", t) else t)
+    return out
+
+
 def adjacent_repeat_issues(lines: List[str], concept: str = "") -> Dict[int, str]:
-    """바로 앞 문장과 핵심 명사구를 또 쓰는 문장 ('석쇠 위 고기' → '숯불 석쇠 위 양념 고기'). 컨셉 단어는 모든 문장에 들어가므로 제외"""
+    """
+    바로 앞 문장과 핵심 어구를 또 쓰는 문장: 내용어 2개 이상 겹침('석쇠 위 고기' → '숯불 석쇠 위 양념 고기') 또는
+    3글자 이상 같은 낱말 반복('만족하는' 연속). 컨셉 단어는 모든 문장에 들어가므로 제외
+    """
     skip = content_stems(concept)
+    skip_long = _long_words(concept)
     issues: Dict[int, str] = {}
     prev: set = set()
+    prev_long: set = set()
     for i, t in enumerate(lines):
         cur = content_stems(t or "") - skip
-        if i and len(cur & prev) >= 2:
-            issues[i] = "앞 문장과 같은 어구 반복 → 사진 흐름에 맞춰 다른 피사체·조리 단계로 초점 옮기기 (같은 명사구 연속 금지)"
-        prev = cur
+        cur_long = _long_words(t or "") - skip_long
+        if i and (len(cur & prev) >= 2 or (cur_long & prev_long)):
+            issues[i] = "앞 문장과 같은 어구·낱말 반복 → 같은 말을 또 쓰지 말고 다른 표현·다른 각도(대비·증거·체감)로 쓰기"
+        prev, prev_long = cur, cur_long
     return issues
 
 
@@ -897,7 +918,7 @@ def is_hook_echo(hook: str, text: str, core_concept: str = "") -> bool:
     return bool(hook and text and repeated_line_issues([text], hook))
 
 
-_CONCEPT_FALLBACKS = ("{c}, 이게 이유예요.", "{c}, 직접 보면 알아요.", "{c}, 이것만 기억해요.")
+_CONCEPT_FALLBACKS = ("{c}, 이게 이유예요.", "{c}, 직접 보면 알아요.", "{c}, 그래서 찾는 집이에요.")
 
 
 def concept_fallback_line(core_concept: str, index: int = 0) -> str:
