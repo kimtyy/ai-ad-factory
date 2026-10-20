@@ -202,8 +202,8 @@ cache_d = os.path.join(work, "doneness.json")
 td, bd = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_d)
 rt._overrides = {}
 pv = seen_v.get("prompt", "")
-check([bd[ups[k]] for k in range(3)] == [2, 1, 2] and "'양념 생고기(날고기)'와 '다 구워진 고기' 엄격 구분" in pv and "붉게 타오르는 숯불 열기" in pv
-      and "흰 접시에 담겨 있는 상태" in pv and "doneness" in pv,
+check([bd[ups[k]] for k in range(3)] == [2, 1, 2] and "전 업종 로컬 매장 미디어 5단계 시각 정렬기" in pv and "unready_raw_meat" in pv and "ready_to_eat" in pv
+      and "모둠회, 물회, 초밥, 육회, 생맥주, 케이크, 샐러드" in pv and "readiness" in pv,
       f"비전 분류: 굽기 전 생갈비·접시 원육이 1번으로 오면 2번으로 보정, 익은 고기만 1번, 프롬프트에 구분 기준 포함 {[bd[ups[k]] for k in range(3)]}")
 json.dump({**json.load(open(cache_d, encoding="utf-8")), "stale": {}}, open(cache_d, "w", encoding="utf-8"))
 old_cache = {k: {"s": v["s"], "b": 1, "asked": True} for k, v in json.load(open(cache_d, encoding="utf-8")).items() if isinstance(v, dict) and v.get("s")}
@@ -213,5 +213,49 @@ rt._overrides = {"claude": lambda c, sy, t, m: (calls_d.append(1), claude_donene
 td2, bd2 = analyze_photos(ups[:3], business_name="효정명인갈비", api_key="g", thumb_dir=work, cache_path=cache_d)
 rt._overrides = {}
 check(len(calls_d) == 1 and [bd2[ups[k]] for k in range(3)] == [2, 1, 2], "기준이 바뀌기 전 옛 캐시(버전 없음)는 다시 분류해서 잘못된 1번을 바로잡음")
+# ---------------------------------------------------------------- 전 업종 범용: 날것으로 먹는 완성 메뉴(회·육회·초밥·생맥주·디저트)는 1번 유지
+check(all(fix_bucket(1, s, r) == 1 for s, r in (("모둠회 한 접시", "ready_to_eat"), ("물회", "raw"), ("육회 비빔밥", ""), ("살얼음 생맥주", "none"), ("딸기 케이크", ""),
+                                                  ("연어 초밥", "raw"), ("과일 샐러드", ""), ("회덮밥", "")))
+      and fix_bucket(1, "굽기 전 양념 생삼겹살", "unready_raw_meat") == 2 and fix_bucket(1, "생버섯", "") == 2 and fix_bucket(1, "조리 전 반죽", "") == 2
+      and fix_bucket(1, "석쇠 위에서 구워지는 삼겹살", "cooking") == 3 and fix_bucket(1, "접시에 담긴 생닭", "") == 2,
+      "범용 보정: 회·물회·초밥·육회·생맥주·케이크·샐러드 같은 완성 메뉴는 날것이어도 1번 유지, 가열 전 식재료(생갈비·생삼겹·생닭·생버섯·반죽)만 2번, 조리 중은 3번")
+# ---------------------------------------------------------------- 📌 내가 올린 순서 그대로 유지: AI 정렬·외관 제외·비전 분류 호출 모두 생략
+sc_k = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, region="경기 가평군", core_concept="수제 양념 갈비",
+                             photo_tags=tg, photo_buckets=bk, keep_order=True)
+check([s["media_group"] for s in sc_k] == [[0, 1], [2], [3, 4], [5, 6], [7]] and not sc_k[0].get("photo_reordered"),
+      "순서 유지: 버킷·태그가 있어도 올린 순서 그대로 (첫 번째 사진이 첫 컷, 외관 사진도 제외하지 않고 8장 모두 사용)")
+vision_calls = []
+
+
+def claude_count(contents, system, temperature, max_tokens):
+    last = contents[-1] if isinstance(contents[-1], str) else ""
+    if '"photos"' in last:
+        vision_calls.append(1)
+        return fake_claude(contents, system, temperature, max_tokens)
+    return claude_concept(contents, system, temperature, max_tokens)
+
+
+rt._overrides = {"claude": claude_count}
+J2 = JobContext.create(app="keep_order")
+J2.root = work
+J2 = JobContext(J2.job_id, root=work)
+ups2 = []
+for i in range(8):
+    dst = os.path.join(J2.uploads_dir, f"k{i}.jpg")
+    shutil.copy(fixture("photo_pool.jpg" if i % 2 == 0 else "photo_room.jpg"), dst)
+    ups2.append(dst)
+spec_k = pl.JobSpec(mode="owner", name="효정명인갈비", usp="수제 양념 갈비", business_type="food", search_keyword="효정명인갈비", address="경기 가평군",
+                    media_paths=ups2, mock=False, api_key="g", core_concept="직접 재운 수제양념갈비", keep_photo_order=True)
+sc_pk = pl.plan(spec_k, J2)
+n_keep = len(vision_calls)
+spec_a = pl.JobSpec(mode="owner", name="효정명인갈비", usp="수제 양념 갈비", business_type="food", search_keyword="효정명인갈비", address="경기 가평군",
+                    media_paths=ups2, mock=False, api_key="g", core_concept="직접 재운 수제양념갈비")
+J3 = JobContext.create(app="auto_order")
+J3.root = work
+J3 = JobContext(J3.job_id, root=work)
+pl.plan(spec_a, J3)
+rt._overrides = {}
+check(n_keep == 0 and len(vision_calls) == 1 and [s.get("image_path") for s in sc_pk if s.get("image_path")][:1] == [ups2[0]],
+      f"순서 유지를 켜면 사진 분류(비전) 호출이 0회로 빨라지고 첫 컷이 첫 번째로 올린 사진, 끄면 자동 정렬을 위해 1회 호출 ({n_keep} → {len(vision_calls)})")
 shutil.rmtree(work, ignore_errors=True)
 finish(fails)

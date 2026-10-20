@@ -72,6 +72,7 @@ class JobSpec:
     store_facts: Dict[str, Any] = field(default_factory=dict)
     photo_tags: Dict[str, str] = field(default_factory=dict)
     photo_buckets: Dict[str, int] = field(default_factory=dict)          # 사진 5단계 시각 정렬 버킷 {경로: 1~5}
+    keep_photo_order: bool = False                                       # True면 올린 순서 그대로 (AI 자동 정렬·비전 분류 호출 생략)
 
     @property
     def is_bundle(self) -> bool:
@@ -208,7 +209,9 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
             facts["location_context"] = location_context(spec.address)
         photo_tags = dict(spec.photo_tags or {})
         photo_buckets = dict(spec.photo_buckets or {})
-        if (not photo_tags or not photo_buckets) and spec.media_paths and not spec.mock:
+        if spec.keep_photo_order:
+            photo_buckets = {}                                          # 순서 고정: 정렬용 비전 분류는 건너뜀 (속도) — 이미 가진 태그만 사용
+        elif (not photo_tags or not photo_buckets) and spec.media_paths and not spec.mock:
             # 사진을 직접 보고 피사체·5단계 버킷을 적어 둠 (캐시: 같은 사진은 다시 부르지 않음) → 올린 순서와 상관없이 맛집 시선 순서로 컷 정렬
             new_tags, new_buckets = analyze_photos(spec.media_paths, business_name=spec.name, api_key=spec.api_key, thumb_dir=job.assets_dir,
                                                    cache_path=job.asset_path("photo_tags.json"))
@@ -219,7 +222,8 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
                                        num_scenes=spec.num_scenes or DEFAULT_SCENES, hook_hints=spec.hook_hints,
                                        core_concept=spec.core_concept, tone_instruction=spec.tone_instruction,
                                        region=region_of(spec.address) if spec.address else "",
-                                       store_facts=facts, photo_tags=photo_tags, photo_buckets=photo_buckets, **common)
+                                       store_facts=facts, photo_tags=photo_tags, photo_buckets=photo_buckets,
+                                       keep_order=spec.keep_photo_order, **common)
         if photo_tags and scenes:
             scenes[0]["photo_tags"] = {os.path.basename(k): v for k, v in photo_tags.items()}      # 화면 확인용
     elif spec.mode == "book":

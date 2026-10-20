@@ -156,30 +156,40 @@ def _photo_key(path: str) -> str:
         return hashlib.md5(path.encode()).hexdigest()[:12]
 
 
-BUCKET_LABELS = {1: "완전히 익은 하이라이트 — 석쇠 아래 붉게 타오르는 숯불 열기가 보이거나, 표면이 노릇노릇 구워진 고기(구움 자국·육즙 윤기), 집게·가위로 구운 고기를 자르는 장면",
-                 2: "준비·원육 — 굽기 전 생고기(양념이 묻어 있어도), 접시에 담긴 고기, 전체 상차림",
-                 3: "조리 진행 — 석쇠·불판 위에서 구워지는 중인 장면(아직 다 익지 않음)",
-                 4: "냉면·찌개·탕·밑반찬 같은 곁들임", 5: "가게 외관·간판·내부 전경·주차장"}
+BUCKET_LABELS = {1: "완성된 하이라이트 — 손님이 지금 당장 한 입 먹고 싶게 만드는 '최종 조리·플레이팅 완료' 상태의 메인 메뉴 클로즈업·하이라이트 (구이류는 노릇하게 다 구워진 것, 회·초밥·육회·음료·디저트 같은 원래 가열하지 않는 완성 메뉴 포함)",
+                 2: "준비·원재료·전체 한 상 — 가열 조리 전의 원육·생버섯 등 굽기 전 식재료, 또는 테이블 전체 상차림 풀샷",
+                 3: "조리·시식 액션 및 메인 서브 앵글 — 조리되는 과정, 집게·젓가락으로 집어 올리는 액션, 메인 메뉴의 다른 각도",
+                 4: "사이드·후식·내부 공간 — 냉면·계란찜·밑반찬 같은 보조 메뉴, 후식, 매장 내부 좌석 분위기",
+                 5: "매장 외관·간판·주차장 — 마지막 엔딩 컷 전용 (간판이 보이는 외관, 입구, 주차장)"}
 
-# 날고기(굽기 전)를 '다 구워진 고기(버킷 1)'로 잘못 분류하는 것을 막는 단서 낱말 (피사체 설명에 이 말이 있으면 1번에서 내림)
-_RAW_HINT = ("생갈비", "날고기", "원육", "굽기 전", "생고기", "접시에 담", "접시 위", "생버섯", "올려진 생", "막 올린", "막 올려", "조리 전", "익지 않")
+# '그 상태로는 바로 먹을 수 없고 반드시 불에 익혀야 하는' 재료를 가리키는 말 (이런 사진만 1번에서 2번으로 내린다)
+_UNREADY_HINT = ("생갈비", "날고기", "원육", "굽기 전", "생고기", "생삼겹", "생닭", "생소고기", "구이육", "생버섯", "접시에 담긴 생", "막 올린", "막 올려",
+                 "조리 전", "익지 않", "반죽", "생돼지", "접시에 담긴 양념", "접시에 담긴 갈비", "접시에 담긴 고기", "접시 위 양념", "접시 위 갈비")
+# 원래 가열하지 않고 그대로 먹는 완성 메뉴: 날것처럼 보여도 절대 강등하지 않는다 (횟집·육회·초밥·생맥주·디저트·샐러드 등)
+_READY_HINT = ("모둠회", "물회", "회 ", "회덮밥", "회무침", "초밥", "스시", "육회", "생맥주", "맥주", "케이크", "샐러드", "디저트", "과일", "빙수", "음료", "커피",
+               "라떼", "주스", "칵테일", "와인", "소주", "카르파초", "타르타르", "연어", "참치")
 _COOKED_HINT = ("노릇", "구워진", "구운 ", "익은", "자르", "자른", "가위", "집게", "숯불 열기", "불꽃", "이글", "붉게 타", "구움 자국", "육즙")
 
 
-def fix_bucket(bucket: int, subject: str = "", doneness: str = "") -> int:
+def fix_bucket(bucket: int, subject: str = "", readiness: str = "") -> int:
     """
-    비전이 준 버킷 보정: 1번(다 익은 하이라이트)은 완전히 익은 고기만. 굽기 전 생고기·접시에 담긴 원육이면 2번, 아직 구워지는 중이면 3번으로 내린다.
-    (돼지갈비는 굽기 전에도 갈색 양념이 묻어 있어 비전이 1번으로 착각하기 쉬움)
+    비전이 준 버킷 보정 (전 업종 범용): 1번(완성된 하이라이트)에서 '불에 익혀야만 먹을 수 있는 가열 전 식재료'(굽기 전 생갈비·생삼겹·생닭·생버섯·반죽)만 2번으로,
+    '아직 구워지는 중'이면 3번으로 내린다. 모둠회·물회·초밥·육회·생맥주·케이크·샐러드처럼 원래 가열하지 않는 완성 메뉴는 날것이어도 1번 그대로 둔다.
+    readiness: unready_raw_meat(가열 전 식재료) / ready_to_eat(완성·바로 먹는 메뉴) / cooking(굽는 중) / none. 옛 값 raw·grilling·cooked도 받음
     """
     if bucket != 1:
         return bucket
-    d = (doneness or "").strip().lower()
+    r = (readiness or "").strip().lower()
     subj = subject or ""
-    if d in ("raw", "uncooked", "날고기", "생"):
+    if r in ("ready_to_eat", "cooked", "ready", "완성"):
+        return 1
+    if any(h in subj for h in _READY_HINT) and not any(h in subj for h in _UNREADY_HINT):
+        return 1
+    if r in ("unready_raw_meat", "raw", "uncooked", "unready"):
         return 2
-    if d in ("grilling", "cooking", "굽는중", "조리중"):
+    if r in ("cooking", "grilling", "굽는중", "조리중"):
         return 3
-    if any(h in subj for h in _RAW_HINT) and not any(h in subj for h in _COOKED_HINT):
+    if any(h in subj for h in _UNREADY_HINT) and not any(h in subj for h in _COOKED_HINT):
         return 2
     return 1
 
@@ -217,22 +227,18 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
                 contents += [f"[사진 {len(order) + 1}]", img]
                 order.append(p)
         if order:
-            rubric = "\n".join(f"  {k}번: {v}" for k, v in BUCKET_LABELS.items())
-            contents.append(f"""[역할: 로컬 매장 고유 팩트 발굴 전문 AI PD]
+            rubric = "\n".join(f"- Bucket {k}: {v}" for k, v in BUCKET_LABELS.items())
+            contents.append(f"""[역할: 전 업종 로컬 매장 미디어 5단계 시각 정렬기]
 가게: {business_name or '(상호 미입력)'}
-위 사진·영상 대표 프레임 {len(order)}장 각각에 대해 두 가지를 정확히 기록하세요.
-1) subject: 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내). 보이는 사물·음식·식기·불판·좌석·간판·외관만 (예: '참숯 불판 위 노릇한 갈비', '가게 외관 간판').
-   맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 절대 쓰지 마세요.
-2) bucket: 아래 5단계 중 가장 알맞은 번호 하나.
+업로드된 사진·영상 대표 프레임 {len(order)}장을 분석하여, 어떤 업종(고깃집, 횟집, 맥주집, 카페, 일반식당 등)이든 시청자의 시선과 식욕을 가장 강하게 사로잡는 아래 5단계 버킷(Bucket 1~5)으로 분류하라.
+각 사진마다 세 가지를 기록하세요.
+1) subject: 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내). 맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 쓰지 마세요.
+2) bucket: 아래 5단계 중 하나.
 {rubric}
-   (가게 외관·간판·주차장·매장 내부 전경은 반드시 5번.)
-3) doneness: 고기·메인 요리가 보이면 "raw"(굽기 전 생고기·접시에 담긴 원육·조리 시작 전), "grilling"(석쇠 위에서 구워지는 중이나 아직 다 익지 않음), "cooked"(완전히 익음) 중 하나, 요리가 아니면 "none".
-
-[비전 사진 분류 핵심 주의사항: '양념 생고기(날고기)'와 '다 구워진 고기' 엄격 구분]
-돼지갈비·양념육 사진은 굽기 전에도 갈색 양념이 묻어 있으므로 아래 기준으로 1번과 2번을 엄격히 구분하라.
-- 1번(첫 3초 후킹·썸네일 1순위, 완전히 익은 하이라이트): 반드시 석쇠 아래에 '붉게 타오르는 숯불 열기'가 보이거나, 고기 조각이 한 입 크기로 잘려 '표면이 노릇노릇하게 구워진 상태(구움 자국·육즙 윤기)'이거나, '집게·가위로 구운 고기를 자르는 장면'이어야 한다.
-- 2번(준비·원육): 고기에 갈색 양념이 묻어 있더라도 ① 흰 접시에 담겨 있는 상태, ② 고기 단면이나 칼집 사이가 아직 익지 않은 선홍빛·붉은빛 날고기, ③ 함께 올린 새송이버섯이 구워지지 않은 생버섯(새하얀 단면), ④ 석쇠에 그을음이 전혀 없는 조리 시작 전 상태 — 이 중 하나라도 해당하면 절대 1번으로 분류하지 말고 무조건 2번으로 분류하라.
-JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "doneness": "cooked"}}, ...]}}""")
+   * 주의: 구이류(돼지갈비, 삼겹살 등)는 반드시 불판 위에서 노릇하게 다 구워진 상태만 Bucket 1이며, 굽기 전 생고기는 Bucket 2다. 단, 원래 가열하지 않고 먹는 완성 요리(모둠회, 물회, 초밥, 육회, 생맥주, 케이크, 샐러드 등)는 그 자체가 완성품이므로 Bucket 1로 분류하라. 가게 외관·간판·주차장은 반드시 Bucket 5.
+3) readiness: 음식·음료가 보이면 "unready_raw_meat"(손님이 그 상태로는 먹을 수 없고 반드시 불에 익혀야만 하는 가열 조리 전 식재료: 굽기 전 생돼지갈비·생삼겹살·생소고기 구이육·생닭·생버섯·조리 전 반죽), "ready_to_eat"(이미 완성되어 손님이 바로 먹거나 마실 수 있는 메뉴: 구워진 고기, 모둠회, 물회, 초밥, 육회, 생맥주, 케이크, 샐러드 등), "cooking"(불 위에서 한창 조리되는 중) 중 하나, 음식이 아니면 "none".
+   (구이류는 갈색 양념이 묻어 있어도 접시에 담긴 날고기·선홍빛 날고기·생버섯·그을음 없는 석쇠 위 막 올린 상태면 unready_raw_meat이다. 회·육회처럼 원래 날것으로 먹는 완성 메뉴는 ready_to_eat이다.)
+JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readiness": "ready_to_eat"}}, ...]}}""")
             try:
                 data, _ = generate_json(contents, "당신은 사진에 보이는 사실만 기록하는 꼼꼼한 사진 분석가입니다. 응답은 JSON만 출력합니다.",
                                         temperature=0.2, gemini_api_key=api_key, purpose="사진 피사체 태깅")
@@ -249,9 +255,9 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "donen
                         if subj:
                             e["s"] = subj[:60]
                         if bk in BUCKET_LABELS:
-                            fixed = fix_bucket(bk, subj, str(item.get("doneness") or ""))
+                            fixed = fix_bucket(bk, subj, str(item.get("readiness") or item.get("doneness") or ""))
                             if fixed != bk:
-                                logger.info(f"[사진 버킷 보정] 사진 {k + 1}: {bk} → {fixed} (익지 않은 고기: '{subj}' / {item.get('doneness')})")
+                                logger.info(f"[사진 버킷 보정] 사진 {k + 1}: {bk} → {fixed} (가열 전 식재료·조리 중: '{subj}' / {item.get('readiness') or item.get('doneness')})")
                             e["b"] = fixed
                         cache[_photo_key(order[k])] = e
             except Exception as e:

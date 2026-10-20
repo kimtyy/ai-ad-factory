@@ -90,6 +90,14 @@ try:
     check(not at.exception and sf and "눈꽃버섯 갈비탕" in sf[0] and "격자 칼집" in sf[0] and "통새송이버섯" in sf[0],
           "메뉴판·리뷰 붙여넣기 → 특이 메뉴·리뷰 반복 명사 자동 추출 표시")
 
+    # 📌 내가 올린 사진 순서 그대로 유지 (AI 자동 정렬 끄기): 기본 해제, 켜면 재기획 안내
+    kp = at.checkbox(key="keep_photo_order")
+    check(kp.value is False and "AI 자동 정렬 끄기" in kp.label, "'내가 올린 사진 순서 그대로 유지' 체크박스: 기본값 해제(자동 정렬 사용)")
+    at.checkbox(key="keep_photo_order").set_value(True).run()
+    check(at.session_state.keep_photo_order is True and any("사진·영상 구성이 바뀌었어요" in (i.value or "") for i in at.info),
+          "순서 유지를 켜면 값이 저장되고 재기획 안내가 나옴")
+    at.checkbox(key="keep_photo_order").set_value(False).run()
+
     # 화자 시점 ↔ 성우·말투 프리셋 연동 (시점을 바꿀 때 적용, 이후 수동 변경은 유지)
     at.sidebar.radio(key="script_style_radio").set_value("review").run()
     check(not at.exception and at.session_state.selected_actor == "female_20s" and at.session_state.voice_tone == "lively",

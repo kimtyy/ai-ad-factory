@@ -274,6 +274,7 @@ def plan_owner_storyboard(
     store_facts: Optional[Dict[str, Any]] = None,
     photo_tags: Optional[Dict[str, str]] = None,
     photo_buckets: Optional[Dict[str, int]] = None,
+    keep_order: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -284,7 +285,8 @@ def plan_owner_storyboard(
     business_name = (business_name or "").strip()
     search_keyword = (search_keyword or "").strip() or business_name
     media_orig = list(media_paths or [])[:8]
-    order = order_media_for_concept(media_orig, photo_tags or {}, core_concept, photo_buckets or {})
+    # keep_order: 사장님이 직접 정한 순서를 100% 그대로 (AI 버킷 정렬·외관 제외 없음, 첫 번째로 올린 사진이 첫 컷·썸네일)
+    order = list(range(len(media_orig))) if keep_order else order_media_for_concept(media_orig, photo_tags or {}, core_concept, photo_buckets or {})
     media = [media_orig[k] for k in order]                       # 컨셉 순서로 정렬한 미디어 (대본 프롬프트·컷 묶음은 이 순서)
     reordered = order != list(range(len(media_orig)))           # 순서가 바뀌었거나 일부 사진(여분의 외관)을 뺀 경우
     groups = media_groups(len(media)) if len(media) >= 2 else []

@@ -346,6 +346,11 @@ def render_media_manager():
     if paths != st.session_state.uploaded_paths:
         st.session_state.uploaded_paths = paths
     with st.container(border=True, key="media_manager"):
+        if st.session_state.get("production_mode", "owner") == "owner":
+            st.checkbox("📌 내가 올린 사진 순서 그대로 유지 (AI 자동 정렬 끄기)", key="keep_photo_order",
+                        on_change=lambda: st.session_state.__setitem__("media_stale", True),
+                        help="끄면(기본): 사진을 어떤 순서로 올려도 AI가 먹음직한 하이라이트를 첫 컷에, 가게 외관을 마지막 컷에 자동으로 정렬해요. "
+                             "켜면: 올린 순서(1번~N번) 그대로 컷을 만들고, 첫 번째 사진이 첫 컷과 썸네일이 돼요. 사진 분류 호출도 생략해 더 빨라요.")
         if st.session_state.get("production_mode", "owner") == "owner" and st.session_state.get("selected_core_concept", "").strip():
             from core.shoot_guide import shoot_guide
             _g = shoot_guide(st.session_state.get("selected_core_concept", ""), st.session_state.get("owner_type", ""),
@@ -527,7 +532,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -1656,6 +1661,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         core_concept=core_concept_val,
         store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
         photo_buckets=dict(ss.get("photo_buckets") or {}) if is_owner_mode else {},
+        keep_photo_order=bool(ss.get("keep_photo_order")) if is_owner_mode else False,
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)
