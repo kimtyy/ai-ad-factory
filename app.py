@@ -43,7 +43,7 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # 제외: core.longform(백그라운드 분석 작업 레지스트리 보관), core.llm.router·core.media.audio_stt(테스트 주입점·캐시 상태),
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
-    "core.script_guard", "core.store_facts", "core.store_research", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
+    "core.script_guard", "core.store_facts", "core.store_research", "core.store_photos", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
@@ -539,7 +539,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -1133,6 +1133,66 @@ def _merged_store_facts() -> dict:
     return facts
 
 
+def _search_store_photos(name: str, address: str = "", quiet: bool = False):
+    """상호명으로 매장 사진 후보를 찾아 세션에 보관 (네이버 공식 이미지 검색). quiet=True면 실패해도 조용히 (가게 정보 가져오기 뒤 자동 시도용)"""
+    if mock_mode or not (name or "").strip() or os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1":
+        return
+    import core.store_photos as _sp
+    from core.planners.owner import short_region
+    region = short_region(region_of(address)) if address else ""
+    with st.spinner("🖼️ 매장 사진 후보를 찾는 중... (네이버 이미지 검색)"):
+        res = _sp.search_store_images(name.strip(), region, os.getenv("NAVER_CLIENT_ID", ""), os.getenv("NAVER_CLIENT_SECRET", ""))
+    for k in [k for k in st.session_state.keys() if str(k).startswith("webpick_")]:
+        del st.session_state[k]                                     # 새 검색이면 이전 체크 상태 초기화 (상위 8장 기본 체크)
+    st.session_state.store_photo_candidates = res["items"]
+    st.session_state.store_photo_msg = res["error"] if (res["error"] and not quiet) else ("" if res["items"] else ("" if quiet else "조건에 맞는 사진을 찾지 못했어요. 상호명에 지역을 붙여 다시 찾거나 직접 올려 주세요."))
+
+
+def _use_selected_web_photos(checked: list):
+    """체크한 후보 사진을 내려받아(원본 → 안 되면 썸네일) 영상 소스 목록에 직접 올린 사진처럼 추가"""
+    import core.store_photos as _sp
+    saved = []
+    with st.spinner(f"선택한 사진 {len(checked)}장을 가져오는 중..."):
+        for it in checked:
+            p = _sp.download_store_image(it, current_job().uploads_dir)
+            if p:
+                saved.append(p)
+    if not saved:
+        st.session_state.store_photo_msg = "사진을 내려받지 못했어요 (원본·썸네일 모두 실패). 다른 사진을 골라 보거나 직접 올려 주세요."
+        return
+    paths = [p for p in st.session_state.uploaded_paths if os.path.exists(p)]
+    added = add_media(paths, saved)
+    st.session_state.web_photo_paths = list(dict.fromkeys(list(st.session_state.get("web_photo_paths", [])) + saved))
+    _media_changed(added)
+    n_new = len(added) - len(paths)
+    st.session_state.store_photo_candidates = []
+    st.session_state.store_photo_msg = (f"✅ 사진 {n_new}장을 영상 소스에 넣었어요" + (f" (내려받기 실패 {len(checked) - len(saved)}장 제외)" if len(saved) < len(checked) else "")
+                                        + ". 아래 '영상 소스'에서 순서를 바꾸거나 빼고, 스토리보드를 기획하세요.")
+
+
+def _render_photo_gallery():
+    """수집된 후보 사진 최대 12장을 4열 갤러리로: 각 사진 밑 '✅ 사용' 체크(상위 8장 기본), 사람 얼굴·영수증·메뉴판 글자 사진은 체크 해제"""
+    cands = st.session_state.get("store_photo_candidates") or []
+    if st.session_state.get("store_photo_msg"):
+        st.info(st.session_state.store_photo_msg)
+    if not cands:
+        return
+    from core.store_photos import DEFAULT_CHECKED
+    st.caption("⚠️ 웹에서 찾은 사진은 블로거·방문자가 찍은 사진일 수 있어요. 샘플 확인용으로만 쓰고, **공개 업로드 전에는 점주 동의를 받거나 직접 촬영한 사진으로 교체**해 주세요. "
+               "사람 얼굴(초상권)·영수증 종이·텍스트 메뉴판이 보이는 사진은 체크를 해제하세요.")
+    cols = st.columns(4)
+    for i, it in enumerate(cands):
+        with cols[i % 4]:
+            try:
+                st.image(it.get("thumbnail") or it.get("link"), use_container_width=True)
+            except Exception:
+                st.caption("(미리보기 불가)")
+            st.checkbox("✅ 사용", value=i < DEFAULT_CHECKED, key=f"webpick_{i}", help=(it.get("title") or "")[:60])
+    checked = [it for i, it in enumerate(cands) if st.session_state.get(f"webpick_{i}", i < DEFAULT_CHECKED)]
+    st.button(f"📥 선택한 사진 {len(checked)}장을 영상 소스에 넣기", key="store_photo_use", type="primary", disabled=not checked,
+              on_click=_use_selected_web_photos, args=(checked,))
+
+
 def _run_store_research(name: str, address: str = ""):
     """상호명(+주소)으로 공식 API·웹 검색 그라운딩을 병렬 수집 → 주소(비어 있을 때)·가게 자랑(USP)·🔎 고유 팩트에 자동 반영. Mock 모드에서는 건너뜀"""
     if mock_mode or not (name or "").strip():
@@ -1156,6 +1216,8 @@ def _run_store_research(name: str, address: str = ""):
     pts = [p for p in facts_to_points(res.get("confirmed") or {}) if p and p not in existing]
     if pts:
         st.session_state.owner_usp = " / ".join([x for x in [existing] + pts if x])
+    if not st.session_state.get("uploaded_paths"):
+        _search_store_photos(name, st.session_state.get("owner_address", "") or address, quiet=True)      # 올린 사진이 없으면 후보 사진도 함께 찾아 둠
 
 
 # ==============================================================================
@@ -1244,7 +1306,19 @@ if is_owner_mode:
                     _run_store_research(it["name"], st.session_state.get("owner_address", ""))
                     st.toast("상호명·업종·주소·소개글·대표 메뉴를 채웠어요. 사진·영상은 아래에서 직접 올려 주세요.", icon="🏢")
                     st.rerun()
-        st.caption("📷 사진·영상은 아래에서 직접 올려 주세요. 사장님이 올리신 미디어를 분석해 맞춤형 씬을 구성합니다.")
+        pf1, pf2 = st.columns([3.5, 1.5], vertical_alignment="center")
+        with pf1:
+            st.caption("📷 사진·영상은 아래에서 직접 올려 주세요. 사장님께 사진을 못 받았다면 상호명으로 후보 사진을 찾아 골라 쓸 수도 있어요 (샘플 확인용).")
+        with pf2:
+            if st.button("🖼️ 매장 사진 자동으로 찾아오기", key="store_photo_find", use_container_width=True):
+                _nm = st.session_state.get("owner_name", "").strip() or st.session_state.get("place_query", "").strip()
+                if not _nm:
+                    st.session_state.store_photo_msg = "상호명을 먼저 입력해 주세요."
+                elif not naver.enabled:
+                    st.session_state.store_photo_msg = "네이버 검색 API 키(NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)가 없어 사진을 찾을 수 없어요. 직접 올려 주세요."
+                else:
+                    _search_store_photos(_nm, st.session_state.get("owner_address", ""))
+        _render_photo_gallery()
 
 # 상품/가게 정보 입력 폼 (모드별)
 business_type, owner_search_kw = None, ""
@@ -2233,6 +2307,9 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         if is_book_mode:
             st.info("📚 시골책방 채널 업로드는 아직 연결 전이에요. 영상은 로컬에 저장됐고, 첫 댓글은 왼쪽에서 대기열로 저장돼요.")
         else:
+            if set(st.session_state.get("web_photo_paths", [])) & set(st.session_state.get("uploaded_paths", [])):
+                st.warning("⚠️ 이 영상에는 웹에서 찾은 사진이 들어 있어요. 블로거·방문자 사진일 수 있어 저작권·초상권 문제가 생길 수 있으니, "
+                           "공개 업로드 전에 점주 동의를 받았는지 확인하거나 직접 촬영한 사진으로 바꿔 다시 만들어 주세요.")
             # 유튜브 패널에 SEO 제목, 설명, 태그를 직접 바인딩하여 원클릭 업로드 지원
             _call_supported(render_youtube_panel, st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
                                  hook=(_sb[0].get("hook_title") or "") if _sb else "",
