@@ -48,6 +48,17 @@ KB_PAN_MARGIN_Y = 1.25      # 상하 패닝 이동 폭
 # 씬 클립 동시 생성도 측정해 봤으나 x264가 이미 멀티스레드라 7씬 22.4초 → 22.0초로 이득이 없어 순차 유지
 CLIP_ENCODE_PARAMS = ["-preset", "ultrafast", "-crf", "16"]
 
+
+def clip_encode_params():
+    """씬 클립(Ken Burns) 인코딩 인자: 저메모리 환경(클라우드)은 스레드 1개 (스레드마다 프레임 버퍼가 따로 생김)"""
+    try:
+        from core.render.ffmpeg_assemble import low_memory
+        if low_memory():
+            return CLIP_ENCODE_PARAMS + ["-threads", "1"]
+    except Exception:
+        pass
+    return list(CLIP_ENCODE_PARAMS)
+
 # 씬 1 후킹 단독 노출 구간: 후킹 헤드라인만 화면에 띄우는 최소 시간 (그 뒤 서브 문장 자막·음성)
 HOOK_SOLO_SEC = 1.5
 HOOK_GAP_SEC = 0.15         # 후킹 음성이 1.5초보다 길면 끝나고 이만큼 쉬고 서브 문장 시작
@@ -282,7 +293,8 @@ class AssetGenerator:
                         if os.path.getmtime(out_path) >= os.path.getmtime(gallery_image_path):
                             logger.info(f"[Cache Hit] 씬 {scene_num} 갤러리 이미지 이미 존재: {out_path}")
                             return out_path
-                    ImageOps.exif_transpose(source).convert("RGB").save(out_path, "PNG")
+                from core.media.imgutil import open_rgb_downscaled
+                open_rgb_downscaled(gallery_image_path).save(out_path, "PNG")       # 영상 규격에 맞춰 먼저 축소해서 저장 (원본 크기 PNG 금지)
                 return out_path
             except Exception as ge:
                 logger.warning(f"갤러리 이미지 변환 실패 ({ge}). 원본 경로를 직접 사용합니다.")
@@ -565,8 +577,8 @@ class AssetGenerator:
         - ease-out 곡선: 첫 프레임부터 빠르게 움직이고 끝에서 안착 (씬 전환 직후 정체감 제거)
         focus_bottom=True일 경우 건물 상단의 간판/로고가 프레임 밖으로 벗어나도록 하단 중심 크롭 적용.
         """
-        with Image.open(image_path) as source:
-            img = ImageOps.exif_transpose(source).convert("RGB")
+        from core.media.imgutil import open_rgb_downscaled
+        img = open_rgb_downscaled(image_path)               # 고해상도 원본을 그대로 올리지 않음 (긴 변 2560px 이하로 축소 디코딩)
         target_w, target_h = 1080, 1920
         orig_w, orig_h = img.size
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
@@ -597,7 +609,7 @@ class AssetGenerator:
             pix_fmt_in="rgb24",
             macro_block_size=1,
             ffmpeg_log_level="error",
-            output_params=CLIP_ENCODE_PARAMS,
+            output_params=clip_encode_params(),
         )
         try:
             writer.send(None)
@@ -665,8 +677,8 @@ class AssetGenerator:
         from PIL import ImageFilter, ImageEnhance
         W, H = 1080, 1920
         motion_sec = min(float(motion_sec), duration_sec) if motion_sec else duration_sec
-        with Image.open(image_path) as source:
-            full_img = ImageOps.exif_transpose(source).convert("RGB")
+        from core.media.imgutil import open_rgb_downscaled
+        full_img = open_rgb_downscaled(image_path)
         img = shot_crop(full_img, shot, product_box)          # 카드에 들어갈 앵글 (배경은 원본 전체 사진으로 깔아 같은 상품임을 유지)
         if fit == "cover":                                     # 카드 비율 고정: 가운데 기준으로 잘라 카드를 꽉 채움
             ratio = ((card_box[2] - card_box[0]) * W) / ((card_box[3] - card_box[1]) * H)
@@ -705,7 +717,7 @@ class AssetGenerator:
         shadow = (np.array(shadow_img.filter(ImageFilter.GaussianBlur(26))).astype(np.float32) / 255.0)[..., None]
 
         writer = imageio_ffmpeg.write_frames(out_path, size=(W, H), fps=fps, codec="libx264", pix_fmt_in="rgb24",
-                                             macro_block_size=1, ffmpeg_log_level="error", output_params=CLIP_ENCODE_PARAMS)
+                                             macro_block_size=1, ffmpeg_log_level="error", output_params=clip_encode_params())
         try:
             writer.send(None)
             total = max(1, int(round(duration_sec * fps)))
@@ -821,6 +833,8 @@ class AssetGenerator:
             motion_sec=motion_sec
         )
         logger.info(f"씬 {scene_num} Ken Burns 비디오 렌더링 완료 -> {out_path}")
+        import gc
+        gc.collect()
         return out_path
 
     # -------------------------------------------------------------

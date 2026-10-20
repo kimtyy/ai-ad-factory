@@ -72,10 +72,11 @@ def prepend_cover(video_path: str, cover_path: str, sec: float = COVER_SEC, keep
             return False
 
         total = info.duration + sec
-        dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "2", "-i", video_path, "-an",
+        from core.render.ffmpeg_assemble import ffmpeg_threads
+        dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", str(ffmpeg_threads()), "-i", video_path, "-an",
                                 "-vf", f"scale={w}:{h},setsar=1,format=yuv420p", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        enc = subprocess.Popen([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-threads", "2",
+        enc = subprocess.Popen([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-threads", str(ffmpeg_threads()),
                                 "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{w}x{h}", "-r", f"{fps:g}", "-i", "-", "-i", wav,
                                 "-map", "0:v", "-map", "1:a", *encoder_args("libx264"), "-force_key_frames", "0",
                                 "-pix_fmt", "yuv420p", "-r", f"{fps:g}", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",

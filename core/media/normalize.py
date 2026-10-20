@@ -141,8 +141,13 @@ def normalize_ugc_clip(
 
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     tmp = dst + ".part.mp4"
+    try:
+        from core.render.ffmpeg_assemble import ffmpeg_threads
+        threads = str(ffmpeg_threads())            # 저메모리 환경(클라우드)은 스레드 1개
+    except Exception:
+        threads = "2"
     cmd = [
-        _ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+        _ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-threads", threads,
         *input_opts, "-i", src,
         "-t", f"{duration:.3f}",
         "-filter_complex", graph, "-map", "[v]",

@@ -35,7 +35,7 @@ ENCODER_ARGS = {
 }
 _encoder_cache: Optional[str] = None
 LOW_MEM_X264 = ["-c:v", "libx264", "-preset", "superfast", "-crf", "21",
-                "-x264-params", "rc-lookahead=0:bframes=0:ref=1:sync-lookahead=0:threads=2"]
+                "-x264-params", "rc-lookahead=0:bframes=0:ref=1:sync-lookahead=0:threads=1"]
 
 
 def low_memory() -> bool:
@@ -43,6 +43,8 @@ def low_memory() -> bool:
     forced = os.getenv("RENDER_LOW_MEMORY", "").strip()
     if forced in ("0", "1"):
         return forced == "1"
+    if os.path.exists("/mount/src") or os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("STREAMLIT_RUNTIME_ENV") == "cloud":
+        return True                       # Streamlit Community Cloud (메모리 약 1GB): cgroup 값을 못 읽어도 저메모리로
     for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
         try:
             with open(path) as f:
@@ -52,6 +54,11 @@ def low_memory() -> bool:
         except OSError:
             continue
     return False
+
+
+def ffmpeg_threads() -> int:
+    """ffmpeg 스레드 수: 저메모리 환경은 1개 (스레드마다 프레임 버퍼가 따로 생겨 메모리가 급격히 늘어남), 그 밖엔 2개"""
+    return 1 if low_memory() else 2
 
 
 def encoder_args(enc: str) -> List[str]:
@@ -272,47 +279,56 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         units.append({"kind": "card", "png": card_png, "dur": card_sec, "fade_out": True})
     X = max(1, int(round(xfade * fps)))
 
-    def unit_cmd(u: Dict[str, Any]) -> List[str]:
+    def scene_parts(u: Dict[str, Any]) -> List[Tuple[str, float, float, bool]]:
+        """씬의 컷 구성: [(소스 영상, 씬 안 시작 오프셋, 길이, 마지막 컷 여부)]. 한 문장 안의 컷 전환은 문장 길이를 컷 수로 균등 분할 (후킹 3.0초 = 1.5초 + 1.5초)"""
+        sc = u["sc"]
+        sources = [sc["video"]] + list(sc.get("extras") or [])
+        d, n_src = u["dur"], len(sources)
+        part = d / n_src
+        out, off = [], 0.0
+        for j, src in enumerate(sources):
+            d_j = part if j < n_src - 1 else d - part * (n_src - 1)
+            out.append((src, off, d_j, j == n_src - 1))
+            off += d_j
+        return out
+
+    def unit_cmd(u: Dict[str, Any], part: Optional[Tuple[str, float, float, bool]] = None) -> List[str]:
+        """한 컷(단일 소스)을 raw 프레임으로 뽑는 ffmpeg 인자. 컷마다 프로세스를 따로 띄워 한 번에 영상 하나만 디코딩 (메모리 일정)"""
         d = u["dur"]
         if u["kind"] == "card":
             cmd = ["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", u["png"]]
             chain = f"[0:v]scale={W}:{H},setsar=1,format=yuv420p,settb=AVTB,fps={fps},fade=t=out:st={d - 0.4:.3f}:d=0.4[vo]"
             return cmd + ["-filter_complex", chain, "-map", "[vo]"]
         sc = u["sc"]
-        sources = [sc["video"]] + list(sc.get("extras") or [])
-        cmd = []
-        for src in sources:
-            cmd += ["-i", src]
-        n_src = len(sources)
-        # 한 문장 안의 컷 전환: 문장 길이를 컷 수로 균등 분할해 이어 붙임 (예: 후킹 3.0초 = 1.5초 + 1.5초). 컷이 하나면 그대로
-        part = d / n_src
-        fl = []
-        for j in range(n_src):
-            d_j = part if j < n_src - 1 else d - part * (n_src - 1)
-            fl.append(f"[{j}:v]fps={fps},scale={W}:{H}:flags=bicubic:out_range=tv,setsar=1,format=yuv420p,"   # yuvj(풀레인지)도 tv로 정규화
-                      f"tpad=stop_mode=clone:stop_duration={d_j + 1:.3f},trim=duration={d_j:.3f},setpts=PTS-STARTPTS[s{j}]")
-        if n_src == 1:
-            fl.append("[s0]null[b0]")
-        else:
-            fl.append("".join(f"[s{j}]" for j in range(n_src)) + f"concat=n={n_src}:v=1:a=0[b0]")
+        src, off, d_j, is_last_part = part or (sc["video"], 0.0, d, True)
+        cmd = ["-i", src]
+        fl = [f"[0:v]fps={fps},scale={W}:{H}:flags=bicubic:out_range=tv,setsar=1,format=yuv420p,"   # yuvj(풀레인지)도 tv로 정규화
+              f"tpad=stop_mode=clone:stop_duration={d_j + 1:.3f},trim=duration={d_j:.3f},setpts=PTS-STARTPTS[b0]"]
         cur = "b0"
+        n_in = 1
         for k, (png, s_, e_) in enumerate(sc["pngs"]):
-            cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{d:.3f}", "-i", png]
+            s_loc, e_loc = max(0.0, s_ - off), min(e_ - off, d_j)          # 씬 전체 시간 기준 구간 → 이 컷 기준 구간
+            if e_loc <= 0.0 or s_loc >= d_j:
+                continue                                                   # 이 컷과 겹치지 않는 자막은 건너뜀
+            # 오버레이는 PNG 한 장을 그대로 입력(-loop 없음)하고 eof_action=repeat로 마지막 프레임을 유지: '-loop 1'은 프레임을 필요 이상 빨리 만들어
+            # 1080x1920 RGBA 수십 장이 필터 대기열에 쌓여 씬 하나당 850MB까지 올라갔음 (한 장 입력은 약 190MB)
+            cmd += ["-i", png]
             nxt = f"o{k}"
-            fl.append(f"[{cur}][{n_src + k}:v]overlay=0:0:enable='between(t,{s_:.3f},{e_ - 0.0005:.4f})':format=auto:eof_action=pass[{nxt}]")
+            fl.append(f"[{cur}][{n_in}:v]overlay=0:0:enable='between(t,{s_loc:.3f},{max(e_loc - 0.0005, s_loc):.4f})':format=auto:eof_action=repeat[{nxt}]")
             cur = nxt
-        tail = f",fade=t=out:st={d - 0.4:.3f}:d=0.4" if u["fade_out"] else ""
+            n_in += 1
+        tail = f",fade=t=out:st={max(d_j - 0.4, 0.0):.3f}:d=0.4" if (u["fade_out"] and is_last_part) else ""
         fl.append(f"[{cur}]format=yuv420p,settb=AVTB,fps={fps}{tail}[vo]")
         return cmd + ["-filter_complex", ";".join(fl), "-map", "[vo]"]
 
     frame_bytes = W * H * 3 // 2
 
-    def scene_frames(u: Dict[str, Any], n_frames: int, tag: str):
-        """씬 하나를 raw yuv420p 프레임으로 (n_frames개 고정: 모자라면 마지막 프레임 반복)"""
+    def run_cut(args: List[str], n_frames: int, tag: str):
+        """ffmpeg 한 번 실행 → raw yuv420p 프레임 n_frames개 (모자라면 마지막 프레임 반복)"""
         err_path = os.path.join(work, f"unit_{tag}.err")
         with open(err_path, "w", encoding="utf-8") as errf:
-            proc = subprocess.Popen([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_threads", "1",
-                                     "-filter_complex_threads", "1", *unit_cmd(u),
+            proc = subprocess.Popen([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", str(ffmpeg_threads()), "-filter_threads", "1",
+                                     "-filter_complex_threads", "1", *args,
                                      "-frames:v", str(n_frames), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
                                     stdout=subprocess.PIPE, stderr=errf)
             last = None
@@ -332,6 +348,19 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                     proc.wait(timeout=30)
                 except Exception:
                     proc.kill()
+
+    def scene_frames(u: Dict[str, Any], n_frames: int, tag: str):
+        """씬 하나를 raw yuv420p 프레임으로 (n_frames개 고정). 한 문장 안에 컷이 여러 개면 컷마다 따로 디코딩해 이어 붙임"""
+        if u["kind"] == "scene" and u["sc"].get("extras"):
+            parts = scene_parts(u)
+            done = 0
+            for j, part in enumerate(parts):
+                n_j = (n_frames - done) if j == len(parts) - 1 else max(1, int(round(part[2] * fps)))
+                n_j = max(1, min(n_j, n_frames - done))
+                yield from run_cut(unit_cmd(u, part), n_j, f"{tag}_{j}")
+                done += n_j
+            return
+        yield from run_cut(unit_cmd(u), n_frames, tag)
 
     def blend(a: bytes, b: bytes, k: int) -> bytes:
         w = int(256 * (k + 1) / (X + 1))
@@ -380,7 +409,7 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
     encoder = pick_encoder()
     tried = []
     for enc in dict.fromkeys([encoder, "libx264"]):
-        cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", "2",
+        cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-threads", str(ffmpeg_threads()),
                "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", "-i", audio_wav,
                "-map", "0:v", "-map", "1:a", *encoder_args(enc), "-force_key_frames", "0",   # 시각 0 = IDR (커버 프레임)
                "-pix_fmt", "yuv420p", "-r", str(fps),

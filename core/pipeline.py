@@ -419,6 +419,8 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         step(30 + int(idx / total * 40), f"[{idx + 1}/{total}] 씬 {s_num} 영상 생성 중...")
         video = gen.generate_video(scene, img, force=force)
         extra_videos = _extra_cut_videos(gen, scene, s_num, real_media, force)
+        import gc
+        gc.collect()                                          # 씬마다 쓴 이미지·프레임 버퍼를 바로 반환 (클라우드 1GB 한도)
         vo = (scene.get("voiceover") or scene.get("subtitle") or scene.get("caption") or "").strip()
         manifest.append({**scene, "scene_index": s_num, "scene_number": s_num, "image_path": img, "audio_path": audio,
                          "video_path": video, "extra_videos": extra_videos, "voiceover": vo, "subtitle": vo, "caption": vo})

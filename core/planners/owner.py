@@ -180,8 +180,8 @@ def _media_preview_image(path: str, thumb_dir: Optional[str]):
         src = os.path.join(thumb_dir, f"plan_{os.path.splitext(os.path.basename(path))[0]}.jpg")
         if not os.path.exists(src):
             extract_thumbnail(path, src, at=0.8)
-    with Image.open(src) as source:
-        img = ImageOps.exif_transpose(source).convert("RGB")
+    from core.media.imgutil import PREVIEW_SIDE, open_rgb_downscaled
+    img = open_rgb_downscaled(src, PREVIEW_SIDE)             # 비전·미리보기용: 큰 원본을 풀 해상도로 열지 않음
     img.thumbnail((512, 512))
     return img
 

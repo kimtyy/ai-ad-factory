@@ -1153,7 +1153,8 @@ def analyze_video_for_overlay(
     pil_images = []
     for fp in frames:
         try:
-            pil_images.append(Image.open(fp).convert("RGB"))
+            from core.media.imgutil import PREVIEW_SIDE, open_rgb_downscaled
+            pil_images.append(open_rgb_downscaled(fp, PREVIEW_SIDE))
         except Exception:
             pass
 

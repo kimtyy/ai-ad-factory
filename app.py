@@ -5,6 +5,11 @@ app.py - AI Short-form Ad Video Factory 반응형 Streamlit 웹 대시보드
 import os
 import re
 import sys
+
+# Streamlit Community Cloud(메모리 약 1GB)에서는 numpy·OpenCV·onnx가 코어 수만큼 스레드를 만들어 메모리를 키우므로 1개로 제한 (numpy import보다 먼저)
+if os.path.exists("/mount/src") or os.getenv("RENDER_LOW_MEMORY", "").strip() == "1":
+    for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
+        os.environ.setdefault(_v, "1")
 import html
 import json
 import math
@@ -285,9 +290,12 @@ def save_uploaded_file(up_file) -> str:
             try:
                 from PIL import Image, ImageOps
                 import io
-                with Image.open(io.BytesIO(data)) as img:
-                    transposed = ImageOps.exif_transpose(img)
-                    transposed.save(path, quality=95)
+                from core.media.imgutil import open_rgb_downscaled
+                resized = open_rgb_downscaled(io.BytesIO(data))        # 올리는 즉시 긴 변 2560px 이하로 줄여 저장 (12MP 원본이 메모리·디스크에 쌓이지 않게)
+                if ext == ".png":
+                    resized.save(path, optimize=False)
+                else:
+                    resized.save(path, quality=92)
             except Exception:
                 with open(path, "wb") as f:
                     f.write(data)
@@ -323,9 +331,8 @@ def _media_thumb(path: str):
     """목록용 미리보기: 사진은 EXIF 정방향 보정, 영상은 대표 프레임(+길이)"""
     if not is_video_file(path):
         try:
-            from PIL import Image, ImageOps
-            with Image.open(path) as img:
-                return ImageOps.exif_transpose(img), ""
+            from core.media.imgutil import PREVIEW_SIDE, open_rgb_downscaled
+            return open_rgb_downscaled(path, PREVIEW_SIDE), ""
         except Exception:
             return path, ""
     thumb = os.path.splitext(path)[0] + "_thumb.jpg"

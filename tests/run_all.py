@@ -34,6 +34,7 @@ SUITES = [
     ("suite_visual_scorer.py", "시각 품질 스코어러: 선명도·조도·급패닝·흔들림·컷 감점/원천 제외, 후보 창 샘플링, highlight_selector 하드 필터·가중 합산", False),
     ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
     ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
+    ("suite_memory_limits.py", "클라우드 메모리 한도: 큰 사진 사전 축소·오버레이 한 장 입력(ffmpeg 프로세스 최대 메모리)·컷별 디코딩·저메모리 스레드 1개·/mount/src 판별", False),
     ("suite_caption_layout.py", "매장 자막 레이아웃: 18자 초과 문장 앞/뒤 2줄 덩어리 순차 표시·하단 72%·폰트 축소·가로 영상 원본 중심 43%·대본 문장 최대 30자", False),
     ("suite_store_research.py", "상호명 자동 수집: 네이버 공식 API(지역·블로그)+Gemini 웹 검색 → 확인됨/미확인 분리·출처 없는 항목 제거·주소·USP·고유 팩트 자동 채움", False),
     ("suite_store_facts.py", "매장 고유 팩트 4종: 특이 메뉴명·리뷰 반복 명사(형용사 삭제)·사진별 피사체 태깅·주소 상권 → 대본 프롬프트 연결", False),
