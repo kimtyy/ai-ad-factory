@@ -611,6 +611,13 @@ with st.sidebar:
     api_key = user_api_key.strip() or env_api_key
 
     mock_mode = st.checkbox("🧪 Mock 모드 (API 과금 없이 초고속 테스트)", value=False)
+    if is_owner_mode:
+        from core.mode_policy import CAPTION_POS_OPTIONS
+        _pos = st.radio("📐 자막 위치", list(CAPTION_POS_OPTIONS), format_func=CAPTION_POS_OPTIONS.get, key="caption_pos", index=0,
+                        help="실제 유튜브 쇼츠 앱은 화면 아래쪽(60~90%)에 채널명·제목·AI 라벨이 올라와 자막과 겹쳐요. 기본(55%)은 그 바로 위, 상단(24%)은 사진을 전혀 안 가려요. 가로 사진은 상단 선택 시 사진을 52% 높이에 둬요.")
+        os.environ["OWNER_CAPTION_POS"] = _pos                  # 렌더 단계의 모드 정책(자막 높이·가로 사진 위치)이 읽음
+    else:
+        os.environ.pop("OWNER_CAPTION_POS", None)
     force_render = st.checkbox("🔄 강제 재생성 (기존 캐시 무시)", value=True)
 
     st.markdown("---")

@@ -48,7 +48,7 @@ check(spec_cap[:, :, 3].max() >= 200, "특수기호(1+1·2+1) 포함 자막 오�
 check(clamp_line_to_policy(spec_text, OWNER_POLICY) == spec_text, "첫 씬 특수문자 완결 대사 정책 클램프 시 원문 보존")
 
 # travel은 화면 정중앙(50%), owner는 음식·매장 사진을 가리지 않게 하단 안전 영역(72%)
-for name, arr, lo, hi in (("후킹 단독", hook_only, 0.48, 0.52), ("서브 자막", cap, 0.68, 0.76), ("긴 자막", long_cap, 0.48, 0.52), ("특수 자막", spec_cap, 0.68, 0.76)):
+for name, arr, lo, hi in (("후킹 단독", hook_only, 0.48, 0.52), ("서브 자막", cap, 0.51, 0.59), ("긴 자막", long_cap, 0.48, 0.52), ("특수 자막", spec_cap, 0.51, 0.59)):
     t_, b_ = alpha_rows(arr)
     cols = np.where(arr[:, :, 3].max(axis=0) >= 100)[0] / W
     check(lo <= (t_ + b_) / 2 <= hi and b_ < 0.82 and cols.min() >= 0.10 and cols.max() <= 0.90,

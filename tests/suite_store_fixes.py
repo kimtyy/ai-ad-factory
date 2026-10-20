@@ -302,7 +302,7 @@ try:
     subprocess.run([FF, "-y", "-hide_banner", "-loglevel", "error", "-ss", "0.3", "-i", out, "-frames:v", "1", fr], check=True)
     arr = np.asarray(Image.open(fr).convert("RGB"))
     yellow = int(((arr[:, :, 0] > 220) & (arr[:, :, 1] > 180) & (arr[:, :, 2] < 70)).sum())
-    white = int((arr[int(1920 * 0.62):int(1920 * 0.84)].min(axis=2) > 235).sum())
+    white = int((arr[int(1920 * 0.45):int(1920 * 0.67)].min(axis=2) > 235).sum())
     check(white > 1500 and yellow < 300, f"직가공: 0.3초에 후킹 헤드라인 없이 본문 자막이 바로 나옴 (흰 {white}px, 노랑 {yellow}px)")
 
 finally:

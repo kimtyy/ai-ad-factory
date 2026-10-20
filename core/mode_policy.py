@@ -21,7 +21,8 @@ core/mode_policy.py - 모드별 렌더링/대본 정책 독립화 (Mode Policy)
   * 씬 듀레이션: 3.0초 ~ 4.2초 (긴 디졸브 0.6초)
   * 자막 스타일: 명조체(Noto Serif KR), 폰트 비율 0.060
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import os
 import re
 from typing import Callable, Dict, List, Optional
 
@@ -127,7 +128,7 @@ OWNER_POLICY = ModePolicy(
     tail_sec=0.20,
     caption_font_ratio=0.064,   # 예전 0.074에서 약 13.5% 축소: 한 줄 11~12자, 최대 2줄 덩어리
     caption_stroke_ratio=0.0075,
-    center_y=0.72,              # 정중앙(0.50)이 음식 사진을 가려서 하단 안전 영역으로 (쇼츠 하단 UI 0.82 위)
+    center_y=0.55,              # 실제 쇼츠 앱은 하단 60~90%에 채널명·제목·AI 라벨·홍보 버튼이 올라옴 → 그 위(55%)가 안전지대 (예전 0.72는 채널명과 겹침)
     bold_impact=True,
     single_voice_only=True,
     caption_max_width=0.76,
@@ -304,9 +305,19 @@ def intro_cover_enabled() -> bool:
 INTRO_COVER_SEC = 0.5
 
 
+# 사장님 모드 '상단 여백' 자막: 음식 사진을 가리지 않게 위쪽 24%, 가로 사진은 중심을 52%로 내려 상단 블러 여백에 자막이 들어가게
+OWNER_TOP_POLICY = replace(OWNER_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+CAPTION_POS_OPTIONS = {
+    "mid": "🎯 중단 안전영역 (55% - 유튜브 하단 UI 위, 기본값)",
+    "top": "⬆️ 상단 여백영역 (24% - 음식 사진 100% 노출)",
+}
+
+
 def get_mode_policy(mode: Optional[str]) -> ModePolicy:
     """모드별 격리 정책 객체 반환 (미지정 시 owner 기본)"""
     m = (mode or "owner").strip().lower()
+    if m == "owner" and os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top":
+        return OWNER_TOP_POLICY
     return POLICIES.get(m, OWNER_POLICY)
 
 
