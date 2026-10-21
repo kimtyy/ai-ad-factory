@@ -117,6 +117,7 @@ try:
     f2 = sm.build_stay_facts({"blog": "1박 200,000원부터 개별 온수풀 불멍"}, {"region": "가평군", "category": "숙박>풀빌라"})
     check(f2["price_source"] == "blog" and f2["people_estimated"] and f2["people_used"] == 4 and f2["per_person"] == "5만 원대", "여기어때가 막히면 블로그 요약에서 요금, 인원을 모르면 4인(추정)")
     check(sm.build_stay_facts({"blog": "경치 좋아요"}, {})["per_person"] == "" and sm.build_stay_facts({}, {})["nightly_price"] is None, "요금을 못 찾으면 지어내지 않고 비움")
+    check([sm.place_token(x) for x in ("경상북도 경주시", "충청남도 태안군", "전북특별자치도 전주시", "서울 마포구", "가평군")] == ["경주", "태안", "전주", "마포", "가평"], "지역 표기: 도 이름(경상북도 등)은 건너뛰고 시·군만 ('경상북 숙소' 방지)")
     ye = sm.find_yeogi("가평 리버뷰 풀빌라")
     check(ye["blocked"] and ye["url"] == "" and "403" in ye["error"] and "keyword=" in ye["search_url"], "여기어때 403이면 멈추지 않고 차단 안내 + 검색 주소 폴백")
     page = '<a href="/domestic-accommodations/777?x=1">다른 숙소</a><a href="/domestic-accommodations/9854"><span>가평 리버뷰 풀빌라</span></a>'
