@@ -550,7 +550,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
@@ -743,16 +743,24 @@ with st.sidebar:
 
     st.markdown("#### 🔊 오디오 및 성우 제어")
     audio_mode_options = {
-        "voice_and_sub": "🎙️ AI 나레이션 + 자막 (기본)",
+        "voice_and_sub": "🎙️ AI 나레이션 + 자막 (기본 - 맛집·쇼핑 추천)",
+        "bgm_only": "🎵 나레이션 없음: 감성 BGM + 자막만 (숙소·카페·감성 추천)",
         "silent": "🔇 무음 + 자막 전용 (유튜브 음원용)",
     }
     audio_mode_keys = [str(k) for k in audio_mode_options if k]
-    selected_audio_mode = st.selectbox(
+    selected_audio_choice = st.selectbox(
         str("오디오 모드" or ""),
         audio_mode_keys,
         format_func=lambda x: str(audio_mode_options.get(x, x or "")),
         index=0
     )
+    bgm_only_mode = selected_audio_choice == "bgm_only"
+    # 나레이션 없음(BGM+자막)과 무음은 렌더 엔진에서 같은 경로(TTS 호출 없음, 문장당 3.6초 균등, 자막은 의미 단위 1줄). 차이는 BGM을 자동으로 켜는지뿐
+    selected_audio_mode = "silent" if selected_audio_choice in ("bgm_only", "silent") else selected_audio_choice
+    if is_travel_mode and selected_audio_choice == "voice_and_sub":
+        st.caption("💡 숙소·카페 영상은 나레이션 없이 **🎵 감성 BGM + 자막만** 쓰면 더 고급스럽고 몰입돼요 (TTS 비용·생성 시간도 절약).")
+    if bgm_only_mode:
+        st.caption("🎵 나레이션 API를 부르지 않고 문장마다 3.6초(5문장 약 18초)로 균등 배분한 뒤 BGM을 100% 볼륨으로 깔아요. 자막은 의미 단위로 끊어 한 줄씩 전환돼요.")
 
     actor_keys = [str(k) for k in VOICE_ACTOR_PROFILES if k]
     actor_labels = [str(VOICE_ACTOR_PROFILES[k]["name"]) for k in actor_keys if k in VOICE_ACTOR_PROFILES]
@@ -776,7 +784,11 @@ with st.sidebar:
     _book_track = bgm_mod.book_default_track() if is_book_mode else None
     if _book_track and not st.session_state.get("bgm_book_init"):
         st.session_state.bgm_on, st.session_state.bgm_choice, st.session_state.bgm_book_init = True, _book_track, True
-    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=not bgm_tracks,
+    if bgm_only_mode and bgm_tracks:
+        st.session_state["bgm_on"] = True                         # 나레이션 없음 모드는 BGM이 주인공: 자동으로 켬
+    elif bgm_only_mode:
+        st.warning("🎵 assets/bgm 폴더에 음원(mp3·wav·m4a)이 없어 BGM이 안 나와요. 직접 만들었거나 권리를 가진 음원을 넣어 주세요.")
+    bgm_on = st.toggle("🎵 자체 BGM 넣기", key="bgm_on", disabled=(not bgm_tracks) or bgm_only_mode,
                        help="직접 만들었거나 권리를 가진 음원만 assets/bgm 폴더에 넣어 주세요. 나레이션이 나올 땐 20%로 낮춰 섞습니다.")
     bgm_choice = None
     if bgm_tracks:
@@ -821,6 +833,19 @@ with st.sidebar:
         os.environ["TRAVEL_STAY_STYLE"] = "1"                   # 숙소 자동 수집 영상: 자막 55%·2줄 덩어리·18초 5문장 정책
     else:
         os.environ.pop("TRAVEL_STAY_STYLE", None)
+
+    st.markdown("---")
+    st.markdown("#### 🔤 자막 폰트 스타일")
+    from core.render.fonts import PRESETS as FONT_PRESETS
+    font_keys = list(FONT_PRESETS)
+    st.session_state.setdefault("caption_font_choice", "impact")
+    if is_book_mode and not st.session_state.get("caption_font_book_init"):
+        st.session_state.caption_font_choice, st.session_state.caption_font_book_init = "serif", True      # 책방은 처음 들어올 때 명조체
+    if st.session_state.get("caption_font_choice") not in font_keys:
+        st.session_state.caption_font_choice = "impact"
+    caption_font_key = st.radio("자막 폰트", font_keys, key="caption_font_choice", format_func=lambda k: FONT_PRESETS[k]["label"],
+                                label_visibility="collapsed")
+    st.caption(FONT_PRESETS[caption_font_key]["use"])
 
     brand_opts = None
     if is_owner_mode:
@@ -1975,7 +2000,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         mode=pipeline_mode, name=product_name, usp=usp_desc, media_paths=list(ss.uploaded_paths),
         num_scenes=DURATION_PRESETS[selected_duration]["default_scenes"] + 1,
         business_type=business_type, search_keyword=owner_search_kw, reading=ss.get("owner_reading", ""),
-        address=ss.get("owner_address", ""), brand=brand_cfg,
+        address=ss.get("owner_address", ""), brand=brand_cfg, caption_font=ss.get("caption_font_choice", ""),
         layout=ss.get("commerce_layout", "single"), link=ss.get("affiliate_link", ""),
         product_boxes=ss.get("product_boxes", {}), bundle_theme=ss.get("bundle_theme", ""),
         bundle_bottom=ss.get("bundle_bottom", ""), bundle_items=bundle_items_now() if is_bundle else [],
@@ -2620,7 +2645,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         - **핵심 1컨셉**: {concept_disp}
         - **화자 시점**: {script_style_options[selected_script_style]}
         - **성우 말투**: {selected_tone_label}
-        - **적용 성우**: {selected_actor_label} ({audio_mode_options[selected_audio_mode]})
-        - **자막 폰트**: Pretendard-Black (Weight 900)
+        - **적용 성우**: {selected_actor_label} ({audio_mode_options[selected_audio_choice]})
+        - **자막 폰트**: {FONT_PRESETS[caption_font_key]["label"]}
         """)
 

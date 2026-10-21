@@ -88,6 +88,17 @@ class AdCompositor:
         # 숏폼 전용 극강의 상업용 무료 볼드 폰트 자동 확보
         self.font_path = self._ensure_bold_font()
         self._serif_path: Optional[str] = None      # 시골책방 명조체 (처음 쓸 때 받음)
+        self.caption_font: Optional[str] = None     # 자막 폰트 프리셋 'impact'/'serif'/'pop' (None = 모드 기본: 책방 명조, 그 밖 고딕). core/render/fonts.py
+        self.semantic_captions = False              # 나레이션 없는 영상: 의미 단위 1줄 자막
+
+    def _caption_key(self, mode: str) -> str:
+        from core.render.fonts import PRESETS
+        return self.caption_font if self.caption_font in PRESETS else ("serif" if mode == "book" else "impact")
+
+    def _caption_style(self, mode: str):
+        from core.render.fonts import STYLES
+        key = self._caption_key(mode)
+        return None if (mode == "book" and key == "serif") else STYLES.get(key)       # 책방 명조는 기존 두꺼운 외곽선 스타일 유지
 
     @property
     def serif_font_path(self) -> str:
@@ -205,20 +216,25 @@ class AdCompositor:
         from core.render.caption_chunks import split_caption
         policy = get_mode_policy(mode)
         t = (text or "").strip()
-        if not t or not policy.caption_chunk_chars or mode not in CENTER_CAPTION_MODES:
+        semantic = self.semantic_captions or getattr(policy, "semantic_chunks", False)
+        if not t or not (policy.caption_chunk_chars or semantic) or mode not in CENTER_CAPTION_MODES:
             return [t] if t else []
+        from core.render import fonts as _fonts
         draw = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
         try:
-            font = ImageFont.truetype(self.serif_font_path if mode == "book" else self.font_path, int(width * policy.caption_font_ratio))
+            font = _fonts.load(_fonts.resolve(self._caption_key(mode), self), int(width * policy.caption_font_ratio))
         except Exception:
             return [t]
         max_w = int(width * policy.caption_max_width)
+        if semantic:
+            from core.render.caption_chunks import semantic_split
+            return semantic_split(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2)
         return split_caption(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2, chunk_chars=policy.caption_chunk_chars)
 
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
                        center_y: float = CAPTION_CENTER_Y, font_path: Optional[str] = None,
                        caption_ratio: float = CAPTION_FONT_RATIO, stroke_ratio: Optional[float] = None,
-                       max_width_ratio: float = CAPTION_MAX_WIDTH) -> np.ndarray:
+                       max_width_ratio: float = CAPTION_MAX_WIDTH, style: Optional[Dict[str, float]] = None) -> np.ndarray:
         """
         travel/owner 공통 하단 자막 (배경 박스 없음):
         - 글자 = Pretendard-Black + 선명한 검은 외곽선 + 짙은 드롭섀도우(블러) → 배경 영상은 시원하게 보이고 밝은 하늘·바다 위에서도 읽힘
@@ -230,6 +246,9 @@ class AdCompositor:
         draw = ImageDraw.Draw(img)
 
         def font(size):
+            if isinstance(font_path, tuple):                    # (경로, ttc 인덱스) — core/render/fonts.py 프리셋
+                from core.render.fonts import load
+                return load(font_path, size)
             try:
                 return ImageFont.truetype(font_path or self.font_path, size)
             except Exception:
@@ -263,16 +282,21 @@ class AdCompositor:
                 y += lh
 
         effective_stroke_ratio = stroke_ratio if stroke_ratio is not None else CAPTION_STROKE_RATIO
-        stroke = max(3, int(width * effective_stroke_ratio))
-        # 짙은 드롭섀도우: 아래로 살짝 내린 검은 글자를 블러 → 두 번 겹쳐 농도 확보
+        if style:      # 폰트 프리셋 스타일 (감성 명조: 얇은 외곽선 + 부드러운 번짐 그림자 / 팝체: 굵은 외곽선)
+            stroke = max(1, int(width * style["stroke_ratio"]))
+            off = max(2, int(width * style["offset"]))
+            alpha, blur_r, passes = int(style["shadow_alpha"]), max(3, int(width * style["shadow_blur"])), int(style["passes"])
+        else:
+            stroke = max(3, int(width * effective_stroke_ratio))
+            off, alpha, blur_r, passes = max(3, int(width * 0.006)), 255, max(4, int(width * 0.009)), 2
+        # 드롭섀도우: 아래로 살짝 내린 검은 글자를 블러 (기본은 두 번 겹쳐 농도 확보)
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         sd = ImageDraw.Draw(shadow)
-        off = max(3, int(width * 0.006))
         for x, ty, ln, f, _ in placed:
-            sd.text((x + off // 2, ty + off), ln, font=f, fill=(0, 0, 0, 255), stroke_width=stroke + 2, stroke_fill=(0, 0, 0, 255))
-        blurred = shadow.filter(ImageFilter.GaussianBlur(max(4, int(width * 0.009))))
-        img.alpha_composite(blurred)
-        img.alpha_composite(blurred)
+            sd.text((x + off // 2, ty + off), ln, font=f, fill=(0, 0, 0, alpha), stroke_width=stroke + (2 if not style else 1), stroke_fill=(0, 0, 0, alpha))
+        blurred = shadow.filter(ImageFilter.GaussianBlur(blur_r))
+        for _ in range(passes):
+            img.alpha_composite(blurred)
         draw = ImageDraw.Draw(img)
         for x, ty, ln, f, color in placed:
             draw.text((x, ty), ln, font=f, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
@@ -658,9 +682,11 @@ class AdCompositor:
             center = kwargs.get("center_y") or (COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else policy.center_y)
             cap_ratio = kwargs.get("caption_ratio") or policy.caption_font_ratio
             st_ratio = kwargs.get("stroke_ratio") or policy.caption_stroke_ratio
+            from core.render.fonts import resolve
             return self._caption_block(caption_text, hook_title, width, height, center_y=float(center),
-                                       font_path=self.serif_font_path if mode == "book" else None,
-                                       caption_ratio=cap_ratio, stroke_ratio=st_ratio, max_width_ratio=policy.caption_max_width)
+                                       font_path=resolve(self._caption_key(mode), self),
+                                       caption_ratio=cap_ratio, stroke_ratio=st_ratio, max_width_ratio=policy.caption_max_width,
+                                       style=self._caption_style(mode))
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
@@ -790,10 +816,14 @@ class AdCompositor:
         실패하면 MoviePy 경로로 자동 대체. RENDER_ENGINE=moviepy 로 MoviePy 강제 (디자인·타임라인 규칙은 같음)
         bgm_path: 자체 음원(assets/bgm). 완성 영상에 나레이션 덕킹·페이드로 섞음 (core/render/bgm.py).
         실패하면 BGM 없이 두고 self.last_bgm_error에 사유를 남김
+        caption_font: 자막 폰트 프리셋('impact'/'serif'/'pop', core/render/fonts.py). audio_mode가 'silent'(나레이션 없음)면 자막은 의미 단위 1줄로 순차 전환
         bars: (상단 타이틀, 하단 구매 안내) - 쇼핑 묶음 큐레이션 고정 바 (render_bundle_bars), 영상 전체에 표시
         label: 시골책방 상단 라벨 바 문구 (render_book_label). 씬 manifest의 quote_card가 있으면 그 씬은 인용 카드
         디졸브 길이·BGM 덕킹은 모드별 (XFADE_BY_MODE·DUCK_BY_MODE)
         """
+        if kwargs.get("caption_font"):
+            self.caption_font = kwargs["caption_font"]
+        self.semantic_captions = (audio_mode == "silent")
         self.xfade = XFADE_BY_MODE.get(mode, XFADE_SEC)
         self.duck = DUCK_BY_MODE.get(mode)
         self.bgm_from_start = mode in BGM_FROM_START_MODES

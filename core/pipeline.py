@@ -64,6 +64,7 @@ class JobSpec:
     # 공통
     voice_actor: str = "female_20s"
     audio_mode: str = "voice_and_sub"
+    caption_font: str = ""                       # 자막 폰트 프리셋 'impact'/'serif'/'pop' (비우면 모드 기본)
     bgm_path: Optional[str] = None
     api_key: Optional[str] = None
     mock: bool = False
@@ -470,6 +471,8 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     except Exception as e:
         logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {e}")
 
+    if spec.caption_font:
+        comp.caption_font = spec.caption_font
     final = comp.assemble_ad(
         asset_manifest=manifest, output_filename="final.mp4", fps=24, audio_mode=spec.audio_mode, mode=spec.mode,
         brand=spec.brand if spec.mode == "owner" else None,

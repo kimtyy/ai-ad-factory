@@ -74,6 +74,45 @@ def split_caption(text: str, fits: Optional[Callable[[str], bool]] = None, chunk
     return chunks
 
 
+_BOUNDARY_END = re.compile(r"(에는|에서|에도|에게|으로|처럼|까지|부터|보다|하고|하며|해서|이고|지만|으며|[을를이가은는도와과의에로만고서며면])$")
+
+
+def semantic_split(text: str, fits: Optional[Callable[[str], bool]] = None, lo: int = 9, hi: int = 13, max_words: int = 4) -> List[str]:
+    """
+    의미 단위(3~4어절, 공백 포함 lo~hi자 내외) 1줄 자막 덩어리: 글자 수만 보지 않고 쉼표·조사(~에는, ~에서, ~하고, ~과/와, ~을/를 …) 뒤에서 끊는다.
+    hi자 이하 문장은 그대로. 덩어리가 2줄에 안 들어가면 _best_split으로 한 번 더 쪼갬. 마지막 덩어리가 너무 짧으면(5자 미만) 앞 덩어리에 붙임
+    예: '여긴 겨울에는 눈부신 설경과 온수풀을 동시에 즐기는 숙소예요' → ['여긴 겨울에는 눈부신', '설경과 온수풀을 동시에', '즐기는 숙소예요']
+    """
+    t = re.sub(r"\s+", " ", text or "").strip()
+    fits = fits or _approx_fits
+    if not t or len(t) <= hi:
+        return [t] if t else []
+    chunks: List[str] = []
+    cur: List[str] = []
+    for w in t.split(" "):
+        if cur and len(" ".join(cur + [w])) > hi:
+            chunks.append(" ".join(cur))
+            cur = []
+        cur.append(w)
+        joined = " ".join(cur)
+        bare = w.rstrip(",，、.!?…")
+        if len(joined) >= lo and (w != bare or _BOUNDARY_END.search(bare) or len(cur) >= max_words):
+            chunks.append(joined)
+            cur = []
+    if cur:
+        chunks.append(" ".join(cur))
+    if len(chunks) > 1 and len(chunks[-1].replace(" ", "")) < 5 and len(chunks[-2]) + 1 + len(chunks[-1]) <= hi + 3:
+        chunks[-2:] = [chunks[-2] + " " + chunks[-1]]
+    out: List[str] = []
+    for c in chunks:
+        if fits(c):
+            out.append(c)
+        else:
+            sp = _best_split(c, fits)
+            out.extend(list(sp) if sp else [c])
+    return out
+
+
 def chunk_windows(chunks: List[str], speech_sec: float, scene_sec: float) -> List[Tuple[float, float]]:
     """
     덩어리별 (시작, 끝) 초. 음성 길이(speech_sec)를 글자 수 비율로 나누고, 마지막 덩어리는 씬 끝(scene_sec)까지 이어 붙임.

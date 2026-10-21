@@ -60,6 +60,7 @@ def clip_encode_params():
     return list(CLIP_ENCODE_PARAMS)
 
 # 씬 1 후킹 단독 노출 구간: 후킹 헤드라인만 화면에 띄우는 최소 시간 (그 뒤 서브 문장 자막·음성)
+SILENT_SCENE_SEC = 3.6          # 나레이션 없음: 씬(문장) 1개의 화면 길이 (3.5~3.8초, 5문장 약 18초)
 HOOK_SOLO_SEC = 1.5
 HOOK_GAP_SEC = 0.15         # 후킹 음성이 1.5초보다 길면 끝나고 이만큼 쉬고 서브 문장 시작
 HOOK_RATE = "+25%"          # 후킹은 짧고 빠르게 (기본 나레이션 +12%보다 빠름)
@@ -336,12 +337,11 @@ class AssetGenerator:
                 force = True
 
         if self.audio_mode == "silent":
-            # 무음 모드: 소리는 없지만 자막 전환 시점은 동일하게 유지
+            # 나레이션 없음(TTS 호출 없음): 소리는 없지만 자막 전환 시점은 동일하게 유지. 매번 새로 만듦(길이 규칙이 바뀌어도 낡은 캐시를 쓰지 않게)
             if hook:
                 scene["hook_sec"] = HOOK_SOLO_SEC
-            if not force and self.is_cached(out_path):
-                return out_path
-            dur = float(scene.get("duration_sec", 3.0)) + (HOOK_SOLO_SEC if hook else 0.0)
+            from core.mode_policy import get_mode_policy
+            dur = max(1.0, SILENT_SCENE_SEC - get_mode_policy(self.mode).tail_sec)       # 문장(씬)마다 같은 길이: 화면 3.6초 (5문장 약 18초)
             self._create_silent_audio(dur, out_path)
             logger.info(f"[Silent Mode] 씬 {scene_num} 무음 오디오 생성 완료 ({dur:.2f}초): {out_path}")
             return out_path

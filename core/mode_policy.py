@@ -60,6 +60,7 @@ class ModePolicy:
 
     # 6. 자막 배치 보조 (기본값은 기존 동작 그대로)
     caption_max_width: float = 0.72      # 자막 줄 폭 상한 (화면 너비 대비)
+    semantic_chunks: bool = False        # True면 글자 수가 아니라 의미 단위(조사·쉼표 뒤, 9~13자 1줄)로 자막을 끊어 순차 전환 (나레이션 없는 영상은 항상 이 방식)
     caption_chunk_chars: int = 0         # 0이 아니면: 이 글자 수(공백 포함)를 넘는 문장은 자막을 앞/뒤 덩어리로 나눠 순차 표시 (TTS는 그대로)
     landscape_fg_center_y: float = 0.50  # 가로 영상을 흐린 배경 위에 얹을 때 원본의 세로 중심 (0.50 = 정중앙)
 
@@ -181,7 +182,7 @@ TRAVEL_POLICY = ModePolicy(
 STAY_POLICY = replace(
     TRAVEL_POLICY, name_ko="숙소 제휴 18초 5문장", min_chars=24, target_chars=38, max_chars=46, min_scene_sec=3.0, max_scene_sec=4.6,
     default_scene_sec=3.6, tts_rate="+8%", xfade_sec=0.25, tail_sec=0.20, caption_font_ratio=0.064, caption_stroke_ratio=0.0075,
-    center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18,
+    center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18, semantic_chunks=True,
 )
 
 
