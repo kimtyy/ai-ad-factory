@@ -29,6 +29,7 @@ STAY_SYSTEM = """당신은 숙소 제휴 쇼츠 18초 광고 카피라이터입�
 - 5문장 모두 [1인당 체감 가성비 + 단 하나의 압도적 공간 로망(자쿠지·온수풀·통창뷰 중 하나)] 1컨셉만 관통합니다.
 - 침실·주방·화장실·방 개수 나열(부동산식 소개) 절대 금지. 숙소 본명 언급 금지.
 - 입력된 팩트·사진 설명에 없는 시설·가격·수치·후기·순위는 만들지 않습니다.
+- '피로가 풀려요', '밤이 길게 느껴져요', '힐링돼요'처럼 사진·팩트로 증명할 수 없는 분위기·효과·체감 문구 금지. 보이는 장면과 확인된 시설만 구체적으로 쓰세요.
 - 해요체, 문장당 공백 포함 46자 이내, 이모티콘·웃음 표기 금지. JSON만 출력합니다."""
 
 
@@ -130,6 +131,10 @@ def validate_line(text: str, facts: Dict[str, Any], evidence: str, real_name: st
     for f in extract_facilities(t):
         if f not in ev:
             return f"근거 없는 시설 {f}"
+    from core.script_guard import find_banned_style
+    banned = find_banned_style(t)
+    if banned:
+        return f"어색한 문구 ({banned})"
     pool_ev = any(f in ev for f in ("개별 온수풀", "인피니티풀"))
     for w in CLAIM_WORDS:
         if w in t and w not in (evidence or "") and not (w in ("수영장", "풀장") and pool_ev):

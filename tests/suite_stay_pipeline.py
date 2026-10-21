@@ -179,6 +179,8 @@ check(not any(w in " ".join(vo) for w in ("침실", "주방", "화장실", "냉�
 nofact = sty.plan_stay_storyboard("효정 풀빌라", "가평 독채풀빌라", "경기도 가평군", {"per_person": "", "facilities": [], "signature": "", "people_used": 4}, [f"/m/{i}.jpg" for i in range(7)], mock=True)
 nv = " ".join(s["voiceover"] for s in nofact)
 check(not any(c.isdigit() for c in nv.replace("5", "")) or "만 원" not in nv, "요금·시설을 못 찾으면 가격 숫자·시설 단어를 쓰지 않음")
+check(sty.validate_line("테라스 노천 자쿠지에 몸을 담그면 여행의 피로가 싹 풀려요.", facts, "노천 자쿠지 테라스", "").startswith("어색한 문구")
+      and sty.validate_line("불멍 앞에서 바비큐까지 즐기면 밤이 훨씬 길게 느껴져요.", facts, "불멍 바비큐", "").startswith("어색한 문구"), "숙소 대본: 근거 없는 효과·체감 문구는 검증 탈락 → 팩트 템플릿 문장")
 check(sty.validate_line("1인 3만 원대에 자쿠지까지 즐겨요", facts, "개별 온수풀 리버뷰", "") != "" and sty.validate_line("효정 리버뷰 풀빌라 가보세요", facts, "개별 온수풀", "효정 리버뷰 풀빌라") == "본명 노출"
       and sty.validate_line("1인 4만 원대에 개별 온수풀까지 쓰는 곳이에요", facts, "개별 온수풀 리버뷰", "") == "", "검증: 틀린 1인 가격·근거 없는 시설·본명 노출은 탈락, 맞는 문장은 통과")
 llm.generate_json = lambda *a, **k: ({"scenes": [{"hook_title": "1인 4만 원대 풀빌라", "voiceover": "1인 4만 원대에 개별 온수풀까지 다 쓰는 가평 독채 실화일까요?"},
