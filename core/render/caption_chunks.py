@@ -74,43 +74,71 @@ def split_caption(text: str, fits: Optional[Callable[[str], bool]] = None, chunk
     return chunks
 
 
-_BOUNDARY_END = re.compile(r"(에는|에서|에도|에게|으로|처럼|까지|부터|보다|하고|하며|해서|이고|지만|으며|[을를이가은는도와과의에로만고서며면])$")
+_JOSA_END = re.compile(r"(에는|에서|에도|에게|으로|처럼|까지|부터|보다|하고|하며|해서|이고|지만|으며|다가|전에|후에|[을를이가은는도와과의에로만고서며면])$")
+_ADNOMINAL_LAST = set("는은한춘신된진른린킨운찬픈긴할길갈울")        # 갖춘·보이는·담그는·눈부신·따뜻한·즐길 같은 꾸미는 말(관형형)의 끝 글자
+_DEP = {"수", "줄", "것", "리", "뿐"}                                  # 의존명사: 앞뒤를 갈라 놓으면 안 됨 ('즐길 수 있어요')
+_AUX_START = re.compile(r"^(있|없|보세|보시|보셨|같|몰랐|드릴|드려|되|돼)")
+_AUX_PREV_END = "해어아게지수줄봐"                                       # '확인해 보세요', '즐길 수 있어요' 같은 보조 용언 결합
 
 
-def semantic_split(text: str, fits: Optional[Callable[[str], bool]] = None, lo: int = 9, hi: int = 13, max_words: int = 4) -> List[str]:
+_CLAUSE_END = re.compile(r"(다가|하고|해서|지만|면서|라서|니까|는데|으며|하며|전에|후에)$")
+
+
+def _has_josa(word: str) -> bool:
+    return bool(_JOSA_END.search(word.rstrip(",，、.!?…")))
+
+
+def _is_adnominal(word: str) -> bool:
+    w = word.rstrip(",，、.!?…")
+    return len(w) >= 2 and w[-1] in _ADNOMINAL_LAST
+
+
+def _no_split(prev: str, nxt: str) -> bool:
+    """이 두 어절 사이는 절대 끊지 않음: 의존명사(수·줄·것)·보조 용언(해 보세요, 수 있어요)"""
+    p = prev.rstrip(",，、.!?…")
+    if p in _DEP or nxt.rstrip(",，、.!?…") in _DEP:
+        return True
+    return bool(_AUX_START.match(nxt)) and bool(p) and p[-1] in _AUX_PREV_END
+
+
+def semantic_split(text: str, fits: Optional[Callable[[str], bool]] = None, short: int = 14, soft_line: int = 16) -> List[str]:
     """
-    의미 단위(3~4어절, 공백 포함 lo~hi자 내외) 1줄 자막 덩어리: 글자 수만 보지 않고 쉼표·조사(~에는, ~에서, ~하고, ~과/와, ~을/를 …) 뒤에서 끊는다.
-    hi자 이하 문장은 그대로. 덩어리가 2줄에 안 들어가면 _best_split으로 한 번 더 쪼갬. 마지막 덩어리가 너무 짧으면(5자 미만) 앞 덩어리에 붙임
-    예: '여긴 겨울에는 눈부신 설경과 온수풀을 동시에 즐기는 숙소예요' → ['여긴 겨울에는 눈부신', '설경과 온수풀을 동시에', '즐기는 숙소예요']
+    의미 단위 자막: 한 문장은 1덩어리(14자 이하) 또는 균형 잡힌 2덩어리로만 나눈다 (3.6초 씬 = 전반 + 후반, 1어절 꼬투리 금지).
+    - 15자 이상이면 전체 길이 35~65% 구간에서 가장 자연스러운 경계를 고름 (한 줄은 15~16자 내외, 길면 2줄까지)
+    - 조사·쉼표·연결어미(~까지, ~다가, ~전에, ~순간이, ~과/와, ,) 뒤를 선호. 조사 없이 명사가 이어지는 곳(강릉|오션뷰, 야외|테라스까지)은 큰 감점
+    - 관형형(갖춘, 보이는, 담그는, 눈부신 …) 바로 뒤는 감점 (꾸밈말과 꾸며지는 말을 떼지 않게)
+    - 의존명사·보조 용언(즐길|수|있어요, 확인해|보세요) 사이는 절대 금지
+    - 한쪽이 1어절이거나 공백 제외 5자 이하가 되는 경계는 금지 (그런 경계뿐이면 통자막 1덩어리)
     """
     t = re.sub(r"\s+", " ", text or "").strip()
     fits = fits or _approx_fits
-    if not t or len(t) <= hi:
+    if not t or len(t) <= short:
         return [t] if t else []
-    chunks: List[str] = []
-    cur: List[str] = []
-    for w in t.split(" "):
-        if cur and len(" ".join(cur + [w])) > hi:
-            chunks.append(" ".join(cur))
-            cur = []
-        cur.append(w)
-        joined = " ".join(cur)
-        bare = w.rstrip(",，、.!?…")
-        if len(joined) >= lo and (w != bare or _BOUNDARY_END.search(bare) or len(cur) >= max_words):
-            chunks.append(joined)
-            cur = []
-    if cur:
-        chunks.append(" ".join(cur))
-    if len(chunks) > 1 and len(chunks[-1].replace(" ", "")) < 5 and len(chunks[-2]) + 1 + len(chunks[-1]) <= hi + 3:
-        chunks[-2:] = [chunks[-2] + " " + chunks[-1]]
-    out: List[str] = []
-    for c in chunks:
-        if fits(c):
-            out.append(c)
+    words = t.split(" ")
+    n, total = len(words), len(t)
+    best = None
+    for i in range(1, n):
+        left, right = " ".join(words[:i]), " ".join(words[i:])
+        if i == 1 or n - i == 1 or len(left.replace(" ", "")) <= 5 or len(right.replace(" ", "")) <= 5 or _no_split(words[i - 1], words[i]):
+            continue
+        pos = len(left) / total
+        dev = abs(pos - 0.5)
+        score = dev * 10 + 25 * max(0.0, dev - 0.15)          # 35~65% 구간을 벗어나는 만큼 비례 감점
+        w = words[i - 1]
+        if w[-1] in ",，、" or _CLAUSE_END.search(w):
+            score -= 2.5                        # 쉼표·절 경계(~다가, ~하고, ~전에): 가장 자연스러운 호흡
+        elif _has_josa(w):
+            score -= 1.5
+        elif _is_adnominal(w):
+            score += 1.0                        # 꾸미는 말(갖춘·담그는)에서 끊는 건 가능하나 조사 뒤보다 덜 자연스러움
         else:
-            sp = _best_split(c, fits)
-            out.extend(list(sp) if sp else [c])
-    return out
+            score += 9.0                        # 조사 없이 명사가 이어지는 곳(강릉|오션뷰, 야외|테라스까지)은 사실상 금지
+        if not (fits(left) and fits(right)):
+            score += 6.0
+        score += 0.3 * (max(0, len(left) - soft_line * 2) + max(0, len(right) - soft_line * 2))
+        if best is None or score < best[0]:
+            best = (score, left, right)
+    return [best[1], best[2]] if best else [t]
 
 
 def chunk_windows(chunks: List[str], speech_sec: float, scene_sec: float) -> List[Tuple[float, float]]:
@@ -121,14 +149,15 @@ def chunk_windows(chunks: List[str], speech_sec: float, scene_sec: float) -> Lis
     n = len(chunks)
     if n <= 1:
         return [(0.0, scene_sec)]
+    min_sec = 1.2 if (n == 2 and scene_sec >= 2.4) else MIN_CHUNK_SEC          # 2덩어리 자막은 글자 수 비례로 나누되 각각 최소 1.2초는 읽을 수 있게
     weights = [max(1, len(c.replace(" ", ""))) for c in chunks]
     tw = float(sum(weights))
-    speech = max(speech_sec, MIN_CHUNK_SEC * n)
+    speech = max(speech_sec, min_sec * n)
     speech = min(speech, scene_sec)
     starts = [0.0]
     for w in weights[:-1]:
         starts.append(starts[-1] + speech * w / tw)
     for i in range(1, n):                                   # 최소 길이 보정
-        starts[i] = max(starts[i], starts[i - 1] + MIN_CHUNK_SEC)
-    starts = [min(s, max(0.0, scene_sec - MIN_CHUNK_SEC * (n - i))) for i, s in enumerate(starts)]
+        starts[i] = max(starts[i], starts[i - 1] + min_sec)
+    starts = [min(s, max(0.0, scene_sec - min_sec * (n - i))) for i, s in enumerate(starts)]
     return [(starts[i], starts[i + 1] if i + 1 < n else scene_sec) for i in range(n)]

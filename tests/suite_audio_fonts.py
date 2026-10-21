@@ -24,18 +24,28 @@ def check(c, m):
     print(("PASS" if c else "FAIL") + " " + m)
 
 
-# ---------------------------------------------------------------- 1. 의미 단위 1줄 자막
-ex = semantic_split("여긴 겨울에는 눈부신 설경과 온수풀을 동시에 즐기는 숙소예요")
-check(len(ex) == 3 and all(8 <= len(c) <= 13 for c in ex[:2]) and " ".join(ex) == "여긴 겨울에는 눈부신 설경과 온수풀을 동시에 즐기는 숙소예요",
-      f"의미 단위 분할(조사·어절 경계, 9~13자): {ex}")
-check(all(len(c.split(" ")) <= 4 for c in ex), "한 덩어리는 4어절 이하")
-c2 = semantic_split("주말에 뷰 좋은 풀빌라 가려다 1박 가격에 놀라서 포기하셨죠!")
-check(len(c2) == 3 and c2[0] == "주말에 뷰 좋은 풀빌라" and all(len(c) <= 13 for c in c2), f"긴 문장도 1줄 덩어리로: {c2}")
-c3 = semantic_split("고기, 반찬, 냉면까지 한 상에 다 나와요")
-check(c3[0].endswith(",") or "," in c3[0], f"쉼표 뒤에서 우선 끊음: {c3}")
-check(semantic_split("짧은 문장이에요") == ["짧은 문장이에요"] and semantic_split("") == [], "13자 이하는 그대로")
-w = chunk_windows(ex, 3.3, 3.8)
-check(len(w) == 3 and abs(w[0][1] - w[1][0]) < 1e-6 and w[-1][1] == 3.8 and all(b - a >= 0.6 for a, b in w), f"덩어리 전환 시간 균등 배분: {[(round(a, 2), round(b, 2)) for a, b in w]}")
+# ---------------------------------------------------------------- 1. 의미 단위 자막: 최대 2덩어리·꼬투리 금지·No-Split 보호 (실제 영상 '강릉오션뷰펜션더영진' 사례)
+REAL = {
+    "히노끼탕까지 갖춘 강릉 오션뷰 펜션, 실화일까요?": [["히노끼탕까지 갖춘", "강릉 오션뷰 펜션, 실화일까요?"], ["히노끼탕까지 갖춘 강릉 오션뷰 펜션,", "실화일까요?"]],
+    "주말에 바다 보이는 숙소를 찾다가 가격에 놀라 포기하셨죠!": [["주말에 바다 보이는 숙소를 찾다가", "가격에 놀라 포기하셨죠!"]],
+    "히노끼탕에 몸을 담그는 순간이 이 숙소의 가장 큰 로망이에요.": [["히노끼탕에 몸을 담그는 순간이", "이 숙소의 가장 큰 로망이에요."]],
+    "옥상 수영장과 야외 테라스까지 함께 즐길 수 있어요.": [["옥상 수영장과 야외 테라스까지", "함께 즐길 수 있어요."]],
+    "주말 특가 마감되기 전에 지금 저장하고 고정 댓글 최저가 링크 확인해 보세요!": [["주말 특가 마감되기 전에 지금 저장하고", "고정 댓글 최저가 링크 확인해 보세요!"]],
+}
+for src, oks in REAL.items():
+    got = semantic_split(src)
+    check(got in oks and len(got) == 2, f"실제 영상 사례 → {got}")
+allc = [semantic_split(x) for x in REAL] + [semantic_split(x) for x in ("저녁엔 불멍과 바비큐까지 즐길 수 있어요.", "여긴 겨울에는 눈부신 설경과 온수풀을 동시에 즐기는 숙소예요", "주말에 뷰 좋은 풀빌라 가려다 1박 가격에 놀라서 포기하셨죠!")]
+check(all(1 <= len(c) <= 2 for c in allc) and all(len(x.split(" ")) >= 2 and len(x.replace(" ", "")) > 5 for c in allc for x in c if len(c) == 2),
+      "한 문장은 최대 2덩어리, 1어절·5자 이하 꼬투리 덩어리 없음 ('있어요.'·'실화일까요?' 단독 노출 금지)")
+bad_pairs = [("즐길", "수"), ("수", "있어요."), ("확인해", "보세요!"), ("강릉", "오션뷰"), ("야외", "테라스까지")]
+joined_ok = all(not any(c[0].endswith(a) and c[1].startswith(b) for c in allc if len(c) == 2) for a, b in bad_pairs)
+check(joined_ok, "끊으면 안 되는 결합(즐길|수|있어요, 확인해|보세요, 강릉|오션뷰, 야외|테라스까지)은 한 덩어리 안에 유지")
+check(semantic_split("짧은 문장이에요") == ["짧은 문장이에요"] and semantic_split("열네글자짜리 문장입니다요") == ["열네글자짜리 문장입니다요"] and semantic_split("") == [], "14자 이하는 통자막 1덩어리")
+check(semantic_split("실화일까요? 정말요 네") == ["실화일까요? 정말요 네"] or len(semantic_split("실화일까요? 정말요 네")) == 1, "나눌 곳이 꼬투리뿐이면 통자막")
+w = chunk_windows(["가나다라마바사아자차카타파하", "가나다라마바"], 3.35, 3.8)
+w5 = chunk_windows(["가나다라마바사아자차", "가나다라마바사아자차"], 3.35, 3.8)
+check(w[0][1] > w5[0][1] and abs(w5[0][1] - 1.675) < 0.05 and all(b - a >= 1.2 for a, b in w + w5), f"전환 시간은 글자 수 비례(14자:6자는 앞이 더 김), 각 덩어리 최소 1.2초: {[(round(a, 2), round(b, 2)) for a, b in w]}")
 
 # ---------------------------------------------------------------- 2. 폰트 3종: 모두 한글이 그려지고(두부 없음) 서로 다른 모양
 comp = AdCompositor(output_dir=tmp("audiofonts_"), font_dir=os.path.join(ROOT, "fonts"))
@@ -119,7 +129,7 @@ try:
     comp2 = AdCompositor(output_dir=tmp("audiofonts_c2_"), font_dir=os.path.join(ROOT, "fonts"))
     comp2.semantic_captions = True
     chunks = [comp2.caption_chunks(s["voiceover"], "travel", 1080) for s in scenes[:4]]
-    check(all(len(c) >= 2 for c in chunks) and all(len(x) <= 14 for c in chunks for x in c), f"숙소 대본 4문장 모두 의미 단위로 쪼개져 순차 전환: {[len(c) for c in chunks]}덩어리")
+    check(all(1 <= len(c) <= 2 for c in chunks) and sum(len(c) == 2 for c in chunks) >= 3, f"숙소 대본 문장이 의미 단위 최대 2덩어리로 순차 전환: {[len(c) for c in chunks]}덩어리")
 finally:
     os.environ.pop("TRAVEL_STAY_STYLE", None)
 

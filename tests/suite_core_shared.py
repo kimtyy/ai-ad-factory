@@ -35,7 +35,7 @@ text = "주말에 뷰 좋은 풀빌라 가려다 1박 가격에 놀라서 포기
 os.environ["TRAVEL_STAY_STYLE"] = "1"
 a, b = comp.caption_chunks(text, "owner"), comp.caption_chunks(text, "travel")
 os.environ.pop("TRAVEL_STAY_STYLE", None)
-check(len(a) >= 2 and len(b) >= 2 and "".join(a).replace(" ", "") == "".join(b).replace(" ", "") == text.replace(" ", "") and all(len(x) <= 13 for x in b),
+check(len(a) >= 2 and len(b) >= 2 and "".join(a).replace(" ", "") == "".join(b).replace(" ", "") == text.replace(" ", "") and len(b) <= 2,
       f"자막 분할은 매장·숙소가 같은 코어 함수: 매장 {len(a)}덩어리(2줄 방식), 숙소 자동 수집 {len(b)}덩어리(의미 단위 1줄)")
 check(comp.caption_chunks(text, "travel") == [text], "자동 수집이 아닌 기존 숙소 영상은 분할 없이 기존 방식 그대로")
 
