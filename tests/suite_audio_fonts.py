@@ -133,6 +133,64 @@ try:
 finally:
     os.environ.pop("TRAVEL_STAY_STYLE", None)
 
+# ---------------------------------------------------------------- 6. 실제 렌더러가 만드는 자막 타임라인(Subtitle Events) 검증 + 모듈 새로고침 목록
+LINES = ["히노끼탕까지 갖춘 강릉 오션뷰 펜션, 실화일까요?", "주말에 바다 보이는 숙소를 찾다가 가격에 놀라 포기하셨죠!",
+         "통창 너머 바다를 보며 히노끼탕을 즐길 수 있어요.", "옥상 수영장과 야외 테라스까지 함께 즐길 수 있어요.", "주말 특가 마감되기 전에 지금 저장하고 고정 댓글 최저가 링크 확인해 보세요!"]
+events = []
+import core.render.caption_chunks as _cc
+_orig_cw = _cc.chunk_windows
+
+
+def _spy(chunks, speech_sec, scene_sec):
+    events.append(list(chunks))                    # 렌더러가 실제로 화면에 순차 표시하려는 자막 덩어리 (Subtitle Events)
+    return _orig_cw(chunks, speech_sec, scene_sec)
+
+
+_cc.chunk_windows = _spy
+W3 = tmp("audiofonts_events_")
+os.environ["TRAVEL_STAY_STYLE"] = "1"
+try:
+    job3 = JobContext.create(app="audio_events")
+    job3.root = W3
+    job3 = JobContext(job3.job_id, root=W3)
+    ups3 = []
+    for i in range(7):
+        dst = os.path.join(job3.uploads_dir, f"u{i}.jpg")
+        shutil.copy(fixture("photo_pool.jpg" if i < 3 else "photo_room.jpg"), dst)
+        ups3.append(dst)
+    scenes3 = sty.plan_stay_storyboard("효정 리버뷰 풀빌라", "가평 리버뷰 독채풀빌라", "경기도 가평군", facts, ups3, mock=True)
+    for sc_, line in zip(scenes3, LINES):
+        sc_["voiceover"] = sc_["subtitle"] = sc_["caption"] = line
+        sc_["hook_title"] = ""
+    spec3 = pl.JobSpec(mode="travel", name="효정 리버뷰 풀빌라", usp="개별 온수풀", media_paths=ups3, mock=True, audio_mode="silent", caption_font="serif", bgm_path=bgm,
+                       brand=BrandOverlay(business_name="가평", show_label=False))
+    pl.assign_uploads_to_scenes(job3, scenes3, ups3, cycle=False)
+    pl.render(spec3, job3, scenes3)
+finally:
+    _cc.chunk_windows = _orig_cw
+    os.environ.pop("TRAVEL_STAY_STYLE", None)
+
+
+def events_for(line):
+    key = line.replace(" ", "")
+    return next((e for e in events if "".join(e).replace(" ", "") == key), [])
+
+
+A, B = LINES[0], LINES[2]
+ea, eb = events_for(A), events_for(B)
+check(len(ea) == 2 and ea == ["히노끼탕까지 갖춘", "강릉 오션뷰 펜션, 실화일까요?"], f"실제 렌더 자막 이벤트: '{A}' → {ea}")
+check(len(eb) == 2 and eb == ["통창 너머 바다를 보며", "히노끼탕을 즐길 수 있어요."], f"실제 렌더 자막 이벤트: '{B}' → {eb}")
+allev = [events_for(l) for l in LINES]
+check(all(len(e) == 2 for e in allev) and not any(len(x.replace(" ", "")) <= 5 for e in allev for x in e), f"5문장 모두 정확히 2이벤트, 1어절·5자 이하 꼬투리 없음: {[len(e) for e in allev]}")
+
+import re as _re
+src = open(os.path.join(ROOT, "app.py"), encoding="utf-8").read()
+_i = src.index("RELOAD_MODULES = (")
+_j = src.index("for _m in RELOAD_MODULES", _i)
+reload_list = set(_re.findall(r'"(core[\w.]*)"', src[_i:_j]))
+render_mods = {"core.render." + f[:-3] for f in os.listdir(os.path.join(ROOT, "core", "render")) if f.endswith(".py") and f != "__init__.py"}
+check(render_mods <= reload_list, f"core/render 모듈 전부 새로고침 목록에 포함 (빠지면 옛 자막 분할 함수가 서버에 남음): 누락 {sorted(render_mods - reload_list)}")
+
 # ---------------------------------------------------------------- 5. 화면: 오디오 3택 + 나레이션 없음이면 BGM 자동 ON + 폰트 3택
 from streamlit.testing.v1 import AppTest
 at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()

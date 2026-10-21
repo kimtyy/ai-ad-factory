@@ -43,6 +43,9 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # 제외: core.longform(백그라운드 분석 작업 레지스트리 보관), core.llm.router·core.media.audio_stt(테스트 주입점·캐시 상태),
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
+    # 렌더 보조 모듈: 자막 분할·폰트·브랜드 카드·이미지 유틸은 컴포지터가 호출 시점에 import하므로, 목록에서 빠지면 옛 분할 함수가 그대로 쓰임 (실제 영상에서 확인된 문제)
+    "core.affiliate_ota", "core.naver_local", "core.media.imgutil", "core.media.normalize",
+    "core.render.caption_chunks", "core.render.fonts", "core.render.brand", "core.render.commerce_layout", "core.shoot_guide", "core.scene_images",
     "core.script_guard", "core.store_facts", "core.store_research", "core.photo_safety", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
