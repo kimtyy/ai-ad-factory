@@ -18,7 +18,7 @@ TRIP_HOSTS = ("trip.com",)
 # 공유용 단축 도메인 (리다이렉트만 따라가 실제 숙소 주소를 얻음)
 SHORT_HOSTS = ("agoda.tw", "agoda.to", "trip.tp.st", "tp.st")
 
-OTA_LABEL = {"agoda": "아고다", "trip": "트립닷컴"}
+OTA_LABEL = {"agoda": "아고다", "trip": "트립닷컴", "yeogi": "여기어때"}
 # 영상 화면 고지 (짧게) / 설명·고정 댓글 고지 (공정위 추천·보증 심사지침: 경제적 이해관계 명시)
 OTA_DISCLOSURE = "제휴 링크 포함 · 예약 시 수수료를 받을 수 있어요"
 

@@ -26,6 +26,7 @@ class EndCard:
     cta_text: str = "네이버 플레이스에서 검색해 보세요"
     sub_text: str = ""                           # 예: '예약 문의 010-0000-0000', '경기 가평군'
     duration_sec: float = 2.5
+    show_search_bar: bool = True                 # False면 검색창 그래픽 없이 문구만 (숙소 제휴: 포털 검색 대신 고정 댓글 링크로 유도)
 
 
 @dataclass
@@ -133,6 +134,12 @@ class BrandOverlay:
         # 검색창 모양 그래픽
         bar_w, bar_h = int(width * 0.80), int(width * 0.14)
         bx, by = (width - bar_w) // 2, y
+        if not card.show_search_bar:
+            for line in (card.cta_text or "").split(chr(10)):
+                y = center_text(line, y, self._font(font_path, int(width * 0.060)), (255, 235, 0), stroke=3) + int(height * 0.012)
+            y += int(height * 0.02)
+            center_text(card.sub_text, y, self._font(font_path, int(width * 0.036)), (235, 235, 235), stroke=2)
+            return np.array(canvas.convert("RGB"))
         draw.rounded_rectangle([bx, by, bx + bar_w, by + bar_h], radius=bar_h // 2,
                                fill=(255, 255, 255, 255), outline=self.accent_color + (255,), width=max(4, width // 160))
         kw_font = self._font(font_path, int(width * 0.052))

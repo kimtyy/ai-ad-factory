@@ -177,6 +177,14 @@ TRAVEL_POLICY = ModePolicy(
 )
 
 
+# 숙소 제휴 '1컨셉 18초 5문장' 모드(앱에서 숙소 자동 수집을 쓸 때): 자막 55%·2줄 덩어리 분할, 문장은 최대 46자
+STAY_POLICY = replace(
+    TRAVEL_POLICY, name_ko="숙소 제휴 18초 5문장", min_chars=24, target_chars=38, max_chars=46, min_scene_sec=3.0, max_scene_sec=4.6,
+    default_scene_sec=3.6, tts_rate="+8%", xfade_sec=0.25, tail_sec=0.20, caption_font_ratio=0.064, caption_stroke_ratio=0.0075,
+    center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18,
+)
+
+
 # =================================================================
 # 3. commerce 정책 (쇼핑 제휴/단일·묶음)
 # =================================================================
@@ -318,6 +326,8 @@ def get_mode_policy(mode: Optional[str]) -> ModePolicy:
     m = (mode or "owner").strip().lower()
     if m == "owner" and os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top":
         return OWNER_TOP_POLICY
+    if m == "travel" and os.getenv("TRAVEL_STAY_STYLE", "").strip() == "1":
+        return STAY_POLICY
     return POLICIES.get(m, OWNER_POLICY)
 
 

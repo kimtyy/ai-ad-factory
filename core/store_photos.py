@@ -80,7 +80,7 @@ def _fetch(query: str, cid: str, secret: str, filter_: str, timeout: int) -> Dic
     return {"items": [], "error": err}
 
 
-def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6) -> Dict[str, Any]:
+def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6, suffix: str = "대표메뉴") -> Dict[str, Any]:
     """
     상호명으로 사진 후보 → {"items": [{title, link, thumbnail, width, height}] (최대 12), "error": 안내문}.
     제목에 상호 핵심 어절이 있고 가로·세로 400px 이상인 것만. 결과가 8장 미만이면 검색어·필터를 바꿔 더 찾는다
@@ -112,7 +112,7 @@ def search_store_images(name: str, region: str = "", client_id: str = "", client
             out.append({"title": title, "link": link, "thumbnail": it.get("thumbnail") or "", "width": w, "height": h})
 
     loc = f"{region} {name}".strip() if region and region not in name else name
-    for query, filter_ in ((loc, "large"), (f"{name} 대표메뉴", "large"), (loc, "all"), (f"{name} 대표메뉴", "all")):
+    for query, filter_ in ((loc, "large"), (f"{name} {suffix}", "large"), (loc, "all"), (f"{name} {suffix}", "all")):
         if len(out) >= DEFAULT_CHECKED:
             break
         collect(query, filter_)

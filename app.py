@@ -43,7 +43,7 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # 제외: core.longform(백그라운드 분석 작업 레지스트리 보관), core.llm.router·core.media.audio_stt(테스트 주입점·캐시 상태),
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
-    "core.script_guard", "core.store_facts", "core.store_research", "core.store_photos", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
+    "core.script_guard", "core.store_facts", "core.store_research", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
@@ -491,7 +491,7 @@ def reset_mode_session_state(prev_mode: str, new_mode: str):
         "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
         "book_photo_count", "book_template", "book_publisher", "book_genre",
         # travel
-        "travel_template", "target_url",
+        "travel_template", "target_url", "stay_ctx", "stay_top5", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url",
         # video_overlay
         "video_overlay_name", "video_overlay_usp", "video_sound_option", "crop_option"
     ]
@@ -539,7 +539,8 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
+           "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
            "book_photo_count", "book_template",
@@ -793,6 +794,20 @@ with st.sidebar:
             )
     else:
         st.caption("🎵 자체 BGM: `assets/bgm/` 폴더에 mp3·wav·m4a 음원을 넣으면 켤 수 있어요.")
+
+    if is_travel_mode:
+        st.markdown("---")
+        st.markdown("#### 🏨 숙소 제휴 설정")
+        st.text_input("여기어때 제휴 트래킹 템플릿 / 파트너 ID", key="stay_aff_template",
+                      placeholder="예: https://…?partner=내ID&url={url}",
+                      help="치환자: {url}(예약 주소, 자동 인코딩) {url_raw} {partner_id}. 파트너 센터에서 받은 링크 형식을 그대로 붙여 넣고 주소 자리에 {url}을 쓰세요. 비워 두면 일반 링크가 나와 수익이 추적되지 않아요.")
+        st.text_input("파트너 ID (템플릿의 {partner_id} 자리)", key="stay_partner_id")
+        st.radio("상단 워터마크", ["alias", "off"], key="stay_watermark", horizontal=True,
+                 format_func=lambda x: "특징 별칭" if x == "alias" else "끄기", help="숙소 본명은 영상에 넣지 않아요 (포털 검색 이탈 방지).")
+    if is_travel_mode and st.session_state.get("stay_ctx"):
+        os.environ["TRAVEL_STAY_STYLE"] = "1"                   # 숙소 자동 수집 영상: 자막 55%·2줄 덩어리·18초 5문장 정책
+    else:
+        os.environ.pop("TRAVEL_STAY_STYLE", None)
 
     brand_opts = None
     if is_owner_mode:
@@ -1155,6 +1170,181 @@ def _search_store_photos(name: str, address: str = "", quiet: bool = False):
     st.session_state.store_photo_msg = res["error"] if (res["error"] and not quiet) else ("" if res["items"] else ("" if quiet else "조건에 맞는 사진을 찾지 못했어요. 상호명에 지역을 붙여 다시 찾거나 직접 올려 주세요."))
 
 
+def _plan_stay_scenes():
+    """숙소 자동 수집 영상: 사진 비전 분류(블랙리스트 제외) → 3-2-2 정렬 → 1컨셉 18초 5문장 대본 + 문장별 사진 묶음"""
+    import core.stay_photos as sp
+    from core.planners.stay import plan_stay_storyboard
+    ss = st.session_state
+    ctx = ss.stay_ctx
+    job = current_job()
+    paths = [p for p in ss.uploaded_paths if os.path.exists(p) and not is_video_file(p)]
+    tags, buckets = sp.classify_stay_photos(paths, stay_name=ctx["stay"]["name"], api_key=api_key, thumb_dir=job.assets_dir,
+                                            cache_path=job.asset_path("stay_photo_tags.json"), mock=mock_mode)
+    arr = sp.order_stay_photos(paths, buckets)
+    ordered = arr["ordered"] or paths[:7]
+    ss.uploaded_paths = ordered + arr["unused"]
+    ss.stay_arrange_note = (f"🎞️ 사진 정렬: 물·스파 → 통창 뷰 → 바비큐·야경 순 {len(ordered)}장 사용"
+                            + (f", 제외 {len(arr['excluded'])}장(화장실·복도·주차장 등)" if arr["excluded"] else "")
+                            + ("" if buckets else " (비전 분류를 못 해 올린 순서 그대로)"))
+    facts = _stay_facts_now()
+    alias = (ss.get("stay_alias_input") or ctx.get("alias") or "").strip()
+    return plan_stay_storyboard(real_name=ctx["stay"]["name"], alias=alias, region=ctx["stay"].get("address") or ctx["stay"].get("region", ""),
+                                facts=facts, media_paths=ordered, photo_tags=tags, api_key=api_key, mock=mock_mode,
+                                output_plan_path=job.plan_path, usp=ss.get("product_usp_input", ""))
+
+
+def _naver_keys():
+    return os.getenv("NAVER_CLIENT_ID", ""), os.getenv("NAVER_CLIENT_SECRET", "")
+
+
+def _stay_facts_now() -> dict:
+    """숙소 팩트 + 화면에서 고친 1박 요금·인원 (직접 입력한 값이 우선) → 1인 체감가 다시 계산"""
+    import core.stay_match as sm
+    ctx = st.session_state.get("stay_ctx") or {}
+    f = dict(ctx.get("facts") or {})
+    price = int(st.session_state.get("stay_price_input") or 0)
+    people = int(st.session_state.get("stay_people_input") or 0)
+    if price > 0:
+        f["nightly_price"], f["price_source"] = price, "manual"
+    if people > 0:
+        f["people_used"], f["people_estimated"] = people, False
+    f["per_person"] = sm.per_person_text(f.get("nightly_price"), int(f.get("people_used") or sm.DEFAULT_PEOPLE))
+    return f
+
+
+def _stay_link_now() -> dict:
+    """사이드바 제휴 템플릿 + (직접 붙여 넣은 > 자동 매칭된 > 검색 결과) 여기어때 주소 → 예약 링크"""
+    import core.stay_match as sm
+    ctx = st.session_state.get("stay_ctx") or {}
+    y = ctx.get("yeogi") or {}
+    target = (st.session_state.get("stay_manual_url") or "").strip() or y.get("url") or y.get("search_url") or ""
+    return sm.build_affiliate_link(st.session_state.get("stay_aff_template", ""), st.session_state.get("stay_partner_id", ""), target)
+
+
+def _find_stay_top5():
+    import core.stay_curation as sc
+    cid, sec = _naver_keys()
+    with st.spinner("📈 데이터랩 트렌드와 네이버 지역·블로그 검색으로 인기 숙소를 찾는 중..."):
+        st.session_state.stay_top5 = sc.curate_top5(st.session_state.get("stay_preset", sc.DEFAULT_PRESET),
+                                                    st.session_state.get("stay_mode", "season"), cid, sec)
+
+
+def _pick_stay(item: dict, manual_url: str = ""):
+    """TOP 5 카드/직접 입력 → 새 작업 공간 + 여기어때 매칭 + 가격·인원·시설 수집 + 사진 후보 갤러리 (링크 복사 없이 한 번에)"""
+    import core.stay_match as sm
+    import core.stay_photos as sp
+    ss = st.session_state
+    cid, sec = _naver_keys()
+    start_new_job(source_url=manual_url or item.get("link", "") or item["name"], mode="travel")
+    ss.gallery_images, ss.image_pool, ss.cutout_path = [], [], None
+    with st.spinner(f"🏨 '{item['name']}' 요금·시설·사진을 모으는 중... (여기어때 → 막히면 네이버 자료로 대체)"):
+        y = {"url": manual_url, "search_url": sm.yeogi_search_url(item["name"]), "blocked": False, "error": ""} if manual_url else sm.find_yeogi(item["name"])
+        facts = sm.collect_stay_facts(item, cid, sec, y.get("url", ""))
+        cands = sp.search_stay_candidates(item["name"], item.get("region", ""), cid, sec)
+    usp = ", ".join(facts["facilities"]) + (f", 1박 {facts['nightly_price']:,}원~" if facts.get("nightly_price") else "")
+    set_product_info({"product_name": item["name"], "usp": usp})
+    ss.stay_ctx = {"stay": item, "yeogi": y, "facts": facts, "alias": facts["alias"] or item.get("region", "") or "숙소"}
+    ss.stay_alias_input = ss.stay_ctx["alias"]
+    ss.stay_price_input = int(facts.get("nightly_price") or 0)
+    ss.stay_people_input = int(facts.get("people_used") or 4)
+    ss.stay_manual_url = manual_url
+    for k in [k for k in ss.keys() if str(k).startswith("webpick_")]:
+        del ss[k]
+    ss.store_photo_candidates = cands["items"]
+    ss.web_photo_paths = []
+    ss.store_photo_msg = cands["error"] or ("" if cands["items"] else "사진 후보를 찾지 못했어요. 직접 올려 주세요.")
+    link = _stay_link_now()
+    ss.affiliate_program, ss.affiliate_link = "yeogi", link["link"]
+
+
+def _render_stay_pipeline():
+    """숙소 제휴 1~4단계 화면: 인기 TOP 5 큐레이션 → 원클릭 선택 → 수집 결과(요금·1인가·시설·별칭) → 3-2-2 사진 갤러리"""
+    import core.stay_curation as sc
+    ss = st.session_state
+    with st.container(border=True, key="stay_box"):
+        st.markdown("**🔥 인기 숙소 TOP 5 — 링크 복사 없이 골라서 바로 만들기**")
+        f1, f2, f3 = st.columns([2, 2.6, 1.4], vertical_alignment="bottom")
+        with f1:
+            st.radio("랭킹 기준", list(sc.MODES), format_func=sc.MODES.get, key="stay_mode", horizontal=False)
+        with f2:
+            st.selectbox("지역·테마", list(sc.PRESETS), key="stay_preset")
+        with f3:
+            find_btn = st.button("🔍 인기 숙소 찾기", key="stay_find", type="primary", use_container_width=True)
+        if find_btn:
+            _find_stay_top5()
+        top = ss.get("stay_top5")
+        if top:
+            for n in top.get("notes") or []:
+                st.info(n)
+            if top.get("error") and not top.get("items"):
+                st.warning(top["error"])
+            if top.get("trend") and top.get("picked"):
+                tr = top["trend"]
+                st.caption("📈 데이터랩 기준 상위 키워드: " + " · ".join(
+                    f"{k}(" + (f"최근7일 {tr[k]['surge']:.1f}배" if ss.get("stay_mode", "season") == "season" else f"30일 평균 {tr[k]['steady']:.0f}") + ")" for k in top["picked"] if k in tr))
+            for i, it in enumerate(top.get("items") or []):
+                with st.container(border=True):
+                    c1, c2 = st.columns([4, 1.6], vertical_alignment="center")
+                    with c1:
+                        st.markdown(f"**{i + 1}. {it['name']}**  \n📍 {it['address'] or it['region']}  \n✨ {it['highlight']}")
+                        st.caption(f"블로그 후기 {it['blog_total']:,}건 · 최근 30일 {it['recent']}건 · 테마 '{it['trend_keyword']}'")
+                    with c2:
+                        if st.button("🚀 이 숙소 선택 및 자동 수집 시작", key=f"stay_pick_{i}", use_container_width=True, type="primary"):
+                            _pick_stay(it)
+                            st.rerun()
+        with st.expander("✍️ 직접 입력 (숙소 이름 또는 여기어때 링크)", expanded=False):
+            m1, m2, m3 = st.columns([2.4, 2.6, 1.4], vertical_alignment="bottom")
+            with m1:
+                man_name = st.text_input("숙소 이름", key="stay_manual_name", placeholder="예: 가평 ○○ 풀빌라")
+            with m2:
+                man_url = st.text_input("여기어때 상세 링크 (선택)", key="stay_manual_link", placeholder="https://www.yeogi.com/domestic-accommodations/...")
+            with m3:
+                man_btn = st.button("🚀 자동 수집 시작", key="stay_manual_go", use_container_width=True)
+            if man_btn and man_name.strip():
+                from core.naver_local import NaverLocalSearch, region_of
+                found = {}
+                try:
+                    hits = NaverLocalSearch().search(man_name.strip(), 1) if NaverLocalSearch().enabled else []
+                    found = hits[0] if hits else {}
+                except Exception:
+                    found = {}
+                addr = found.get("road_address") or found.get("address") or ""
+                _pick_stay({"name": man_name.strip(), "address": addr, "region": " ".join(addr.split()[:2]), "category": found.get("category", ""),
+                            "link": ""}, manual_url=man_url.strip())
+                st.rerun()
+    ctx = ss.get("stay_ctx")
+    if not ctx:
+        return
+    f = _stay_facts_now()
+    y = ctx.get("yeogi") or {}
+    with st.container(border=True, key="stay_facts_box"):
+        st.markdown(f"**📋 수집 결과 — {ctx['stay']['name']}**")
+        if y.get("url"):
+            st.caption(f"✅ 여기어때 상세 매칭: {y['url']}")
+        else:
+            st.caption("ℹ️ " + (y.get("error") or "여기어때 상세 페이지를 확인하지 못했어요") + " — 네이버 블로그·웹 자료로 요금·시설을 찾았어요. 아래에 여기어때 링크를 붙여 넣으면 제휴 링크가 정확해져요.")
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            st.number_input("1박 최저 요금(원)", min_value=0, step=10000, key="stay_price_input",
+                            help="자동으로 못 찾았으면 0이에요. 사실만 직접 입력하면 1인 체감가가 계산돼요. 0이면 대본에 가격 숫자를 쓰지 않아요.")
+        with k2:
+            st.number_input("기준 인원(명)", min_value=1, max_value=30, step=1, key="stay_people_input",
+                            help="기준 인원을 못 찾으면 4인으로 계산해요 (추정).")
+        with k3:
+            st.metric("1인 체감가", f["per_person"] or "미확인", help="1박 요금 ÷ 기준 인원")
+        st.caption(("💰 요금 출처: " + {"yeogi": "여기어때", "blog": "네이버 블로그 요약", "manual": "직접 입력"}.get(f.get("price_source") or "", "없음"))
+                   + (" · 인원은 4인 추정" if f.get("people_estimated") else "") + " · 시설: " + (" · ".join(f["facilities"]) or "확인된 시설 없음"))
+        st.text_input("상단 워터마크 별칭 (숙소 본명 대신)", key="stay_alias_input", help="시청자가 포털에서 숙소명을 직접 검색해 제휴 링크를 건너뛰지 않도록 본명 대신 특징 별칭을 써요. 사이드바에서 끌 수도 있어요.")
+        st.text_input("여기어때 상세 링크 (직접 붙여 넣기)", key="stay_manual_url", placeholder="자동 매칭이 안 됐을 때만")
+        lk = _stay_link_now()
+        st.session_state.affiliate_program, st.session_state.affiliate_link = "yeogi", lk["link"]
+        if lk["note"]:
+            st.warning(lk["note"])
+    _render_photo_gallery()
+    if ss.get("uploaded_paths") and ss.get("web_photo_paths"):
+        st.caption("🎞️ 스토리보드를 기획하면 사진이 [물·스파 3 → 통창 뷰 2 → 바비큐·야경 2] 순서로 자동 정렬돼요 (화장실·복도·주차장 컷은 제외).")
+
+
 def _use_selected_web_photos(checked: list):
     """체크한 후보 사진을 내려받아(원본 → 안 되면 썸네일) 영상 소스 목록에 직접 올린 사진처럼 추가"""
     import core.store_photos as _sp
@@ -1185,7 +1375,7 @@ def _render_photo_gallery():
     if not cands:
         return
     from core.store_photos import DEFAULT_CHECKED
-    st.caption("⚠️ 웹에서 찾은 사진은 블로거·방문자가 찍은 사진일 수 있어요. 샘플 확인용으로만 쓰고, **공개 업로드 전에는 점주 동의를 받거나 직접 촬영한 사진으로 교체**해 주세요. "
+    st.caption("⚠️ 웹에서 찾은 사진은 블로거·방문자가 찍은 사진일 수 있어요. 샘플 확인용으로만 쓰고, **공개 업로드 전에는 점주·숙소 측 동의를 받거나 직접 촬영한 사진으로 교체**해 주세요. "
                "사람 얼굴(초상권)·영수증 종이·텍스트 메뉴판이 보이는 사진은 체크를 해제하세요.")
     cols = st.columns(4)
     for i, it in enumerate(cands):
@@ -1257,6 +1447,9 @@ elif is_book_mode:
 elif is_video_overlay_mode:
     st.markdown("### 📹 1. 촬영 영상 정보 & 직가공 옵션")
     st.caption("사용자가 직접 촬영한 10~60초 영상의 원래 움직임을 100% 살려 '1컨셉 대본 + TTS 나레이션 + 자막/뱃지'를 직가공 합성합니다.")
+
+if is_travel_mode:
+    _render_stay_pipeline()
 
 # 사장님: 네이버 플레이스 링크·상호명 → 공식 지역 검색 API로 상호명·업종·주소·소개글 자동 주입
 if is_owner_mode:
@@ -1550,6 +1743,11 @@ else:
 
 # 사장님 모드 브랜드 오버레이: 상호명/검색어는 본문 입력값을 사용
 brand_cfg = None
+if is_travel_mode and st.session_state.get("stay_ctx"):
+    from core.planners.stay import STAY_END_CARD_TEXT
+    _alias = (st.session_state.get("stay_alias_input") or "").strip()
+    brand_cfg = BrandOverlay(business_name=_alias or "숙소", show_label=(st.session_state.get("stay_watermark", "alias") == "alias" and bool(_alias)),
+                             end_card=EndCard(search_keyword="", headline=_alias, cta_text=STAY_END_CARD_TEXT.replace(" [고정", chr(10) + "[고정"), show_search_bar=False))
 if is_owner_mode and brand_opts and product_name.strip():
     brand_cfg = BrandOverlay(
         business_name=product_name.strip(),
@@ -1788,6 +1986,8 @@ if generate_plan_btn or auto_flow:
                     api_key=api_key,
                     mock=mock_mode,
                 )
+            elif is_travel_mode and st.session_state.get("stay_ctx") and st.session_state.uploaded_paths:
+                scenes = _plan_stay_scenes()
             elif pipeline_mode in pipeline.PIPELINE_MODES:
                 # 사장님·쇼핑(단일/묶음)·시골책방: 공용 제작 엔진이 기획 + 씬 사진 배정 (캘린더 스케줄러와 같은 코드)
                 scenes = pipeline.plan(current_spec(), current_job())
@@ -1850,6 +2050,8 @@ if generate_plan_btn or auto_flow:
                     st.warning(f"⚠️ {len(scenes) - matched}개 씬에 사진·영상이 없습니다. 아래 씬 카드에서 업로드해 주세요.")
 
             st.success(f"🎉 총 {len(scenes)}개 씬 콘티가 기획되었습니다! ({production_mode})")
+            if is_travel_mode and st.session_state.get("stay_ctx") and st.session_state.get("stay_arrange_note"):
+                st.caption(st.session_state.stay_arrange_note)
             # 쇼츠 최적화 SEO 메타데이터 자동 생성
             try:
                 _sp = current_spec()
@@ -2265,6 +2467,18 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             post_text = f"{COUPANG_DISCLOSURE_FULL}\n제품 링크: {link}"
             st.code(post_text, language=None)
             copy_button(post_text, "📋 문구+링크 원클릭 복사", key="copy_commerce")
+        elif is_travel_mode and st.session_state.get("stay_ctx"):
+            import core.stay_match as _sm
+            _ctx = st.session_state.stay_ctx
+            _lk = _stay_link_now()
+            _f = _stay_facts_now()
+            _alias = (st.session_state.get("stay_alias_input") or _ctx.get("alias") or "").strip()
+            st.markdown("**📝 고정 댓글 / 프로필 링크용 [여기어때 예약 제휴 링크] 패키지** (숙소 특징 + 제휴 링크 + 해시태그, 공정위 고지 포함)")
+            if _lk["note"]:
+                st.warning(_lk["note"])
+            _post = _sm.comment_package(_alias, _f, _lk["link"], _sm.stay_hashtags(_ctx["stay"].get("region", ""), _alias, _f))
+            st.code(_post, language=None)
+            copy_button(_post, "📋 고정 댓글 원클릭 복사", key="copy_stay_comment")
         elif is_travel_mode and st.session_state.get("affiliate_program"):
             ota = st.session_state.affiliate_program
             st.markdown(f"**🔗 {OTA_LABEL.get(ota, '')} 어필리에이트 추천 링크** (영상 설명·고정 댓글용, 공정위 추천·보증 심사지침 고지 포함)")
