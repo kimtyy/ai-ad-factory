@@ -80,7 +80,7 @@ def _fetch(query: str, cid: str, secret: str, filter_: str, timeout: int) -> Dic
     return {"items": [], "error": err}
 
 
-def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6, suffix: str = "대표메뉴") -> Dict[str, Any]:
+def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6, suffix: str = "대표메뉴", official_only: bool = True) -> Dict[str, Any]:
     """
     상호명으로 사진 후보 → {"items": [{title, link, thumbnail, width, height}] (최대 12), "error": 안내문}.
     제목에 상호 핵심 어절이 있고 가로·세로 400px 이상인 것만. 결과가 8장 미만이면 검색어·필터를 바꿔 더 찾는다
@@ -118,7 +118,14 @@ def search_store_images(name: str, region: str = "", client_id: str = "", client
         collect(query, filter_)
         if error == NOT_ENABLED_HINT:
             break
-    return {"items": out[:MAX_CANDIDATES], "error": error if not out else ""}
+    from core.photo_safety import rank_sources
+    ranked = rank_sources(out, official_only=official_only)          # 개인 블로거 사진 제외(또는 맨 뒤) + 업체 공식 사진 1순위
+    dropped = len(out) - len(ranked)
+    err = error if not out else ""
+    if not ranked and dropped:
+        err = (f"찾은 사진 {dropped}장이 모두 개인 블로거 사진이라 제외했어요. '🛡️ 공식 홍보 이미지만 수집'을 끄면 블로그 사진도 후보에 나오지만 "
+               "저작권·초상권 위험이 커요. 직접 올리는 걸 권장해요.")
+    return {"items": ranked[:MAX_CANDIDATES], "error": err, "blog_dropped": dropped}
 
 
 def _get_image_bytes(url: str, timeout: int) -> Optional[bytes]:
@@ -133,7 +140,32 @@ def _get_image_bytes(url: str, timeout: int) -> Optional[bytes]:
     return None
 
 
-def download_store_image(item: Dict[str, Any], dest_dir: str, timeout: int = 3) -> Optional[str]:
+def screen_candidates(items: List[Dict[str, Any]], api_key: Optional[str] = None, timeout: int = 3) -> List[Dict[str, Any]]:
+    """
+    후보 사진 썸네일을 받아 비전으로 검수 → 사람 얼굴·신체 / 워터마크·로고 / 영수증·글씨 사진에 item["flag"]를 달고 돌려줌 (화면에서 자동 체크 해제·선택 불가).
+    키가 없거나 썸네일을 못 받으면 그 사진은 검수하지 못한 채 통과 (flag 없음)
+    """
+    from core.photo_safety import screen_flags
+    if not (api_key and items):
+        return items
+    imgs, idx = [], []
+    for k, it in enumerate(items):
+        data = _get_image_bytes(it.get("thumbnail") or it.get("link") or "", timeout)
+        if not data:
+            continue
+        try:
+            from core.media.imgutil import open_rgb_downscaled
+            imgs.append(open_rgb_downscaled(io.BytesIO(data), 512))
+            idx.append(k)
+        except Exception:
+            continue
+    for k, f in zip(idx, screen_flags(imgs, api_key, context="매장·숙소·상품 광고용 후보 사진.")):
+        if f:
+            items[k] = {**items[k], "flag": f}
+    return items
+
+
+def download_store_image(item: Dict[str, Any], dest_dir: str, timeout: int = 3, transform: bool = True) -> Optional[str]:
     """
     후보 사진 1장 저장 → 경로(JPEG, 긴 변 2560px 이하) 또는 None. 원본이 403·시간 초과면 썸네일로 대체.
     사진이 아니거나(HTML 등) 열 수 없으면 None
@@ -151,6 +183,9 @@ def download_store_image(item: Dict[str, Any], dest_dir: str, timeout: int = 3) 
         except Exception:
             continue
         path = os.path.join(dest_dir, f"web_{hashlib.md5(data).hexdigest()[:12]}.jpg")
+        if transform:
+            from core.photo_safety import transform_photo
+            img = transform_photo(img)              # 원본 복제가 아닌 편집 프레임: 테두리 크롭 + 색감 보정 + 상하단 비네팅
         img.save(path, quality=92)
         return path
     return None

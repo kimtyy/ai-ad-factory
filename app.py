@@ -43,7 +43,7 @@ import core.renderers, core.renderers.video_overlay_renderer, core.script_guard 
 # 제외: core.longform(백그라운드 분석 작업 레지스트리 보관), core.llm.router·core.media.audio_stt(테스트 주입점·캐시 상태),
 # core.youtube_upload(채널 토큰·경로 설정과 서비스 팩토리를 런타임에 교체하는 설정 모듈 — 코드를 바꾸면 서버를 재시작)
 RELOAD_MODULES = (
-    "core.script_guard", "core.store_facts", "core.store_research", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
+    "core.script_guard", "core.store_facts", "core.store_research", "core.photo_safety", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
@@ -539,7 +539,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
@@ -1163,7 +1163,10 @@ def _search_store_photos(name: str, address: str = "", quiet: bool = False):
     from core.planners.owner import short_region
     region = short_region(region_of(address)) if address else ""
     with st.spinner("🖼️ 매장 사진 후보를 찾는 중... (네이버 이미지 검색)"):
-        res = _sp.search_store_images(name.strip(), region, os.getenv("NAVER_CLIENT_ID", ""), os.getenv("NAVER_CLIENT_SECRET", ""))
+        res = _sp.search_store_images(name.strip(), region, os.getenv("NAVER_CLIENT_ID", ""), os.getenv("NAVER_CLIENT_SECRET", ""),
+                                      official_only=bool(st.session_state.get("official_only", True)))
+        if res["items"] and api_key:
+            res["items"] = _sp.screen_candidates(res["items"], api_key)          # 사람·워터마크·글씨 사진은 자동 제외 표시
     for k in [k for k in st.session_state.keys() if str(k).startswith("webpick_")]:
         del st.session_state[k]                                     # 새 검색이면 이전 체크 상태 초기화 (상위 8장 기본 체크)
     st.session_state.store_photo_candidates = res["items"]
@@ -1240,7 +1243,10 @@ def _pick_stay(item: dict, manual_url: str = ""):
     with st.spinner(f"🏨 '{item['name']}' 요금·시설·사진을 모으는 중... (여기어때 → 막히면 네이버 자료로 대체)"):
         y = {"url": manual_url, "search_url": sm.yeogi_search_url(item["name"]), "blocked": False, "error": ""} if manual_url else sm.find_yeogi(item["name"])
         facts = sm.collect_stay_facts(item, cid, sec, y.get("url", ""))
-        cands = sp.search_stay_candidates(item["name"], item.get("region", ""), cid, sec)
+        cands = sp.search_stay_candidates(item["name"], item.get("region", ""), cid, sec, official_only=bool(ss.get("official_only", True)))
+        if cands["items"] and api_key:
+            import core.store_photos as _sph
+            cands["items"] = _sph.screen_candidates(cands["items"], api_key)
     usp = ", ".join(facts["facilities"]) + (f", 1박 {facts['nightly_price']:,}원~" if facts.get("nightly_price") else "")
     set_product_info({"product_name": item["name"], "usp": usp})
     ss.stay_ctx = {"stay": item, "yeogi": y, "facts": facts, "alias": facts["alias"] or item.get("region", "") or "숙소"}
@@ -1292,6 +1298,8 @@ def _render_stay_pipeline():
                         if st.button("🚀 이 숙소 선택 및 자동 수집 시작", key=f"stay_pick_{i}", use_container_width=True, type="primary"):
                             _pick_stay(it)
                             st.rerun()
+        st.checkbox("🛡️ 공식 홍보 이미지만 수집 (블로그 개인 사진 제외)", value=True, key="official_only",
+                    help="네이버 플레이스·여기어때 공식 사진을 우선하고 개인 블로거 사진은 뺍니다. 사람 얼굴·워터마크·글씨가 있는 사진은 이 옵션과 상관없이 항상 자동 제외돼요.")
         with st.expander("✍️ 직접 입력 (숙소 이름 또는 여기어때 링크)", expanded=False):
             m1, m2, m3 = st.columns([2.4, 2.6, 1.4], vertical_alignment="bottom")
             with m1:
@@ -1377,6 +1385,12 @@ def _render_photo_gallery():
     from core.store_photos import DEFAULT_CHECKED
     st.caption("⚠️ 웹에서 찾은 사진은 블로거·방문자가 찍은 사진일 수 있어요. 샘플 확인용으로만 쓰고, **공개 업로드 전에는 점주·숙소 측 동의를 받거나 직접 촬영한 사진으로 교체**해 주세요. "
                "사람 얼굴(초상권)·영수증 종이·텍스트 메뉴판이 보이는 사진은 체크를 해제하세요.")
+    from core.photo_safety import FLAG_LABELS
+    ok_idx = [i for i, it in enumerate(cands) if not it.get("flag") and it.get("source") != "blog"]
+    default_on = set(ok_idx[:DEFAULT_CHECKED])                       # 기본 체크: 검수를 통과한 공식·기타 사진 위쪽 8장 (블로그 사진은 직접 켜야 함)
+    n_flag = sum(1 for it in cands if it.get("flag"))
+    if n_flag:
+        st.caption(f"🛡️ 사람 얼굴·워터마크·글씨가 감지된 사진 {n_flag}장은 자동으로 제외했어요 (선택할 수 없어요).")
     cols = st.columns(4)
     for i, it in enumerate(cands):
         with cols[i % 4]:
@@ -1384,8 +1398,16 @@ def _render_photo_gallery():
                 st.image(it.get("thumbnail") or it.get("link"), use_container_width=True)
             except Exception:
                 st.caption("(미리보기 불가)")
-            st.checkbox("✅ 사용", value=i < DEFAULT_CHECKED, key=f"webpick_{i}", help=(it.get("title") or "")[:60])
-    checked = [it for i, it in enumerate(cands) if st.session_state.get(f"webpick_{i}", i < DEFAULT_CHECKED)]
+            flag = it.get("flag")
+            if flag:
+                st.checkbox(f"🚫 제외: {FLAG_LABELS.get(flag, flag)}", value=False, key=f"webflag_{i}", disabled=True)
+                continue
+            if it.get("source") == "blog":
+                st.caption("⚠️ 개인 블로그 사진 (저작권 위험)")
+            elif it.get("source") == "official":
+                st.caption("🛡️ 업체 공식 사진")
+            st.checkbox("✅ 사용", value=i in default_on, key=f"webpick_{i}", help=(it.get("title") or "")[:60])
+    checked = [it for i, it in enumerate(cands) if not it.get("flag") and st.session_state.get(f"webpick_{i}", i in default_on)]
     st.button(f"📥 선택한 사진 {len(checked)}장을 영상 소스에 넣기", key="store_photo_use", type="primary", disabled=not checked,
               on_click=_use_selected_web_photos, args=(checked,))
 
@@ -1510,6 +1532,8 @@ if is_owner_mode:
         with pf1:
             st.caption("📷 사진·영상은 아래에서 직접 올려 주세요. 사장님께 사진을 못 받았다면 상호명으로 후보 사진을 찾아 골라 쓸 수도 있어요 (샘플 확인용).")
         with pf2:
+            st.checkbox("🛡️ 공식 홍보 이미지만 수집 (블로그 개인 사진 제외)", value=True, key="official_only",
+                        help="개인 블로거가 찍은 사진(blogfiles·postfiles·mblogthumb 등)은 저작권·초상권 분쟁 위험이 커서 기본으로 뺍니다. 끄면 블로그 사진도 후보에 나오지만 맨 뒤에 경고와 함께 표시돼요.")
             if st.button("🖼️ 매장 사진 자동으로 찾아오기", key="store_photo_find", use_container_width=True):
                 _nm = st.session_state.get("owner_name", "").strip() or st.session_state.get("place_query", "").strip()
                 if not _nm:
@@ -2529,8 +2553,8 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             st.info("📚 시골책방 채널 업로드는 아직 연결 전이에요. 영상은 로컬에 저장됐고, 첫 댓글은 왼쪽에서 대기열로 저장돼요.")
         else:
             if set(st.session_state.get("web_photo_paths", [])) & set(st.session_state.get("uploaded_paths", [])):
-                st.warning("⚠️ 이 영상에는 웹에서 찾은 사진이 들어 있어요. 블로거·방문자 사진일 수 있어 저작권·초상권 문제가 생길 수 있으니, "
-                           "공개 업로드 전에 점주 동의를 받았는지 확인하거나 직접 촬영한 사진으로 바꿔 다시 만들어 주세요.")
+                st.warning("⚠️ 이 영상에는 웹에서 찾은 사진이 들어 있어요. 사진은 크롭·색감 보정·비네팅으로 편집했고 사람·워터마크·글씨 사진은 걸러냈지만, "
+                           "이것이 권리 확인을 대신하지는 않아요. 공개 업로드 전에 점주(업체) 동의를 받았는지 확인하거나 직접 촬영한 사진으로 바꿔 다시 만들어 주세요.")
             # 유튜브 패널에 SEO 제목, 설명, 태그를 직접 바인딩하여 원클릭 업로드 지원
             _call_supported(render_youtube_panel, st.session_state.final_video_path, st.session_state.get("thumb_path"), pipeline_mode,
                                  hook=(_sb[0].get("hook_title") or "") if _sb else "",

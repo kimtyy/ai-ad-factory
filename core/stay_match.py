@@ -268,8 +268,9 @@ def comment_package(alias: str, facts: Dict[str, Any], link: str, hashtags: List
     if facts.get("facilities"):
         bits.append(" · ".join(facts["facilities"][:4]))
     summary = f"📍 {alias}" + (f" — {' / '.join(bits)}" if bits else "")
+    from core.photo_safety import SOURCE_NOTICE
     lines = [summary, f"🔗 여기어때 최저가 예약: {link or '(예약 링크를 입력해 주세요)'}",
-             "※ 이 영상은 제휴(어필리에이트) 활동의 일환으로, 링크로 예약하시면 일정액의 수수료를 받을 수 있습니다."]
+             "※ 이 영상은 제휴(어필리에이트) 활동의 일환으로, 링크로 예약하시면 일정액의 수수료를 받을 수 있습니다.", SOURCE_NOTICE]
     tags = " ".join(h if h.startswith("#") else f"#{h}" for h in hashtags if h)
     if tags:
         lines.append(tags)

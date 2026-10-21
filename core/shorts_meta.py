@@ -457,6 +457,9 @@ def build_shorts_description(mode: str, title: str, hashtags: List[str], disclos
         lines.append(disclosure_short.strip())
     if ai_illustration:
         lines.append(AI_ILLUSTRATION_NOTICE)
+    if mode in ("travel", "commerce"):
+        from core.photo_safety import SOURCE_NOTICE
+        lines.append(SOURCE_NOTICE)                          # 제휴 쇼츠: 출처(업체 공식 안내 이미지)·대가성 표기
     lines += ["", PINNED_NOTICE.get(mode, PINNED_NOTICE["travel"]), "", " ".join(hashtags[:HASHTAG_MAX])]
     return "\n".join(lines).strip()
 
@@ -550,6 +553,9 @@ def build_first_comment(mode: str, question: str, hashtags: Optional[List[str]] 
     elif link:
         what = "숙소 상세 정보·예약" if mode == "travel" else "제품 상세 정보·구매"
         blocks.append(f"🔗 {what} 링크: {link}" + (f"\n{disclosure_full.strip()}" if (disclosure_full or "").strip() else ""))
+    if mode in ("travel", "commerce"):
+        from core.photo_safety import SOURCE_NOTICE
+        blocks.append(SOURCE_NOTICE)
     tags = " ".join(t if t.startswith("#") else "#" + t for t in (hashtags or [])[:COMMENT_TAGS])
     if tags:
         blocks.append(tags)

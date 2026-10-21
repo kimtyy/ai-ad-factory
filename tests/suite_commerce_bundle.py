@@ -17,6 +17,7 @@ from core.planners.commerce_bundle import (BUNDLE_CTA, DEFAULT_BOTTOM_BAR, DEFAU
 from core.script_guard import ending_kind, find_banned_style
 from core.shorts_meta import COUPANG_DISCLOSURE_FULL, NAVER_DISCLOSURE_FULL, build_first_comment, shop_link_kind
 
+from core.photo_safety import SOURCE_NOTICE
 fails = 0
 
 
@@ -138,9 +139,9 @@ check(blocks[0] == "셋 중 뭐부터 살래요? 👇" and blocks[1].splitlines(
     "🛒 구매 좌표", "1️⃣ 미니 무선 핸디청소기 👉 https://link.coupang.com/a/aaa",
     "2️⃣ LED 무드등 수면등 👉 https://smartstore.naver.com/shop/products/1", "3️⃣ 접이식 빨래 건조대 대형 👉 https://link.coupang.com/a/ccc"],
       "첫 댓글: 참여 질문 → 상품별 번호 + 짧은 이름 + 제휴 링크")
-check(blocks[2].splitlines() == [COUPANG_DISCLOSURE_FULL, NAVER_DISCLOSURE_FULL] and blocks[3] == "#자취템 #살림템 #꿀템"
+check(blocks[2].splitlines() == [COUPANG_DISCLOSURE_FULL, NAVER_DISCLOSURE_FULL] and blocks[3] == SOURCE_NOTICE and blocks[4] == "#자취템 #살림템 #꿀템"
       and COUPANG_DISCLOSURE_FULL.startswith("이 포스팅은 쿠팡 파트너스 활동의 일환으로"),
-      "링크 종류별 공정위 고지 자동 (쿠팡 파트너스 원문 + 스마트스토어) 한 번씩 → 해시태그")
+      "링크 종류별 공정위 고지 자동 (쿠팡 파트너스 원문 + 스마트스토어) 한 번씩 → 출처·대가성 문구 → 해시태그")
 check([shop_link_kind(u) for u in ("https://link.coupang.com/a/x", "https://coupa.ng/abc", "https://smartstore.naver.com/a",
                                     "https://naver.me/x", "https://example.com")] == ["coupang", "coupang", "naver", "naver", "other"],
       "링크 종류 판별 (쿠팡·쿠팡 단축 / 스마트스토어·naver.me / 기타)")

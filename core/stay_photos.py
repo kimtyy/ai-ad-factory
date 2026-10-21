@@ -3,7 +3,7 @@ core/stay_photos.py - 숙소 제휴 4단계(사진 쪽): 숙소 전용 비전 �
 
 사진 수집은 core.store_photos(네이버 공식 이미지 검색)를 그대로 쓰고, 여기어때 상세에서 읽은 사진 주소가 있으면 앞에 합친다.
 비전 버킷: 1 = 물·스파(인피니티풀·온수풀·노천 자쿠지·히노끼탕) / 2 = 통창 뷰·객실 개방감(거실·침실 광각) / 3 = 바비큐·불멍·조식·야경·숙소 전경 /
-          0 = 제외(변기·세면대 클로즈업, 빈 싱크대·냉장고, 복도·비상구, 주차장 바닥)
+          0 = 제외(변기·세면대 클로즈업, 빈 싱크대·냉장고, 복도·비상구, 주차장 바닥, 사람·워터마크·영수증)
 정렬: 앞 3컷 = 버킷 1, 중반 2컷 = 버킷 2, 후반 2컷 = 버킷 3 (7컷). 부족한 버킷은 이웃 버킷의 남는 사진으로 채움.
 """
 import hashlib
@@ -19,7 +19,7 @@ BUCKET_LABELS = {
     1: "물·스파 (인피니티풀·온수풀·노천 자쿠지·히노끼탕 등 가장 비싸 보이는 물 컷)",
     2: "통창 뷰·객실 개방감 (창밖으로 강·바다·숲이 보이는 거실·침실 광각 컷)",
     3: "바비큐·불멍·조식·야경·숙소 전경 (프라이빗 바비큐, 불멍, 조식, 숙소 야경·외관 전경)",
-    0: "제외 (변기·세면대 클로즈업, 빈 싱크대·냉장고, 복도·비상구, 주차장 아스팔트, 사람 얼굴이 크게 나온 컷, 글자 위주 안내문)",
+    0: "제외 (변기·세면대 클로즈업, 빈 싱크대·냉장고, 복도·비상구, 주차장 아스팔트, 사람의 얼굴·신체(손·뒷모습 포함)가 보이는 컷, 블로거 서명·개인 워터마크·타사 로고, 영수증·글씨 위주 안내문)",
 }
 QUOTA = {1: 3, 2: 2, 3: 2}                  # 3-2-2
 CACHE_VERSION = 1
@@ -120,17 +120,19 @@ def order_stay_photos(paths: List[str], buckets: Dict[str, int]) -> Dict[str, Li
     return {"ordered": ordered, "excluded": excluded, "unused": unused}
 
 
-def search_stay_candidates(name: str, region: str, cid: str, secret: str, yeogi_images: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def search_stay_candidates(name: str, region: str, cid: str, secret: str, yeogi_images: Optional[List[Dict[str, Any]]] = None,
+                           official_only: bool = True) -> Dict[str, Any]:
     """
     갤러리 후보: 여기어때에서 읽은 공식 사진(있으면) + 네이버 공식 이미지 검색(filter=large, 400px 이상) → {"items": [...최대 12], "error"}.
     여기어때 사진은 제목 필터 없이 앞에 (이미 그 숙소의 사진)
     """
     from core.store_photos import MAX_CANDIDATES, search_store_images
-    res = search_store_images(name, region, cid, secret, suffix="객실 수영장")
-    items = list(yeogi_images or []) + list(res.get("items") or [])
+    res = search_store_images(name, region, cid, secret, suffix="객실 수영장", official_only=official_only)
+    from core.photo_safety import rank_sources
+    items = rank_sources(list(yeogi_images or []), official_only=False) + list(res.get("items") or [])
     seen, out = set(), []
     for it in items:
         if it.get("link") and it["link"] not in seen:
             seen.add(it["link"])
             out.append(it)
-    return {"items": out[:MAX_CANDIDATES], "error": res.get("error", "") if not out else ""}
+    return {"items": out[:MAX_CANDIDATES], "error": res.get("error", "") if not out else "", "blog_dropped": res.get("blog_dropped", 0)}
