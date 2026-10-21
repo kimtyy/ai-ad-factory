@@ -185,6 +185,9 @@ STAY_POLICY = replace(
 )
 
 
+STAY_TOP_POLICY = replace(STAY_POLICY, center_y=0.24)             # 상단 여백 옵션 (사장님 모드와 같은 24%)
+
+
 # =================================================================
 # 3. commerce 정책 (쇼핑 제휴/단일·묶음)
 # =================================================================
@@ -324,10 +327,11 @@ CAPTION_POS_OPTIONS = {
 def get_mode_policy(mode: Optional[str]) -> ModePolicy:
     """모드별 격리 정책 객체 반환 (미지정 시 owner 기본)"""
     m = (mode or "owner").strip().lower()
-    if m == "owner" and os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top":
+    top = os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top"      # 자막 위치 선택(중단 55% / 상단 24%): 중앙 자막 모드가 공유하는 단일 스위치
+    if m == "owner" and top:
         return OWNER_TOP_POLICY
     if m == "travel" and os.getenv("TRAVEL_STAY_STYLE", "").strip() == "1":
-        return STAY_POLICY
+        return STAY_TOP_POLICY if top else STAY_POLICY
     return POLICIES.get(m, OWNER_POLICY)
 
 

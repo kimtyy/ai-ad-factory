@@ -430,8 +430,19 @@ def rematch_scenes(target_scenes: list, api_key: str):
 #   travel   (트랙 A) 숙소 제휴 쇼츠: URL 크롤링 + 비전 매칭, 숙소명 은닉, 댓글 유도 CTA
 #   commerce (트랙 A) 쇼핑 제휴 쇼츠(쿠팡 파트너스): 판매 페이지 실물 사진/직접 올린 사진 + 리뷰 썰 대본 + 제휴 표시
 # ==============================================================================
+# 🎯 점주 시연 모드: 매장 홍보 탭만 보이는 단일 목적 앱 (점주 미팅·강의 시연용). 켜는 법: 사이드바 하단 체크박스 / 환경변수 DEMO_MODE=1 / 주소 ?demo=1
+try:
+    _demo_q = str(st.query_params.get("demo", "")).lower() in ("1", "true", "on", "yes")
+except Exception:
+    _demo_q = False
+st.session_state.setdefault("demo_mode", os.getenv("DEMO_MODE", "").strip().lower() in ("1", "true", "on", "yes") or _demo_q)
+DEMO_MODE = bool(st.session_state.get("demo_mode"))
 MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce",
          "📚 시골책방 도서 큐레이션": "book", "📹 촬영 영상 원본 직가공": "video_overlay"}
+if DEMO_MODE:
+    MODES = {k: v for k, v in MODES.items() if v == "owner"}
+    st.session_state.production_mode = "owner"
+    st.session_state.mode_switch = next(iter(MODES))
 MODE_LABELS = {v: k for k, v in MODES.items()}
 SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
                      "room": "🛏 객실", "cta": "📍 CTA", "hero": "🛒 첫인상", "usage": "🙌 사용 장면", "body": "💡 본문"}
@@ -539,7 +550,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
            "book_store", "book_search_kw", "book_title", "book_author", "book_info", "book_quote", "book_link",
@@ -560,6 +571,8 @@ uses_scene_media = pipeline_mode in ("owner", "travel", "commerce", "book")   # 
 # 상단 헤더 + 화면 전환 (영상 만들기 / 실시간 떡상 레이더)
 # ==============================================================================
 PAGES = {"make": "🎬 영상 만들기", "longform": "🎞️ 롱폼 하이라이트", "radar": "🔥 실시간 떡상 레이더"}
+if DEMO_MODE:
+    PAGES = {"make": "🎬 영상 만들기"}
 st.title("🎬 AI 광고 공장")
 st.caption("내 가게 홍보 영상부터 숙소·쇼핑 제휴 쇼츠까지, 9:16 세로 영상을 만듭니다.")
 page_opts = [str(k) for k in PAGES if k]
@@ -612,7 +625,7 @@ with st.sidebar:
     api_key = user_api_key.strip() or env_api_key
 
     mock_mode = st.checkbox("🧪 Mock 모드 (API 과금 없이 초고속 테스트)", value=False)
-    if is_owner_mode:
+    if is_owner_mode or (is_travel_mode and st.session_state.get("stay_ctx")):
         from core.mode_policy import CAPTION_POS_OPTIONS
         _pos = st.radio("📐 자막 위치", list(CAPTION_POS_OPTIONS), format_func=CAPTION_POS_OPTIONS.get, key="caption_pos", index=0,
                         help="실제 유튜브 쇼츠 앱은 화면 아래쪽(60~90%)에 채널명·제목·AI 라벨이 올라와 자막과 겹쳐요. 기본(55%)은 그 바로 위, 상단(24%)은 사진을 전혀 안 가려요. 가로 사진은 상단 선택 시 사진을 52% 높이에 둬요.")
@@ -837,6 +850,9 @@ with st.sidebar:
     _url_file = os.path.join("outputs", "tunnel_url.txt")       # scripts/watchdog.ps1이 터널을 재시작하면 새 주소를 기록
     if os.path.exists(_url_file):
         st.caption(f"📱 모바일 접속 주소: {open(_url_file, encoding='utf-8-sig').read().strip()}")
+    st.checkbox("🎯 점주 시연 모드 (매장 홍보 탭만 표시)", key="demo_mode",
+                help="소상공인 점주 미팅·강의 시연용: 숙소·쇼핑·책방·직가공·롱폼·레이더 탭을 숨기고 매장 홍보만 보여요. 끄면 전체 기능이 돌아와요. "
+                     "항상 켜 두려면 환경변수 DEMO_MODE=1, 주소 뒤에 ?demo=1 을 붙여도 돼요.")
     st.caption(f"📁 작업 ID: `{current_job().job_id}`")
     if st.button("🆕 새 작업 시작", use_container_width=True, help="새 작업 공간을 만듭니다. 이전 작업 파일은 outputs/jobs/에 보존됩니다."):
         start_new_job()

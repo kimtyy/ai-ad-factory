@@ -7,6 +7,8 @@ python tests/run_all.py            # 오프라인 전체 (약 10분, 실호출 �
 python tests/run_all.py --fast     # 렌더 스위트 2개 제외 (약 3분)
 python tests/run_all.py --live     # Gemini 실호출 + 실제 숙소 페이지 크롤링 포함 (GEMINI_API_KEY·네트워크 필요)
 python tests/run_all.py -k radar   # 이름으로 골라 실행
+python tests/run_all.py --mode stay      # ★ 평소 개발: 수정한 모드(owner/stay/commerce/book/overlay/longform) + 공통 코어만 (2~4분)
+python tests/run_all.py --core           # 공통 코어(자막 위치·분할, 사진 안전 필터, 대본 가드, 메모리)만
 python tests/suite_script_guard.py # 스위트 하나만 직접 실행
 ```
 

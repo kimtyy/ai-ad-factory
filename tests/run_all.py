@@ -35,6 +35,7 @@ SUITES = [
     ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
     ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
     ("suite_stay_pipeline.py", "숙소 제휴 5단계 전자동: 데이터랩+지역·블로그 TOP5·여기어때 매칭(403 폴백)·1인 체감가·3-2-2 정렬·5문장 대본·제휴 링크·고정 댓글·원클릭 화면 흐름", False),
+    ("suite_core_shared.py", "공통 코어 공유: 자막 위치(55%/상단 24%)·2줄 분할·사진 안전 필터가 모드 공통, 점주 시연 모드(탭 숨김)", False),
     ("suite_photo_safety.py", "사진 저작권·초상권 4중 방어: 블로그 도메인 차단·공식 우선, 비전(사람·워터마크·글씨) 제외, 크롭·색감·비네팅 변환, 출처·대가성 문구", False),
     ("suite_store_photos.py", "매장 사진 자동 수집: 네이버 이미지 검색(필터·대체 검색어·401 안내)·다운로드(UA/Referer/썸네일 대체)·4열 갤러리·선택 사진 영상 소스 추가", False),
     ("suite_memory_limits.py","클라우드 메모리 한도: 큰 사진 사전 축소·오버레이 한 장 입력(ffmpeg 프로세스 최대 메모리)·컷별 디코딩·저메모리 스레드 1개·/mount/src 판별", False),
@@ -77,15 +78,33 @@ SUITES = [
 ]
 
 
+# 모드별 쾌속 테스트: 수정한 모드의 스위트 + 전 모드가 공유하는 코어 스위트만 (2~3분). 전체 회귀는 큰 구조 변경·배포 전 점검용
+CORE_QUICK = ["suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py"]
+MODE_SUITES = {
+    "owner": ["suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
+    "stay": ["suite_stay_pipeline.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
+    "commerce": ["suite_commerce.py", "suite_coupang.py"],
+    "book": ["suite_book_info.py", "suite_book_reflect.py"],
+    "overlay": ["suite_ugc_normalize.py", "suite_video_overlay.py"],
+    "longform": ["suite_highlight_selector.py", "suite_visual_scorer.py", "suite_audio_stt.py"],
+}
+MODE_SUITES["travel"] = MODE_SUITES["stay"]
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="AI 광고 공장 회귀 테스트 러너")
     ap.add_argument("--live", action="store_true", help="Gemini 실호출·실제 크롤링 구간 포함")
     ap.add_argument("--fast", action="store_true", help="느린 렌더 스위트 제외")
     ap.add_argument("-k", dest="pattern", default=None, help="스위트 파일명 필터")
+    ap.add_argument("--mode", choices=sorted(MODE_SUITES), default=None, help="수정한 모드의 스위트 + 공통 코어만 실행 (2~3분)")
+    ap.add_argument("--core", action="store_true", help="공통 코어 스위트만 실행")
     args = ap.parse_args(argv)
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", RUN_LIVE_TESTS="1" if args.live else "0")
     selected = [s for s in SUITES if (not args.fast or not s[2]) and (not args.pattern or args.pattern in s[0])]
+    if args.mode or args.core:
+        wanted = CORE_QUICK + (MODE_SUITES[args.mode] if args.mode else [])
+        selected = [s for s in SUITES if s[0] in wanted]
     print(f"🧪 회귀 테스트 {len(selected)}개 스위트 ({'LIVE' if args.live else '오프라인'}{', 빠른 모드' if args.fast else ''})\n", flush=True)
 
     totals = {"PASS": 0, "FAIL": 0, "SKIP": 0}
