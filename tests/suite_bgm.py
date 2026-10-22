@@ -205,13 +205,13 @@ try:
     os.makedirs(bgm.BGM_DIR)
     at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
     created.append(at.session_state.job.workdir)
-    tg = at.sidebar.toggle(key="bgm_on")
-    check(not at.exception and tg.disabled and any("assets/bgm" in (c.value or "") for c in at.sidebar.caption),
+    tg = at.toggle(key="bgm_on")
+    check(not at.exception and tg.disabled and any("assets/bgm" in (c.value or "") for c in at.caption),
           "음원이 없으면 BGM 스위치 꺼짐 + 폴더 안내")
     _use_bgm_dir(tdir)
     at.run()
-    at.sidebar.toggle(key="bgm_on").set_value(True).run()
-    sel = at.sidebar.selectbox(key="bgm_choice")
+    at.toggle(key="bgm_on").set_value(True).run()
+    sel = at.selectbox(key="bgm_choice")
     check(not at.exception and sel.options[0].startswith("🎲") and "a_song.mp3" in sel.options and sel.value == bgm.RANDOM,
           f"음원이 있으면 켜고 고르기 (기본 랜덤) {sel.options}")
     check(not [t for t in at.toggle if t.key == "bgm_on_main"],
@@ -225,18 +225,18 @@ try:
     job = at.session_state.job
     srcs = [fixture("photo_pool.jpg"), fixture("photo_room.jpg")]
     at.session_state.uploaded_paths = [shutil.copy(p, os.path.join(job.uploads_dir, f"u{i}.jpg")) for i, p in enumerate(srcs)]
-    at.sidebar.checkbox[0].check()
+    at.session_state["mock_mode"] = True
     at.text_input(key="owner_name").input("설맥 가평현리점")
     at.run()
-    at.sidebar.selectbox(key="bgm_choice").set_value("Neon Skyline_5-2.wav").run()
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    at.selectbox(key="bgm_choice").set_value("Neon Skyline_5-2.wav").run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     created.append(job.workdir)
     st_ok = [s.value for s in at.success if "BGM:" in (s.value or "")]
     # 맨 앞 이모지(🎵)는 Streamlit 알림 아이콘으로 빠지므로 본문만 비교
     check(not at.exception and st_ok and "BGM: Neon Skyline (적용)" in st_ok[0] and "초부터" in st_ok[0],
           f"완료 화면: 실제로 섞인 BGM 표시 {st_ok[:1]}")
-    at.sidebar.toggle(key="bgm_on").set_value(False).run()
+    at.toggle(key="bgm_on").set_value(False).run()
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     off = [i.value for i in at.info if "BGM 꺼짐" in (i.value or "")]
     check(not at.exception and off and not [s for s in at.success if "BGM:" in (s.value or "")],
@@ -253,7 +253,7 @@ try:
     # 자체 음원이 있으면 BGM은 기본 ON (처음 들어올 때부터)
     at_fresh = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
     created.append(at_fresh.session_state.job.workdir)
-    check(at_fresh.sidebar.toggle(key="bgm_on").value is True, "자체 음원이 있으면 BGM 스위치 기본 ON")
+    check(at_fresh.toggle(key="bgm_on").value is True, "자체 음원이 있으면 BGM 스위치 기본 ON")
 finally:
     bgm.BGM_DIR = _orig_dir
     os.environ.pop("BGM_DIR", None)

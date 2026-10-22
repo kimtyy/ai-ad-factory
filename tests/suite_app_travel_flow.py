@@ -22,13 +22,13 @@ def check(c, m):
 try:
     at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=600).run()
     jobs.append(at.session_state.job.workdir)
-    audio = [s for s in at.sidebar.selectbox if s.label == "오디오 모드"][0]
+    audio = [s for s in at.selectbox if s.label == "오디오 모드"][0]
     check(audio.options == ["🎙️ AI 나레이션 + 자막 (기본)", "🔇 무음 + 자막 전용 (유튜브 음원용)"], f"오디오 모드에 BGM 없음: {audio.options}")
 
     at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
     at.session_state.production_mode = "travel"
     at.run()
-    tpl = [s for s in at.sidebar.selectbox if s.label == "숙소 제휴 씬 템플릿"]
+    tpl = [s for s in at.selectbox if s.label == "숙소 제휴 씬 템플릿"]
     check(bool(tpl) and tpl[0].value == "golden7", "숙소 제휴 모드: 템플릿 기본값 = 7씬 황금 비율")
 
     at.text_input[[w.label for w in at.text_input].index("상품 페이지 URL 입력")].input("https://www.yeogi.com/domestic-accommodations/9854")
@@ -37,8 +37,8 @@ try:
     pool = at.session_state.image_pool
     check(not at.exception and len(pool) > 20, f"크롤링 → 사진 풀 {len(pool)}개")
 
-    at.sidebar.checkbox[0].check().run()   # Mock (API 미호출: 텍스트 메타 기준 배정)
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    at.session_state["mock_mode"] = True; at.run()   # Mock (API 미호출: 텍스트 메타 기준 배정)
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     sb = at.session_state.storyboard
     check(not at.exception and len(sb) == 7, f"기획 → 7씬 ({len(sb)}씬) {[e.value for e in at.error]}")
     check([s["target_visual_role"] for s in sb][:3] == ["pool"] * 3 and sb[-1]["voiceover"] == "숙소 정보는 댓글에 '여행' 남겨주세요!",

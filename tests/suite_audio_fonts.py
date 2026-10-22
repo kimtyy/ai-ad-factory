@@ -194,23 +194,23 @@ check(render_mods <= reload_list, f"core/render 모듈 전부 새로고침 목�
 # ---------------------------------------------------------------- 5. 화면: 오디오 3택 + 나레이션 없음이면 BGM 자동 ON + 폰트 3택
 from streamlit.testing.v1 import AppTest
 at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
-au = [s for s in at.sidebar.selectbox if s.label == "오디오 모드"][0]
+au = [s for s in at.selectbox if s.label == "오디오 모드"][0]
 check(len(au.options) == 3 and "AI 나레이션 + 자막 (기본 - 맛집·쇼핑 추천)" in au.options[0] and "나레이션 없음: 감성 BGM + 자막만 (숙소·카페·감성 추천)" in au.options[1],
       f"오디오 모드: {au.options}")
-fr = [r for r in at.sidebar.radio if r.label == "자막 폰트"]
+fr = [r for r in at.radio if r.label == "자막 폰트"]
 check(bool(fr) and len(fr[0].options) == 3 and "임팩트 고딕" in fr[0].options[0] and "감성 명조" in fr[0].options[1] and "팝체" in fr[0].options[2] and fr[0].value == "impact",
       "🔤 자막 폰트 스타일: 3종 (임팩트 고딕 기본 / 감성 명조 / 둥근 예능 팝체)")
 au.select(au.options[1]).run()
-tog = [t for t in at.sidebar.toggle if "자체 BGM" in t.label]
-act = [s for s in at.sidebar.selectbox if s.label == "AI 성우 보이스"]
-check(not at.exception and tog and tog[0].value is True and tog[0].disabled and act and act[0].disabled, "나레이션 없음 선택: BGM 자동 켜짐, 성우 선택은 비활성")
+tog = [t for t in at.toggle if "자체 BGM" in t.label]
+act = [s for s in at.selectbox if s.label == "AI 성우 보이스"]
+check(not at.exception and tog and tog[0].value is True and tog[0].disabled and not act, "나레이션 없음 선택: BGM 자동 켜짐, 성우 선택은 숨김")
 at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
 at.session_state.production_mode = "travel"
 at.run()
 at.session_state.mode_switch = "📚 시골책방 도서 큐레이션"
 at.session_state.production_mode = "book"
 at.run()
-fr2 = [r for r in at.sidebar.radio if r.label == "자막 폰트"]
+fr2 = [r for r in at.radio if r.label == "자막 폰트"]
 check(not at.exception and fr2 and fr2[0].value == "serif", "시골책방 모드는 처음에 감성 명조가 선택돼 있음")
 
 finish(fails)

@@ -33,7 +33,7 @@ try:
     lb = labels(at)
     check(any("상호명 (영상에 그대로 노출)" in l for l in lb) and "업종" in lb and not any("URL" in l for l in lb),
           "사장님 모드: 상호명/업종/검색어 입력, URL 크롤링 행 없음")
-    check(any("브랜드" in m.value for m in at.sidebar.markdown), "사장님 모드: 사이드바 브랜드 오버레이 옵션 표시")
+    check(any(b.label == "⚙️ 설정" for b in at.sidebar.button) and not any("브랜드" in m.value for m in at.sidebar.markdown), "좌측 바에는 주메뉴와 ⚙️ 설정만 (브랜드 오버레이는 설정 팝업 안)")
 
     # 숙소 제휴 / 쇼핑 제휴 모드 분기
     for label, mode, expect in (("🧳 숙소 제휴 쇼츠", "travel", "숙소명 (대본에서는 숨김 처리)"),
@@ -43,8 +43,8 @@ try:
         at.run()
         lb = labels(at)
         check(not at.exception and any(expect in l for l in lb) and any("URL" in l for l in lb)
-              and not any("브랜드" in m.value for m in at.sidebar.markdown),
-              f"{label}: '{expect}' 입력 + URL 크롤링 행, 브랜드 오버레이 없음")
+              ,
+              f"{label}: '{expect}' 입력 + URL 크롤링 행")
 
     # 사장님 모드: 업로드 미디어 4개 → 기획 → 씬 배정 → 렌더
     at.session_state.mode_switch = "🏠 사장님 매장 홍보"
@@ -54,12 +54,12 @@ try:
     srcs = [fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("phone_portrait.mov"), fixture("phone_landscape.mp4")]
     up = [shutil.copy(p, os.path.join(job.uploads_dir, f"u{i}{os.path.splitext(p)[1]}")) for i, p in enumerate(srcs)]
     at.session_state.uploaded_paths = up
-    at.sidebar.checkbox[0].check()  # Mock 모드 (API 과금 없이)
+    at.session_state["mock_mode"] = True  # Mock 모드 (API 과금 없이)
     at.text_input(key="owner_name").input("가평 솔바람 펜션")
     at.selectbox(key="owner_type").select("stay")
     at.text_input(key="owner_usp").input("계곡 바로 앞, 개별 바베큐장")
     at.run()
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     check(not at.exception, f"사장님 기획 예외 없음 {at.exception}")
     sb = at.session_state.storyboard
     check(len(sb) == 4 and at.session_state.storyboard_mode == "owner", f"업로드 4개 → 4씬 콘티 ({len(sb)}씬)")
@@ -99,13 +99,13 @@ try:
     at.checkbox(key="keep_photo_order").set_value(False).run()
 
     # 화자 시점 ↔ 성우·말투 프리셋 연동 (시점을 바꿀 때 적용, 이후 수동 변경은 유지)
-    at.sidebar.radio(key="script_style_radio").set_value("review").run()
+    at.radio(key="script_style_radio").set_value("review").run()
     check(not at.exception and at.session_state.selected_actor == "female_20s" and at.session_state.voice_tone == "lively",
           "화자 시점 '손님 꿀팁 리뷰형' → 20대 여성(발랄) + 활기찬 말투로 자동 설정")
-    at.sidebar.radio(key="script_style_radio").set_value("official").run()
+    at.radio(key="script_style_radio").set_value("official").run()
     check(at.session_state.selected_actor == "female_30s" and at.session_state.voice_tone == "calm",
           "화자 시점 '가게 공식 추천형' → 30대 여성(신뢰) + 차분한 말투로 자동 설정")
-    at.sidebar.selectbox(key="voice_actor_select_box").set_value("20대 남성 (에너지)").run()
+    at.selectbox(key="voice_actor_select_box").set_value("20대 남성 (에너지)").run()
     check(at.session_state.selected_actor == "male_20s", "연동 뒤에도 성우 드롭다운에서 직접 바꿀 수 있음")
     at.run()
     check(at.session_state.selected_actor == "male_20s", "직접 바꾼 성우는 같은 시점에서 다시 실행해도 유지")
@@ -143,7 +143,7 @@ try:
     at.selectbox(key="owner_type").select("stay")
     at.text_input(key="owner_usp").input("계곡 바로 앞, 개별 바베큐장")
     at.run()
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     check(not at.exception and len(at.session_state.storyboard) == 4, "복귀 후 재기획 4씬")
     job = at.session_state.job
 

@@ -143,7 +143,8 @@ requests.get = ui_get
 try:
     at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
     at.text_input(key="owner_name").input(NAME)
-    at.button(key="store_photo_find").click().run()
+    at.text_input(key="place_query").input(NAME)
+    at.button(key="place_fetch").click().run()      # 가게 정보 가져오기 = 정보 + 후보 사진 12장 동시 수집
     boxes = sorted([c for c in at.checkbox if c.key and c.key.startswith("webpick_")], key=lambda c: int(c.key.split("_")[1]))   # 화면은 열 단위로 나열됨
     check(not at.exception and len(boxes) == 12 and [b.value for b in boxes] == [True] * 8 + [False] * 4 and all("✅ 사용" in b.label for b in boxes),
           f"갤러리: 후보 {len(boxes)}장, 각 사진 밑 '✅ 사용' 체크, 상위 8장 기본 체크")

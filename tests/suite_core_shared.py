@@ -56,35 +56,28 @@ check(all(f in names and os.path.exists(os.path.join(ROOT, "tests", f)) for f in
 from streamlit.testing.v1 import AppTest
 
 
-def tabs(at):
-    modes = next((s for s in at.main if hasattr(s, "options") and s.options and any("사장님" in str(o) for o in s.options)), None)
-    return modes
+def nav_labels(at_):
+    return [b.label for b in at_.sidebar.button]
 
 
 at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
-check(not at.exception and at.session_state.demo_mode is False and any(c.key == "demo_mode" for c in at.sidebar.checkbox), "사이드바 하단에 '🎯 점주 시연 모드' 체크박스 (기본 OFF)")
-cb = [c for c in at.sidebar.checkbox if c.key == "demo_mode"][0]
-check("매장 홍보 탭만 표시" in cb.label, "체크박스 문구: 점주 시연 모드 (매장 홍보 탭만 표시)")
+tg = [t for t in at.toggle if t.key == "demo_mode"]
+check(not at.exception and at.session_state.demo_mode is False and tg and "점주 시연 모드" in tg[0].label, "매장 홍보 상단 우측에 '🎯 점주 시연 모드' 스위치 (기본 OFF)")
+check(nav_labels(at) == ["🏠 홈", "🏪 매장 홍보", "🏨 숙소 홍보", "🛍️ 쇼핑 쇼츠", "📚 시골책방", "🎬 원본 직가공", "🎞️ 롱폼 하이라이트", "🔥 떡상 레이더", "⚙️ 설정"],
+      "좌측 주메뉴: 홈 + 제작 모드 + 맨 아래 설정")
 at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
 at.session_state.production_mode = "travel"
+at.session_state.demo_mode = True
 at.run()
-cb = [c for c in at.sidebar.checkbox if c.key == "demo_mode"][0]
-cb.check().run()
-sc = [e for e in at.main if getattr(e, "key", None) == "mode_switch"]
-pg = [e for e in at.main if getattr(e, "key", None) == "page_switch"]
-check(not at.exception and at.session_state.production_mode == "owner" and sc and len(sc[0].options) == 1 and "사장님" in str(sc[0].options[0]) and pg and len(pg[0].options) == 1,
-      "시연 모드 ON: 숙소 모드에 있어도 매장 홍보로 전환, 모드 탭·화면 탭 모두 1개만 표시")
-cb = [c for c in at.sidebar.checkbox if c.key == "demo_mode"][0]
-cb.uncheck().run()
-sc = [e for e in at.main if getattr(e, "key", None) == "mode_switch"]
-pg = [e for e in at.main if getattr(e, "key", None) == "page_switch"]
-check(not at.exception and sc and len(sc[0].options) == 5 and pg and len(pg[0].options) == 3, "시연 모드 OFF: 5개 모드·3개 화면이 모두 돌아옴")
+check(not at.exception and at.session_state.production_mode == "owner" and nav_labels(at) == ["🏠 홈", "🏪 매장 홍보", "⚙️ 설정"],
+      "시연 모드 ON: 숙소 모드에 있어도 매장 홍보로 전환, 주메뉴는 홈·매장 홍보·설정만")
+at.toggle(key="demo_mode").set_value(False).run()
+check(not at.exception and len(nav_labels(at)) == 9, "시연 모드 OFF: 전체 주메뉴가 돌아옴")
 
 os.environ["DEMO_MODE"] = "1"
 try:
     at2 = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120).run()
-    sc2 = [e for e in at2.main if getattr(e, "key", None) == "mode_switch"]
-    check(not at2.exception and at2.session_state.demo_mode is True and sc2 and len(sc2[0].options) == 1, "환경변수 DEMO_MODE=1이면 처음부터 시연 모드")
+    check(not at2.exception and at2.session_state.demo_mode is True and len(nav_labels(at2)) == 3, "환경변수 DEMO_MODE=1이면 처음부터 시연 모드")
 finally:
     os.environ.pop("DEMO_MODE", None)
 try:

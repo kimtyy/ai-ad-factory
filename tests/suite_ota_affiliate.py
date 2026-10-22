@@ -92,7 +92,7 @@ try:
     at.session_state.mode_switch = "🧳 숙소 제휴 쇼츠"
     at.session_state.production_mode = "travel"
     at.run()
-    at.sidebar.checkbox[0].check().run()                                    # Mock
+    at.session_state["mock_mode"] = True; at.run()                                    # Mock
     [ti for ti in at.text_input if ti.label == "상품 페이지 URL 입력"][0].input(AG).run()
     [b for b in at.button if "숙소 정보 크롤링" in b.label][0].click().run()
     created.append(at.session_state.job.workdir)
@@ -104,7 +104,7 @@ try:
     srcs = [fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("photo_pool.jpg"), fixture("photo_room.jpg")]
     at.session_state.uploaded_paths = [shutil.copy(p, os.path.join(job.uploads_dir, f"h{i}.jpg")) for i, p in enumerate(srcs)]
     at.text_input(key="product_usp_input").input("오션뷰 인피니티 풀, 객실 통창 바다 전망").run()
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     check(not at.exception and len(at.session_state.storyboard) >= 3, f"앱: 올린 사진으로 숙소 콘티 기획 ({len(at.session_state.storyboard)}씬)")
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     final = at.session_state.final_video_path

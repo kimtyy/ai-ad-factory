@@ -200,7 +200,7 @@ try:
     at.session_state.mode_switch = "📚 시골책방 도서 큐레이션"
     at.session_state.production_mode = "book"
     at.run()
-    at.sidebar.checkbox[0].check().run()                                   # Mock
+    at.session_state["mock_mode"] = True; at.run()                                   # Mock
     for k, v in (("book_store", "시골책방"), ("book_title", "하늘과 바람과 별과 시"), ("book_author", "윤동주"), ("book_link", LINK)):
         at.text_input(key=k).input(v).run()
     at.text_area(key="book_info").input(INFO).run()
@@ -210,7 +210,7 @@ try:
     at.session_state.uploaded_paths = ups
     at.run()
     check(not at.exception and not any(t.key == "product_name_input" for t in at.text_input), "시골책방 입력 칸 (상품 입력 칸 대신)")
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     sbx = at.session_state.storyboard
     check(len(sbx) == 6 and all("ai_images" in (s.get("image_path") or "") for s in sbx[:-1]) and sbx[-1]["image_path"] == ups[0]
           and sbx[-1]["layout"] == "book_quote", "기획 → 씬 1~5는 AI 일러스트, 마지막(책 공개) 씬만 진짜 표지")

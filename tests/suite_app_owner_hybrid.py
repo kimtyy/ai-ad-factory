@@ -148,7 +148,7 @@ try:
           and at.text_input(key="owner_address").value == "서울특별시 광진구 화양동 1",
           "결과 여러 건: 목록에서 고르면 그 가게로 채움 (도로명 없으면 지번 주소)")
 
-    at.sidebar.checkbox[0].check().run()                                          # Mock
+    at.session_state["mock_mode"] = True; at.run()                                          # Mock
     media = [fixture("photo_pool.jpg"), fixture("photo_room.jpg"), fixture("phone_portrait.mov")]
     at.session_state.uploaded_paths = list(media)                                 # '추가'로 올라온 상태
     at.run()
@@ -167,7 +167,7 @@ try:
     check(at.text_input(key="owner_usp").value == "숙성 삼겹살" and any("Mock" in (c.value or "") for c in at.caption),
           "매장 특징 정리 버튼: mock에선 지어내지 않고 안내만 (자랑 칸 보존)")
 
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     sb = at.session_state.storyboard
     jobs.append(at.session_state.job.workdir)
     srcs = [(s.get("media") or {}).get("path") or s.get("image_path") for s in sb]

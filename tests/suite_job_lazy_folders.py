@@ -103,8 +103,8 @@ try:
     check(set(os.listdir(jobs_root)) == before, "레이더 화면 왕복해도 폴더 생성 안 됨")
     job = at.session_state.job
     at.text_input(key="owner_name").input("가평 솔바람 펜션").run()
-    at.sidebar.checkbox[0].check().run()   # Mock
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    at.session_state["mock_mode"] = True; at.run()   # Mock
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     created.append(job.workdir)
     check(os.path.exists(job.plan_path) and os.path.exists(job.meta_path), "첫 저장(콘티 기획) 시점에 작업 폴더 + storyboard.json + job.json 생성")
     check(set(os.listdir(jobs_root)) - before == {job.job_id}, "새로 생긴 폴더는 실제로 저장한 세션의 1개뿐")

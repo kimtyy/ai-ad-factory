@@ -159,7 +159,7 @@ try:
     at.session_state.mode_switch = "🛒 쇼핑 제휴 쇼츠"
     at.session_state.production_mode = "commerce"
     at.run()
-    at.sidebar.checkbox[0].check().run()                                   # Mock
+    at.session_state["mock_mode"] = True; at.run()                                   # Mock
     at.radio(key="commerce_layout").set_value("bundle").run()
     check(any(t.key == "bundle_name_2" for t in at.text_input) and not any(t.key == "product_name_input" for t in at.text_input),
           "쇼핑 구성 스위치 → 묶음 상품 3칸 (단일 상품 입력칸 대신)")

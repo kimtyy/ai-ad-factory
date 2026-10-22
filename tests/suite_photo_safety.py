@@ -152,7 +152,8 @@ try:
     cb = [c for c in at.checkbox if c.key == "official_only"]
     check(bool(cb) and cb[0].value is True and "공식 홍보 이미지만 수집" in cb[0].label, "🛡️ 공식 홍보 이미지만 수집(블로그 개인 사진 제외) 체크박스, 기본 ON")
     at.text_input(key="owner_name").input(NAME)
-    at.button(key="store_photo_find").click().run()
+    at.text_input(key="place_query").input(NAME)
+    at.button(key="place_fetch").click().run()      # 가게 정보 가져오기 = 정보 + 후보 사진 12장 동시 수집
     cands = at.session_state.store_photo_candidates
     check(not at.exception and all(c["source"] != "blog" for c in cands) and cands[0]["source"] == "official", f"기본 수집 결과에 블로그 사진 없음 ({len(cands)}장, 공식 우선)")
     at.session_state.store_photo_candidates = [{**c, "flag": "person"} if i in (1, 2) else c for i, c in enumerate(cands)]

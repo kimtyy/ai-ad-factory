@@ -103,8 +103,8 @@ try:
     at.selectbox(key="owner_type").select("stay").run()
     cap = [c.value for c in at.caption if "레이더 후킹 패턴" in c.value]
     check(cap and "Dry-run" in cap[0], f"기획 버튼 옆 힌트 사용 안내: {cap[:1]}")
-    at.sidebar.checkbox[0].check().run()   # Mock
-    [b for b in at.button if "스토리보드 자동 기획" in b.label][0].click().run()
+    at.session_state["mock_mode"] = True; at.run()   # Mock
+    [b for b in at.button if "대본 만들기" in b.label][0].click().run()
     sb = at.session_state.storyboard
     check(not at.exception and sb and sb[0].get("hook_reference"), "사장님 기획 → 씬 1에 레이더 참고 출처 기록")
     check(any("씬 1 후킹" in c.value for c in at.caption), "콘티 화면에 씬 1 후킹 출처 표시")

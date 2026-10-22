@@ -223,7 +223,7 @@ try:
     at.session_state.production_mode = "travel"
     at.run()
     check(not at.exception and any(r.label == "랭킹 기준" for r in at.radio) and any(s.label == "지역·테마" for s in at.selectbox), "숙소 모드 상단: 시즌 급상승/스테디 라디오 + 지역·테마 드롭다운")
-    check(any("제휴 트래킹" in t.label for t in at.sidebar.text_input) and any(r.label == "상단 워터마크" for r in at.sidebar.radio), "사이드바: 제휴 트래킹 템플릿·파트너 ID·워터마크(특징 별칭/끄기)")
+    check(any("제휴 트래킹" in t.label for t in at.text_input) and any(r.label == "상단 워터마크" for r in at.radio), "사이드바: 제휴 트래킹 템플릿·파트너 ID·워터마크(특징 별칭/끄기)")
     at.button(key="stay_find").click().run()
     picks = [b for b in at.button if b.key and b.key.startswith("stay_pick_")]
     check(not at.exception and 1 <= len(picks) <= 5 and all("자동 수집 시작" in b.label for b in picks), f"TOP 5 카드 {len(picks)}개, 각 카드 아래 '이 숙소 선택 및 자동 수집 시작' 버튼")
@@ -236,7 +236,7 @@ try:
     at.button(key="store_photo_use").click().run()
     ups = at.session_state.uploaded_paths
     check(not at.exception and len(ups) == 8, f"선택한 사진 8장이 영상 소스로 ({len(ups)}장)")
-    plan_btn = [b for b in at.button if "스토리보드 자동 기획" in b.label][0]
+    plan_btn = [b for b in at.button if "대본 만들기" in b.label][0]
     plan_btn.click().run()
     sb = at.session_state.storyboard
     check(not at.exception and len(sb) == 5 and [s.get("media_group") for s in sb] == [[0], [1, 2], [3, 4], [5], [6]] and sb[4]["voiceover"] == sty.STAY_CTA,

@@ -24,13 +24,13 @@ try:
     at.session_state.mode_switch = "🛒 쇼핑 제휴 쇼츠"
     at.session_state.production_mode = "commerce"
     at.run()
-    at.sidebar.checkbox[0].check().run()                                   # Mock (API 과금 없음)
+    at.session_state["mock_mode"] = True; at.run()                                   # Mock (API 과금 없음)
     photo = fixture("photo_room.jpg")
     at.session_state.uploaded_paths = [photo]                              # '이 상품 사용'으로 대표 사진 1장이 들어온 상태
     at.session_state.product_name_input = "유파 PTC 전기히터 TSK-5318"         # 입력칸 위젯 key (이 상품 사용이 채우는 값)
     at.session_state.product_usp_input = "저소음 설계, 과열 방지"
     at.run()
-    check(any("세 번이면 끝" in c.value for c in at.caption), "쇼핑: 3번 터치 안내")
+    check(any("네이버 쇼핑 꿀템" in m.value for m in at.markdown) and any(b.key == "shop_find" for b in at.button), "쇼핑: 최상단에 네이버 쇼핑 꿀템 TOP 5 + 검색 (쿠팡은 보조)")
     [b for b in at.button if "영상 만들기" in b.label][0].click().run()
     sb = at.session_state.storyboard
     jobs.append(at.session_state.job.workdir)
