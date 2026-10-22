@@ -629,6 +629,12 @@ NAV_CSS = """
   .st-key-nav_bottom [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }
   .st-key-nav_bottom button { padding: 6px 2px !important; min-height: 2.6rem; font-size: .78rem; white-space: nowrap; }
   .stMainBlockContainer { padding-bottom: 5.5rem !important; }
+  /* 영상 소스 목록: 한 줄(순서·사진·이름) + 버튼 줄로 촘촘하게 (버튼이 세로로 길게 쌓이지 않게) */
+  .st-key-media_manager [data-testid="stHorizontalBlock"] { flex-direction: row !important; flex-wrap: wrap !important; gap: .3rem !important; align-items: center; }
+  .st-key-media_manager [data-testid="stColumn"] { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important; }
+  .st-key-media_manager [data-testid="stColumn"]:nth-child(1) { flex: 0 0 4.2rem !important; }
+  .st-key-media_manager [data-testid="stColumn"]:nth-child(3) { flex: 1 1 30% !important; }
+  .st-key-media_manager [data-testid="stColumn"]:nth-child(n+4) button { min-height: 2.4rem; padding: 0 .6rem; }
   /* 후보 사진 그리드: 1열로 길게 늘어지지 않고 3열 바둑판 */
   .st-key-photo_grid [data-testid="stHorizontalBlock"] { flex-direction: row !important; flex-wrap: wrap !important; gap: .4rem !important; }
   .st-key-photo_grid [data-testid="stColumn"] { flex: 0 0 calc(33.333% - .4rem) !important; min-width: calc(33.333% - .4rem) !important; width: auto !important; }
