@@ -35,6 +35,7 @@ SUITES = [
     ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
     ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
     ("suite_stay_pipeline.py", "숙소 제휴 5단계 전자동: 데이터랩+지역·블로그 TOP5·여기어때 매칭(403 폴백)·1인 체감가·3-2-2 정렬·5문장 대본·제휴 링크·고정 댓글·원클릭 화면 흐름", False),
+    ("suite_ux_flow.py", "2단계 심플 UX: 모드별 스타일 프리셋·모드 전환 데이터 분리·접이식 편집·요약 카드·칩, 네이버 쇼핑 카드 원클릭(사진 5장·마지막 공식 썸네일·5문장 자동 기획), 숙소 원클릭", False),
     ("suite_audio_fonts.py", "나레이션 없음(BGM+자막): TTS 생략·문장 3.6초 균등, 의미 단위 1줄 자막, 자막 폰트 3종(고딕·명조·팝체)·스타일·위치 유지, 화면 선택", False),
     ("suite_core_shared.py", "공통 코어 공유: 자막 위치(55%/상단 24%)·2줄 분할·사진 안전 필터가 모드 공통, 점주 시연 모드(탭 숨김)", False),
     ("suite_photo_safety.py", "사진 저작권·초상권 4중 방어: 블로그 도메인 차단·공식 우선, 비전(사람·워터마크·글씨) 제외, 크롭·색감·비네팅 변환, 출처·대가성 문구", False),
@@ -50,6 +51,8 @@ SUITES = [
     ("suite_job_lazy_folders.py", "작업 폴더 지연 생성 + 빈 폴더 자동 정리", False),
     ("suite_travel_golden7.py", "숙소 7씬 황금 비율 + 비전 슬롯 배정 + BGM 제외", False),
     ("suite_coupang.py", "쿠팡 파트너스 API: 서명·검색 캐시/한도·딥링크·쿠팡 페이지 미접속", False),
+    ("suite_caption_engine.py", "자막 엔진: 문장당 최대 2덩어리·1어절 꼬투리 금지를 마지막에 강제(옛 분할기가 남아도), 타임라인 공용 경로(ffmpeg·MoviePy), 실제 렌더 자막 이벤트 검증", False),
+    ("suite_naver_shop.py", "네이버 쇼핑 제휴: shop·blog·image 공식 API(HUB 대체·캐시·오류 안내)·데이터랩 인기 카드 5종·URL/검색어 해석·후기 포인트·체감 가격 환산·사진 5컷 큐레이션(마지막=공식 썸네일)·문제해결형 5문장 검증·쇼핑커넥트 고지·실제 렌더", False),
     ("suite_commerce.py", "쇼핑 제휴: 실물 사진 전용·리뷰 썰·근거 없는 효능 차단·쿠팡 파트너스 표시", False),
     ("suite_scraper_input.py", "크롤링 입력 정직성 (가짜 기본값 없음·공유 링크 추적)", False),
     ("suite_script_guard.py", "대본 길이(어절 경계) + 근거 없는 주장·홍보 어투 차단", False),
@@ -80,11 +83,11 @@ SUITES = [
 
 
 # 모드별 쾌속 테스트: 수정한 모드의 스위트 + 전 모드가 공유하는 코어 스위트만 (2~3분). 전체 회귀는 큰 구조 변경·배포 전 점검용
-CORE_QUICK = ["suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py"]
+CORE_QUICK = ["suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py", "suite_caption_engine.py"]
 MODE_SUITES = {
-    "owner": ["suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
-    "stay": ["suite_stay_pipeline.py", "suite_audio_fonts.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
-    "commerce": ["suite_commerce.py", "suite_coupang.py"],
+    "owner": ["suite_ux_flow.py", "suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
+    "stay": ["suite_ux_flow.py", "suite_stay_pipeline.py", "suite_audio_fonts.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
+    "commerce": ["suite_ux_flow.py", "suite_commerce.py", "suite_coupang.py", "suite_naver_shop.py"],
     "book": ["suite_book_info.py", "suite_book_reflect.py"],
     "overlay": ["suite_ugc_normalize.py", "suite_video_overlay.py"],
     "longform": ["suite_highlight_selector.py", "suite_visual_scorer.py", "suite_audio_stt.py"],

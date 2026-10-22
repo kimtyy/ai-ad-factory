@@ -218,6 +218,20 @@ COMMERCE_POLICY = ModePolicy(
 )
 
 
+# 네이버 쇼핑 제휴 '1컨셉 문제해결형 18초 5문장' 모드(앱에서 네이버 쇼핑 상품을 골랐을 때): 자막 55%·의미 단위 최대 2덩어리, 문장은 최대 46자
+SHOP_POLICY = replace(
+    COMMERCE_POLICY, name_ko="네이버 쇼핑 제휴 18초 5문장", min_chars=20, target_chars=36, max_chars=46, min_scene_sec=3.0,
+    max_scene_sec=4.6, default_scene_sec=3.6, tts_rate="+10%", xfade_sec=0.25, tail_sec=0.20, caption_font_ratio=0.064,
+    caption_stroke_ratio=0.0075, center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18, semantic_chunks=True,
+)
+SHOP_TOP_POLICY = replace(SHOP_POLICY, center_y=0.24)            # 상단 여백 옵션 (사장님·숙소 모드와 같은 24%)
+
+
+def commerce_shop_style() -> bool:
+    """쇼핑 모드가 네이버 쇼핑 18초 5문장(전체 화면 실사용 컷 + 중단 자막) 스타일인지 (core.pipeline이 JobSpec에 따라 켜고 끔)"""
+    return os.getenv("COMMERCE_SHOP_STYLE", "").strip() == "1"
+
+
 # =================================================================
 # 4. book 정책 (시골책방/도서 큐레이션)
 # =================================================================
@@ -333,6 +347,8 @@ def get_mode_policy(mode: Optional[str]) -> ModePolicy:
         return OWNER_TOP_POLICY
     if m == "travel" and os.getenv("TRAVEL_STAY_STYLE", "").strip() == "1":
         return STAY_TOP_POLICY if top else STAY_POLICY
+    if m == "commerce" and commerce_shop_style():
+        return SHOP_TOP_POLICY if top else SHOP_POLICY
     return POLICIES.get(m, OWNER_POLICY)
 
 

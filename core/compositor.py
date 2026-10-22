@@ -227,9 +227,21 @@ class AdCompositor:
             return [t]
         max_w = int(width * policy.caption_max_width)
         if semantic:
-            from core.render.caption_chunks import semantic_split
-            return semantic_split(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2)
+            from core.render.caption_chunks import enforce_max_chunks, semantic_split
+            # 의미 단위 자막은 분할기 결과와 상관없이 문장당 최대 2덩어리·1어절 꼬투리 금지를 마지막에 한 번 더 강제 (옛 분할기가 남은 서버 대비)
+            return enforce_max_chunks(semantic_split(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2))
         return split_caption(t, fits=lambda c: len(self._wrap_text(c, draw, font, max_w)) <= 2, chunk_chars=policy.caption_chunk_chars)
+
+    def caption_timeline(self, text: str, mode: str, width: int, speech_sec: float, scene_sec: float) -> List[Tuple[float, float, str]]:
+        """
+        씬 자막 타임라인 [(시작, 끝, 덩어리)] — ffmpeg 조립과 MoviePy 조립이 같이 쓰는 단 하나의 경로 (단위 테스트가 검사하는 함수와 실제 렌더가 같은 코드).
+        덩어리가 1개면 빈 목록 (통자막은 호출 쪽 기본 처리)
+        """
+        chunks = self.caption_chunks(text, mode, width)
+        if len(chunks) <= 1:
+            return []
+        from core.render.caption_chunks import chunk_windows
+        return [(s0, e0, c) for c, (s0, e0) in zip(chunks, chunk_windows(chunks, speech_sec, scene_sec))]
 
     def _caption_block(self, caption_text: Optional[str], hook_title: Optional[str], width: int, height: int,
                        center_y: float = CAPTION_CENTER_Y, font_path: Optional[str] = None,
@@ -679,7 +691,8 @@ class AdCompositor:
         if mode in CENTER_CAPTION_MODES:
             from core.mode_policy import get_mode_policy
             policy = get_mode_policy(mode)
-            center = kwargs.get("center_y") or (COMMERCE_CAPTION_CENTER_Y if mode == "commerce" else policy.center_y)
+            from core.mode_policy import commerce_shop_style
+            center = kwargs.get("center_y") or (COMMERCE_CAPTION_CENTER_Y if (mode == "commerce" and not commerce_shop_style()) else policy.center_y)
             cap_ratio = kwargs.get("caption_ratio") or policy.caption_font_ratio
             st_ratio = kwargs.get("stroke_ratio") or policy.caption_stroke_ratio
             from core.render.fonts import resolve
@@ -971,12 +984,10 @@ class AdCompositor:
                         logger.info(f"씬 {scene_num} 후킹 단독 0~{hook_sec:.2f}초 '{hook_title}' → 서브 자막 '{caption_text}'")
                     else:
                         segments = [(0.0, scene_target_duration, caption_text, None if is_partial_echo else hook_title)]
-                        chunks = self.caption_chunks(caption_text, mode, w) if (mode in CENTER_CAPTION_MODES and caption_text) else []
-                        if len(chunks) > 1:
-                            # 긴 문장은 최대 2줄씩 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율)
-                            from core.render.caption_chunks import chunk_windows
-                            wins = chunk_windows(chunks, audio_duration, scene_target_duration)
-                            segments = [(s0, e0 - s0, c, None) for c, (s0, e0) in zip(chunks, wins)]
+                        tl = self.caption_timeline(caption_text, mode, w, audio_duration, scene_target_duration)                             if (mode in CENTER_CAPTION_MODES and caption_text) else []
+                        if tl:
+                            # 긴 문장은 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율) — ffmpeg 조립과 같은 타임라인 함수
+                            segments = [(s0, e0 - s0, c, None) for s0, e0, c in tl]
                         if mode in CENTER_CAPTION_MODES:
                             logger.info(f"씬 {scene_num} 중앙 자막 렌더링 (화면 50%): '{caption_text}'")
                         elif hook_title and hook_title.strip():

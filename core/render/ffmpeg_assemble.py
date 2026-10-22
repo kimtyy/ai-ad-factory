@@ -194,11 +194,10 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
             segs = [(0.0, hs, None, hook), (hs, dur, caption, None)]
         else:
             segs = [(0.0, dur, caption, None if is_partial_echo else hook)]
-            chunks = comp.caption_chunks(caption, mode, W) if (mode in center_modes and caption) else []
-            if len(chunks) > 1:
-                # 긴 문장은 최대 2줄씩 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율, 마지막 덩어리는 씬 끝까지)
-                from core.render.caption_chunks import chunk_windows
-                segs = [(s0, e0, c, None) for c, (s0, e0) in zip(chunks, chunk_windows(chunks, a_dur, dur))]
+            tl = comp.caption_timeline(caption, mode, W, a_dur, dur) if (mode in center_modes and caption) else []
+            if tl:
+                # 긴 문장은 앞/뒤 덩어리로 순차 표시 (음성은 그대로, 시간은 글자 수 비율, 마지막 덩어리는 씬 끝까지) — MoviePy 조립과 같은 타임라인 함수
+                segs = [(s0, e0, c, None) for s0, e0, c in tl]
         # 자막(문장 덩어리)과 고정 요소(워터마크·제휴 표시·고정 바·라벨·인용 카드)를 나눠 만든다:
         # 씬과 씬이 디졸브로 겹치는 구간에서는 이전 자막이 먼저 꺼져(씬 끝 xfade 전) 앞뒤 자막이 겹쳐 보이지 않고, 고정 요소는 끊기지 않는다
         has_static = bool(brand or disclosure or bars or label or quote or item.get("info_line"))

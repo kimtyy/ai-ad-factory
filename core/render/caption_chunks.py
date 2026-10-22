@@ -10,6 +10,10 @@ import re
 from typing import Callable, List, Optional, Tuple
 
 MIN_CHUNK_SEC = 0.6
+# 자막 엔진 버전: 화면(사이드바)·렌더 로그에 표시되어 서버가 새 분할기를 쓰는지 확인할 수 있다 (v3: 문장당 최대 2덩어리 강제 + 타임라인 공용 경로)
+CAPTION_ENGINE_VERSION = "v3-2026-10-22"
+MAX_CHUNKS_SEMANTIC = 2
+ORPHAN_COMPACT_CHARS = 5                                # 공백 제외 이 글자 수 이하이거나 1어절이면 꼬투리(고아) 덩어리
 
 
 def _approx_fits(text: str, line_chars: int = 12, max_lines: int = 2) -> bool:
@@ -139,6 +143,40 @@ def semantic_split(text: str, fits: Optional[Callable[[str], bool]] = None, shor
         if best is None or score < best[0]:
             best = (score, left, right)
     return [best[1], best[2]] if best else [t]
+
+
+def is_orphan(chunk: str) -> bool:
+    """1어절이거나 공백 제외 5자 이하인 덩어리 (화면에 혼자 뜨면 말토막처럼 보임)"""
+    c = (chunk or "").strip()
+    return len(c.split()) < 2 or len(c.replace(" ", "")) <= ORPHAN_COMPACT_CHARS
+
+
+def enforce_max_chunks(chunks: List[str], max_chunks: int = MAX_CHUNKS_SEMANTIC) -> List[str]:
+    """
+    어떤 분할기가 만든 덩어리 목록이든 마지막 방어선으로 규칙을 강제한다 (옛 분할기가 서버에 남아 있어도 화면에는 규칙대로만 나감):
+      1) 꼬투리(1어절·5자 이하) 덩어리는 이웃에 병합 (이웃이 둘이면 더 짧은 쪽)
+      2) max_chunks(기본 2)를 넘으면 합친 길이가 가장 짧은 이웃 쌍부터 병합
+    """
+    out = [c.strip() for c in chunks if c and c.strip()]
+    changed = True
+    while changed and len(out) > 1:
+        changed = False
+        for i, c in enumerate(out):
+            if is_orphan(c):
+                if i == 0:
+                    j = 1
+                elif i == len(out) - 1:
+                    j = i - 1
+                else:
+                    j = i - 1 if len(out[i - 1]) <= len(out[i + 1]) else i + 1
+                a, b = sorted((i, j))
+                out[a:b + 1] = [(out[a] + " " + out[b]).strip()]
+                changed = True
+                break
+    while len(out) > max_chunks:
+        k = min(range(len(out) - 1), key=lambda i: len(out[i]) + len(out[i + 1]))
+        out[k:k + 2] = [(out[k] + " " + out[k + 1]).strip()]
+    return out
 
 
 def chunk_windows(chunks: List[str], speech_sec: float, scene_sec: float) -> List[Tuple[float, float]]:

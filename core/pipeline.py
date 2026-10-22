@@ -9,6 +9,7 @@ Streamlit 화면(app.py)과 구글 캘린더 스케줄러가 같은 엔진을 �
 숙소(travel) '기획'은 크롤링 사진 풀·비전 매칭이 화면 흐름에 묶여 있어 app.py에 남김 (렌더는 이 엔진 공용)
 """
 import logging
+import shutil
 import os
 import re
 from dataclasses import dataclass, field
@@ -59,6 +60,8 @@ class JobSpec:
     # 1컨셉 1메시지 광고용 핵심 컨셉
     core_concept: str = ""
     tone_instruction: str = ""
+    # 쇼핑: 네이버 쇼핑(쇼핑커넥트) 상품 팩 {product, pack, value, cut_roles, keyword} — 있으면 18초 5문장 문제해결형 + 쇼핑커넥트 고지
+    shop_item: Dict[str, Any] = field(default_factory=dict)
     # 숙소 (렌더만)
     affiliate_program: str = ""
     # 공통
@@ -78,6 +81,11 @@ class JobSpec:
     @property
     def is_bundle(self) -> bool:
         return self.mode == "commerce" and self.layout == "bundle"
+
+    @property
+    def is_shop(self) -> bool:
+        """네이버 쇼핑(쇼핑커넥트) 단일 상품 영상 (묶음 큐레이션은 제외)"""
+        return self.mode == "commerce" and not self.is_bundle and bool(self.shop_item)
 
 
 @dataclass
@@ -129,6 +137,14 @@ def _extra_cut_videos(gen, scene: dict, s_num: int, real_media: bool, force: boo
         img = gen.generate_image(ex, force=force, gallery_image_path=g_cut, suffix=suffix)
         out.append(gen.generate_video(ex, img, force=force, suffix=suffix))
     return out
+
+
+def apply_style_env(spec: "JobSpec") -> None:
+    """모드 정책이 읽는 스타일 스위치를 이 작업에 맞게 맞춤 (화면·캘린더 스케줄러 공통): 네이버 쇼핑 18초 5문장 스타일"""
+    if spec.mode == "commerce" and spec.is_shop:
+        os.environ["COMMERCE_SHOP_STYLE"] = "1"
+    else:
+        os.environ.pop("COMMERCE_SHOP_STYLE", None)
 
 
 def _scene_num(scene: dict, default: int) -> int:
@@ -200,6 +216,7 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     from core.planners.commerce_bundle import plan_bundle_storyboard
     if spec.mode not in PIPELINE_MODES:
         raise ValueError(f"'{spec.mode}' 모드 기획은 화면에서만 할 수 있어요 (지원: {', '.join(PIPELINE_MODES)}).")
+    apply_style_env(spec)
     common = dict(api_key=spec.api_key, mock=spec.mock, thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
     if spec.mode == "owner":
         if not spec.name.strip():
@@ -237,6 +254,14 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
         scenes = plan_bundle_storyboard(theme=spec.bundle_theme, items=spec.bundle_items,
                                         media_paths=spec.media_paths,
                                         core_concept=spec.core_concept, **common)
+    elif spec.is_shop:
+        from core.planners.shop import plan_shop_storyboard
+        si = spec.shop_item
+        if not spec.media_paths and not spec.mock:
+            raise ValueError("상품 사진이 없습니다. 네이버 쇼핑 사진을 가져오거나 직접 올려 주세요.")
+        scenes = plan_shop_storyboard(product=si.get("product") or {"name": spec.name}, pack=si.get("pack"), media_paths=spec.media_paths,
+                                      media_roles=si.get("cut_roles"), usp=spec.usp, value=si.get("value"), keyword=si.get("keyword", ""),
+                                      core_concept=spec.core_concept, **common)
     else:
         if not spec.name.strip():
             raise ValueError("상품명을 입력해 주세요. 링크에서 찾지 못한 정보는 지어내지 않습니다.")
@@ -292,7 +317,8 @@ def assign_scene_media(spec: JobSpec, job, scenes: List[Dict[str, Any]]) -> None
         for s in scenes:
             assign_media_to_scene(job, s, s["source_path"], "matched")
     else:
-        assign_uploads_to_scenes(job, scenes, spec.media_paths, cycle=spec.mode == "commerce", product_boxes=spec.product_boxes)
+        shop_auto = bool(scenes and scenes[0].get("shop_auto"))        # 네이버 쇼핑: 사진이 문장별로 이미 묶여 있어 돌려 쓰지 않음
+        assign_uploads_to_scenes(job, scenes, spec.media_paths, cycle=spec.mode == "commerce" and not shop_auto, product_boxes=spec.product_boxes)
 
 
 def missing_media(scenes: List[Dict[str, Any]]) -> List[int]:
@@ -319,6 +345,9 @@ def disclosure_short(spec: JobSpec) -> Optional[str]:
         return ("쿠팡 파트너스·제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요" if "coupang" in kinds
                 else "제휴 링크 포함 · 구매 시 수수료를 받을 수 있어요")
     if spec.mode == "commerce":
+        if spec.is_shop:
+            from core.naver_shop import CONNECT_DISCLOSURE_SHORT
+            return CONNECT_DISCLOSURE_SHORT
         return COUPANG_DISCLOSURE
     if spec.mode == "travel" and spec.affiliate_program:
         return OTA_DISCLOSURE
@@ -356,6 +385,13 @@ def upload_texts(spec: JobSpec, copy: Optional[Dict[str, Any]], hook: str = "") 
     desc = build_shorts_description(spec.mode, copy["title"], copy["hashtags"], short, ai_illustration=spec.mode == "book")
     if spec.mode == "book":
         comment = book_comment(spec, copy)
+    elif spec.is_shop:
+        # 네이버 쇼핑커넥트: 구매 안내 + 쇼핑커넥트 링크 + 공정위 대가성 문구 + 사진 출처 문구 + 해시태그 (core/naver_shop.comment_package)
+        from core.naver_shop import comment_package
+        from core.photo_safety import SOURCE_NOTICE
+        short = (spec.shop_item.get("pack") or {}).get("keyword") or spec.name
+        comment = comment_package(short, spec.link, copy.get("hashtags"))
+        comment = comment + "\n\n" + SOURCE_NOTICE
     else:
         full = ("" if spec.is_bundle else COUPANG_DISCLOSURE_FULL if spec.mode == "commerce"
                 else ota_disclosure_full(spec.affiliate_program) if spec.mode == "travel" and spec.affiliate_program else "")
@@ -397,6 +433,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     real_media = spec.mode in ("owner", "travel", "commerce", "book")
+    apply_style_env(spec)
     gen = AssetGenerator(gemini_api_key=spec.api_key, voice_actor=spec.voice_actor, audio_mode=spec.audio_mode,
                          mock=spec.mock, mode=spec.mode, cache_dir=job.assets_dir,
                          readings=owner_readings(spec.name, spec.reading) if spec.mode == "owner" else None)

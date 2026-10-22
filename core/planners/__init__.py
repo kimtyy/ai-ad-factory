@@ -22,3 +22,7 @@ from core.planners.commerce import (
     plan_commerce_storyboard,
     suggest_selling_points,
 )
+from core.planners.shop import (
+    SHOP_CTA,
+    plan_shop_storyboard,
+)

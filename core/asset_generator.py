@@ -816,8 +816,8 @@ class AssetGenerator:
                                             card_zoom=BOOK_CARD_ZOOM, fit="cover")
             logger.info(f"씬 {scene_num} 책 표지 카드 클립 렌더링 완료 -> {out_path}")
             return out_path
-        if self.mode == "commerce":
-            # 쇼핑: 상품을 가리지 않는 '상단 자막 + 중앙~하단 상품 카드' 배치
+        if self.mode == "commerce" and scene.get("layout") != "full":
+            # 쇼핑: 상품을 가리지 않는 '상단 자막 + 중앙~하단 상품 카드' 배치 (네이버 쇼핑 실사용 컷은 layout=full로 전체 화면 Ken Burns)
             self._create_product_card_video(image_path=image_path, duration_sec=duration_sec, out_path=out_path, fps=24,
                                             motion_type=motion_type, motion_sec=motion_sec, shot=scene.get("shot") or "full",
                                             product_box=scene.get("product_box"))
