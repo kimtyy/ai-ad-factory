@@ -74,13 +74,24 @@ def token_path(mode: str) -> str:
 
 def _materialize_from_env(path: str, env_name: str) -> None:
     """클라우드처럼 secrets/ 파일을 둘 수 없는 환경: 환경변수(Streamlit Secrets)에 JSON 문자열로 넣어 둔 값을 파일로 풀어 쓴다.
-    파일이 이미 있으면(로컬·갱신된 토큰) 건드리지 않는다. 값은 로그에 남기지 않는다."""
+    파일이 이미 있으면 건드리지 않되, Secrets의 갱신 토큰(refresh_token)이 파일과 '다르면' 새로 로그인해 Secrets를 교체한 것이므로
+    Secrets가 이긴다 (옛 만료 토큰 파일이 남아 새 토큰을 무시하던 문제). 같은 로그인에서 액세스 토큰만 갱신된 파일은 그대로 둔다.
+    값은 로그에 남기지 않는다."""
     raw = os.getenv(env_name, "").strip()
-    if not raw or os.path.exists(path):
+    if not raw:
         return
     try:
         import json
-        json.loads(raw)                                  # JSON 형식 확인 (아니면 무시)
+        env_data = json.loads(raw)                       # JSON 형식 확인 (아니면 무시)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    file_data = json.load(f)
+            except (OSError, ValueError):
+                file_data = {}
+            same_login = bool(env_data.get("refresh_token")) and env_data.get("refresh_token") == file_data.get("refresh_token")
+            if same_login or not env_data.get("refresh_token"):
+                return
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(raw)

@@ -454,13 +454,23 @@ yu.SECRETS_DIR = tmp("yt_env_")
 os.environ["YOUTUBE_TOKEN_STORE"] = _json.dumps({"token": "t", "refresh_token": "r", "scopes": ["https://www.googleapis.com/auth/youtube.upload"]})
 try:
     ok_env = yu.is_authorized("owner") and os.path.exists(os.path.join(yu.SECRETS_DIR, "token_store.json"))
-    with open(os.path.join(yu.SECRETS_DIR, "token_store.json"), "w", encoding="utf-8") as _f:
-        _f.write('{"token": "local"}')
-    yu._materialize_from_env(os.path.join(yu.SECRETS_DIR, "token_store.json"), "YOUTUBE_TOKEN_STORE")
-    keep = _json.load(open(os.path.join(yu.SECRETS_DIR, "token_store.json"), encoding="utf-8")).get("token") == "local"
+    tp = os.path.join(yu.SECRETS_DIR, "token_store.json")
+    with open(tp, "w", encoding="utf-8") as _f:                    # 같은 로그인(refresh_token 같음)에서 액세스 토큰만 갱신된 파일 → 그대로 둠
+        _f.write('{"token": "refreshed", "refresh_token": "r"}')
+    yu._materialize_from_env(tp, "YOUTUBE_TOKEN_STORE")
+    keep = _json.load(open(tp, encoding="utf-8")).get("token") == "refreshed"
+    with open(tp, "w", encoding="utf-8") as _f:                    # 옛 로그인의 만료된 파일(refresh_token 다름) → 새로 교체한 Secrets가 이김
+        _f.write('{"token": "old", "refresh_token": "OLD_EXPIRED"}')
+    yu._materialize_from_env(tp, "YOUTUBE_TOKEN_STORE")
+    new_wins = _json.load(open(tp, encoding="utf-8")).get("refresh_token") == "r"
+    with open(tp, "w", encoding="utf-8") as _f:                    # 깨진 파일 → Secrets로 복구
+        _f.write("{broken")
+    yu._materialize_from_env(tp, "YOUTUBE_TOKEN_STORE")
+    healed = _json.load(open(tp, encoding="utf-8")).get("refresh_token") == "r"
 finally:
     os.environ.pop("YOUTUBE_TOKEN_STORE", None)
     yu.SECRETS_DIR = _old_dir
-check(ok_env and keep, "환경변수 토큰(YOUTUBE_TOKEN_STORE)만으로 연결됨 처리, 이미 있는 토큰 파일은 덮어쓰지 않음")
+check(ok_env and keep, "환경변수 토큰(YOUTUBE_TOKEN_STORE)만으로 연결됨 처리, 같은 로그인에서 갱신된 파일은 덮어쓰지 않음")
+check(new_wins and healed, "Secrets를 새 로그인으로 교체하면 옛 만료 토큰 파일 대신 새 토큰을 씀 (깨진 파일도 복구)")
 
 finish(fails)
