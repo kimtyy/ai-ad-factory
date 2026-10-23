@@ -212,4 +212,13 @@ fb = [ow.photo_fallback_line(t, 5, short=True) for t in ("여러 메뉴 모음: 
 check(fb[0] == "버터먹은먹태, 치즈 요리까지 한 상에!" and fb[1].startswith("눈꽃맥주,") and fb[2].startswith("통오징어,") and not any(w in " ".join(fb) for w in ("요리 눈꽃빙수", "잔과", "접시와", "땅콩", "바구니")),
       f"사진 설명이 모음·곁들임이어도 메뉴 이름만 호명: {fb}")
 
+import os as _o
+_o.environ.pop("ANTHROPIC_MODEL_VISION", None)
+base = rt.claude_model_for("vision")[0]
+_o.environ["ANTHROPIC_MODEL_VISION"] = "claude-sonnet-5-5"
+v_model, s_model = rt.claude_model_for("vision")[0], rt.claude_model_for("script")[0]
+_o.environ.pop("ANTHROPIC_MODEL_VISION", None)
+check(rt.tier_for_purpose("사진 피사체 태깅") == "vision" and base == rt.claude_model_for("backend")[0] and v_model == "claude-sonnet-5-5" and s_model != v_model,
+      "사진 판독만 ANTHROPIC_MODEL_VISION으로 모델을 바꿀 수 있고(미설정이면 기존 모델), 대본 모델은 그대로")
+
 finish(fails)

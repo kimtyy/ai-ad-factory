@@ -37,8 +37,13 @@ SCRIPT_PURPOSES = frozenset([
 ])
 
 
+VISION_PURPOSES = frozenset(["사진 피사체 태깅"])        # 사진 판독만 따로 모델을 바꿀 수 있게: ANTHROPIC_MODEL_VISION (없으면 ANTHROPIC_MODEL)
+
+
 def tier_for_purpose(purpose: str) -> str:
     """호출 목적 → 모델 티어 ('script' = 최종 대본/나레이션, 'backend' = 그 외)"""
+    if (purpose or "").strip() in VISION_PURPOSES:
+        return "vision"
     return "script" if (purpose or "").strip() in SCRIPT_PURPOSES else "backend"
 PROVIDER_ORDER = ("claude", "openai", "gemini")
 PROVIDER_LABEL = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}
@@ -104,6 +109,9 @@ def claude_model_for(tier: str) -> Tuple[str, str]:
     if tier == "script":
         model = (os.getenv("ANTHROPIC_MODEL_SCRIPT") or DEFAULT_ANTHROPIC_SCRIPT_MODEL).strip()
         effort = (os.getenv("ANTHROPIC_EFFORT_SCRIPT") or DEFAULT_ANTHROPIC_SCRIPT_EFFORT).strip()
+    elif tier == "vision":
+        model = (os.getenv("ANTHROPIC_MODEL_VISION") or os.getenv("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL).strip()
+        effort = (os.getenv("ANTHROPIC_EFFORT_VISION") or os.getenv("ANTHROPIC_EFFORT") or DEFAULT_ANTHROPIC_EFFORT).strip()
     else:
         model = (os.getenv("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL).strip()
         effort = (os.getenv("ANTHROPIC_EFFORT") or DEFAULT_ANTHROPIC_EFFORT).strip()
