@@ -2375,10 +2375,11 @@ if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
                 )
             from core.llm import router as _rt
             _ei = dict(st.session_state.get("engine_info") or {})
-            if _rt.LAST_ENGINE.get("_script"):
-                _ei["script"] = _rt.LAST_ENGINE["_script"]
-            if _rt.LAST_ENGINE.get("사진 피사체 태깅"):
-                _ei["vision"] = _rt.LAST_ENGINE["사진 피사체 태깅"]
+            _last = getattr(_rt, "LAST_ENGINE", {})            # 서버가 옛 라우터 모듈을 들고 있으면(재시작 전) 없을 수 있음 → 표시만 건너뜀
+            if _last.get("_script"):
+                _ei["script"] = _last["_script"]
+            if _last.get("사진 피사체 태깅"):
+                _ei["vision"] = _last["사진 피사체 태깅"]
             st.session_state.engine_info = _ei
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
