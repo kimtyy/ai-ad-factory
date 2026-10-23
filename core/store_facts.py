@@ -202,10 +202,15 @@ _MISREAD = re.compile(r"튀긴\s*오징어채|오징어채|진미채|오징어\s
 
 def canon_snack(tag: str, official_menus: Optional[List[str]] = None) -> str:
     """비전이 먹태를 '튀긴 오징어채·진미채'로 읽은 것을 공식 메뉴(없으면 '먹태구이')로 바로잡음"""
-    if not tag or not _MISREAD.search(tag):
+    if not tag:
         return tag
-    menu = next((m for m in (official_menus or []) if "먹태" in m), "먹태구이")
-    return re.sub(r"\s+", " ", _MISREAD.sub(menu, tag)).strip()
+    if _MISREAD.search(tag):
+        menu = next((m for m in (official_menus or []) if "먹태" in m), "먹태구이")
+        tag = re.sub(r"\s+", " ", _MISREAD.sub(menu, tag)).strip()
+    squid = next((m for m in (official_menus or []) if "오징어" in m), "")
+    if squid and re.search(r"통오징어|구운\s*오징어|오징어\s*구이", tag) and squid not in tag:
+        tag = re.sub(r"\s+", " ", re.sub(r"구운\s*통오징어|통오징어|구운\s*오징어|오징어\s*구이", squid, tag)).strip()      # 메뉴판에 없는 이름 → 공식 메뉴 이름
+    return tag
 
 
 def clean_photo_tag(tag: str) -> str:
@@ -267,7 +272,7 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
 가게: {business_name or '(상호 미입력)'}{menu_rule}
 [한국 호프집 안주 판별 가이드 — 보이는 모습을 아래 이름으로 쓰세요]
 - 가늘고 노릇하게 찢어져 바삭하게 구워진 마른안주 → 반드시 '버터먹은먹태' (또는 먹태구이). '튀긴 오징어채'·'진미채'·'오징어채'라는 말은 절대 쓰지 마세요 (호프집에는 그런 메뉴가 없습니다).
-- 칼집을 내어 통째로 구워진 오징어 → '구운 통오징어' (또는 반건조 오징어)
+- 칼집을 내어 통째로 구워진 오징어 → '반건조 오징어' (공식 메뉴판에 오징어 메뉴가 있으면 반드시 그 메뉴 이름 그대로. '구운 통오징어'처럼 메뉴판에 없는 이름은 쓰지 마세요)
 - 얼음 위에 팥이나 과일이 얹힌 디저트 → '눈꽃빙수' (또는 과일빙수·팥빙수)
 - 빨간 양념에 채소와 둥글게 만 소면 덩어리가 함께 있는 요리 → '골뱅이무침' (또는 골뱅이소면)
 - 눈처럼 갈린 얼음이 올라간 맥주잔 → '눈꽃맥주'
