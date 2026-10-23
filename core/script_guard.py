@@ -641,7 +641,7 @@ def photo_sync_issues(lines: List[str], line_tags: List[str]) -> Dict[int, str]:
 DISH_WORDS = MENU_VOCAB + ("물냉면", "비빔냉면", "버섯", "통버섯", "공기밥", "볶음밥", "쌈밥", "떡볶이", "치킨", "피자", "파스타", "초밥", "회")
 
 
-def menu_switch_issues(lines: List[str], core_concept: str = "") -> Dict[int, str]:
+def menu_switch_issues(lines: List[str], core_concept: str = "", line_tags: Optional[List[str]] = None) -> Dict[int, str]:
     """
     1문장·컨셉에 없는 다른 메뉴를 소개하는 문장 → {줄 번호: 고칠 방향} (최대 2줄). 1컨셉 1메시지: 선택한 메시지 하나만 끝까지 증명
     """
@@ -651,12 +651,37 @@ def menu_switch_issues(lines: List[str], core_concept: str = "") -> Dict[int, st
     issues: Dict[int, str] = {}
     for i in range(1, len(lines)):
         t = re.sub(r"\s+", "", lines[i] or "")
-        hit = next((w for w in DISH_WORDS if w in t and w not in base), None)
+        tag_n = re.sub(r"\s+", "", (line_tags[i] if line_tags and i < len(line_tags) else "") or "")      # 그 문장 구간에 나오는 사진 속 메뉴는 허용
+        hit = next((w for w in DISH_WORDS if w in t and w not in base and w not in tag_n), None)
         if hit:
             issues[i] = f"1컨셉에서 다른 메뉴('{hit}') 이야기로 주제를 바꿈 → 선택한 하나의 메시지를 다른 각도(대비·증거·체감)로 계속 증명하기"
             if len(issues) >= 2:
                 break
     return issues
+
+
+_PHOTO_STOP = {"사진", "접시", "그릇", "테이블", "탁자", "놓여", "놓인", "있는", "담긴", "모습", "클로즈업", "위에", "나란히", "가득", "여러", "함께", "손님", "배경", "화면", "전체"}
+
+
+def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]]) -> Dict[int, str]:
+    """
+    문장마다 '그 순간 화면에 나오는 사진 속 피사체(line_tags[i])'를 직접 말하는지. 피사체의 낱말(어미·조사를 뗀 말)이 문장에 하나도 없으면
+    → {줄 번호: 고칠 방향}. 사진 속 화채·먹태 장면에서 성우가 맥주 거품 이야기만 하는 사진-대본 불일치를 막는다
+    """
+    out: Dict[int, str] = {}
+    for i, t in enumerate(lines):
+        tag = (line_tags[i] if line_tags and i < len(line_tags) else "") or ""
+        if not tag.strip() or not (t or "").strip():
+            continue
+        keys = {k for k in (content_stems(tag) | set(re.findall(r"[가-힣A-Za-z]{2,}", tag))) if k not in _PHOTO_STOP and len(k) >= 2}
+        if not keys:
+            continue
+        sent = re.sub(r"\s+", "", t)
+        tag_n = re.sub(r"\s+", "", tag)
+        if any(k in sent for k in keys) or any(len(w) >= 2 and w in tag_n for w in content_stems(t)):
+            continue
+        out[i] = f"이 문장이 나오는 화면은 '{tag}' → 문장이 이 사진 속 피사체를 직접 말해야 해요 (다른 사진 이야기 금지)"
+    return out
 
 
 def valid_cta(text: str, target: str = "") -> bool:
@@ -667,7 +692,7 @@ def valid_cta(text: str, target: str = "") -> bool:
         and not find_banned_style(t)
 
 
-def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -> Dict[int, str]:
+def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "", line_tags: Optional[List[str]] = None) -> Dict[int, str]:
     """
     1문장(후킹)에서 던진 주제를 2문장 이후(CTA 제외)에서도 이어서 증명하는지. 1문장·컨셉의 내용어가 한 번도 안 나오는 줄 → {줄 번호: 고칠 방향}
     (용두사미 방지: '밑반찬 11가지'로 시작했는데 갑자기 일반 고기 칭찬·냉면 얘기로 새는 것). 최대 2줄까지만 지적해 과교정을 막는다
@@ -698,6 +723,8 @@ def topic_lock_issues(lines: List[str], core_concept: str = "", usp: str = "") -
             continue
         if anchor_stems & content_stems(t) or any(a in t or any(w in a for w in tokens(t)) for a in anchors):
             continue
+        if line_tags and i < len(line_tags) and (line_tags[i] or "").strip() and (content_stems(line_tags[i]) & content_stems(t) or tokens(line_tags[i]) & tokens(t)):
+            continue                                   # 그 순간 화면에 나오는 사진 속 피사체를 말하는 문장은 정상
         issues[i] = ("1문장(후킹)의 주제에서 벗어남 → 1문장이 던진 주제를 이 장면에서도 이어서 증명하기 "
                      "(주제와 무관한 일반 칭찬·다른 메뉴 이야기 금지)")
         if len(issues) >= 2:
@@ -722,7 +749,7 @@ def unique_fact_issues(lines: List[str], usp: str = "", need: int = 2) -> Dict[i
 
 def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None,
                             usp: str = "", lock_topic: bool = False, line_tags: Optional[List[str]] = None, evidence: str = "",
-                            business_name: str = "", region: str = ""):
+                            business_name: str = "", region: str = "", context_kind: str = ""):
     """
     대본 보정용 위반 탐지기 (줄 텍스트 → 위반 설명): 판에 박힌 패턴 + 어미 리듬 +
     씬 간 반복(훅 포함) + 1컨셉 연관성(core_concept를 넘긴 경우)
@@ -748,14 +775,23 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
             fake = find_invented_menu(t, evidence)
             if fake:
                 flagged.setdefault(lines[i], f"입력에 없는 메뉴·가짜 명사('{fake}') → 입력된 메뉴·사진 속 음식만 쓰고, 맛·향·식감 표현으로 생생하게")
+    if context_kind:
+        from core.venue_context import find_violation
+        for i, t in enumerate(lines):
+            w = find_violation(t, context_kind)
+            if w:
+                flagged.setdefault(lines[i], f"이 업종 손님의 실제 방문 맥락과 어긋나는 말('{w}') → 저녁 먹고 2차·퇴근 후 1차처럼 실제로 찾는 순간으로 쓰기")
+    if line_tags and any((x or "").strip() for x in line_tags):
+        for i, msg in photo_subject_issues(lines, line_tags).items():
+            flagged.setdefault(lines[i], msg)
     if lock_topic:
         for i, msg in hook_situation_issues(lines, region).items():
             flagged.setdefault(lines[i], msg)
         for i, msg in adjacent_repeat_issues(lines, core_concept).items():
             flagged.setdefault(lines[i], msg)
-        for i, msg in topic_lock_issues(lines, core_concept, usp).items():
+        for i, msg in topic_lock_issues(lines, core_concept, usp, line_tags).items():
             flagged.setdefault(lines[i], msg)
-        for i, msg in menu_switch_issues(lines, core_concept).items():
+        for i, msg in menu_switch_issues(lines, core_concept, line_tags).items():
             flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():

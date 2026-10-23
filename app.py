@@ -2126,6 +2126,8 @@ with edit_box:
                     api_key=api_key,
                     thumb_dir=current_job().assets_dir,
                     mock=mock_mode,
+                    photo_tags=dict(st.session_state.get("photo_tags") or {}) or None,
+                    cache_path=current_job().asset_path("photo_tags.json"),       # 확정된 사진 전체를 보고 업종 맥락에 맞게 제안 (대본 기획과 같은 분석 캐시)
                 )
                 st.session_state.suggested_concepts = c_list
                 if c_list:
@@ -2418,7 +2420,16 @@ with edit_box:
             if synced.get(_n) != (_text0, _dur0) or _kt not in st.session_state:
                 st.session_state[_kt], st.session_state[_kd] = _text0, max(0.5, min(15.0, _dur0))
             with st.container(border=True, key=f"sb_card_{_n}"):
-                _c1, _c2 = st.columns([5, 1])
+                _cth, _c1, _c2 = st.columns([1.4, 4.6, 1])
+                _mp = _sc.get("image_path") or _sc.get("source_path") or _sc.get("video_path")
+                with _cth:                                   # 이 문장과 짝인 사진 (사진 ↔ 대본 1:1)
+                    if _mp and os.path.exists(_mp):
+                        st.image(_media_thumb(_mp)[0], use_container_width=True)
+                        _tg = ((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).get(os.path.basename(_mp))
+                        if _tg:
+                            st.caption(_tg)
+                    else:
+                        st.caption("사진 없음")
                 _c1.markdown(f"**씬 {_n:02d}**")
                 _text = _c1.text_area("나레이션 · 자막 대사", key=_kt, height=90, label_visibility="collapsed")
                 _dur = _c2.number_input("지속시간(초)", min_value=0.5, max_value=15.0, step=0.5, key=_kd)
