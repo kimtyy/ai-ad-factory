@@ -175,7 +175,20 @@ _CONTAINER_WORDS = {"잔", "접시", "그릇", "컵", "병", "모둠", "세트",
 _PHOTO_TEMPLATES = ("{n} 한 잔이 생각나는 날 있죠?", "{n}, 이 집에서 꼭 맛봐야 하는 메뉴예요!", "{n}까지 곁들이면 더 든든해요!", "{n}도 놓치면 아쉬워요!")
 
 
-def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "") -> str:
+def scrub_menus(text: str, banned: List[str]) -> str:
+    """특장점(USP) 글에서 사진에 없는 메뉴 이름이 들어간 구절(쉼표·슬래시·줄 단위)을 뺀다"""
+    if not text or not banned:
+        return text
+    from core.script_guard import find_unphotographed_menu
+    parts = re.split(r"(?<=[,/·\n])", text)
+    keep = [p for p in parts if not find_unphotographed_menu(p, banned, "x")]
+    return re.sub(r"\s+", " ", "".join(keep)).strip(" ,/·")
+
+
+_PHOTO_TEMPLATES_SHORT = ("{n}, 한 입이면 끝!", "{n}, 놓치면 아쉬워요!", "{n}까지 완벽해요!", "{n} 이 맛이에요!")
+
+
+def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "", short: bool = False) -> str:
     """그 문장이 나오는 사진 속 피사체(tag)를 직접 말하는 안전 문구. LLM 대사가 사진과 어긋나 버려질 때 쓴다 (피사체를 모르면 빈 문자열)"""
     from core.script_guard import _PHOTO_STOP
     if " / " in (tag or ""):                                  # 컷 여러 장이 빠르게 전환되는 문장: 피사체를 순서대로 호명
@@ -192,6 +205,8 @@ def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "") -> str
     subject = f"{words[0]} {words[1]}" if len(words) >= 2 and len(words[0]) + len(words[1]) <= 8 else words[0]       # '과일 화채', '반건조 오징어'처럼 두 낱말까지
     if any(w in subject for w in ("매장", "홀", "내부", "실내", "좌석", "입구", "외관", "간판")):
         return f"{subject}에서 편하게 즐기기 좋아요!"                      # 공간 사진은 메뉴 문구 대신
+    if short:
+        return _PHOTO_TEMPLATES_SHORT[index % len(_PHOTO_TEMPLATES_SHORT)].format(n=subject)
     k = 0 if index == 0 else 1 + (index - 1) % (len(_PHOTO_TEMPLATES) - 1)
     return _PHOTO_TEMPLATES[k].format(n=subject)
 
@@ -413,6 +428,19 @@ def plan_owner_storyboard(
     default_hook = f"{business_name} 가봤어요?" if business_name else "여기 진짜 가볼 만해요!"
 
     from core import venue_context as vc
+    from core.script_guard import find_unphotographed_menu, photographed_menus
+    official = [m for m in ((store_facts or {}).get("official_menus") or []) if m]
+    photo_text_all = " ".join((photo_tags or {}).get(p, "") for p in media)             # 이번 영상에 쓰는 사진들의 피사체
+    if official and photo_text_all.strip():
+        shown_menus = photographed_menus(official, photo_text_all)
+        banned_menus = [m for m in official if m not in shown_menus]
+        store_facts = dict(store_facts or {})
+        store_facts["photo_menus"] = shown_menus
+        store_facts["banned_menus"] = banned_menus
+        store_facts["special_menus"] = [m for m in (store_facts.get("special_menus") or []) if not find_unphotographed_menu(m, banned_menus, "x")]
+        usp = scrub_menus(usp, banned_menus)
+    else:
+        banned_menus = []
     tag_by_scene = [" / ".join((photo_tags or {}).get(media[k], "") for k in g if k < len(media) and (photo_tags or {}).get(media[k])) for g in groups] if groups else []
     ctx_kind = vc.detect(business_name, usp, (photo_tags or {}).values(), extra=" ".join((store_facts or {}).get("special_menus") or []))
     cta_line = rap_cta(search_keyword, ctx_kind) if rap else owner_cta(search_keyword, region, business_type, ctx_kind)
@@ -438,14 +466,14 @@ def plan_owner_storyboard(
         llm_cta = str(item.get("voiceover") or "").strip() if is_last else ""
         cta_ok = valid_rap_cta(llm_cta, search_keyword) if rap else valid_cta(llm_cta, search_keyword)
         text = (llm_cta if (llm_cta and cta_ok) else cta_line) if is_last else str(item.get("voiceover") or "").strip() or (
-            photo_fallback_line(tag_i, i, core_concept) or concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # 엔진 실패 시에도 사진·컨셉을 유지
+            photo_fallback_line(tag_i, i, core_concept, short=rap) or concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # 엔진 실패 시에도 사진·컨셉을 유지
         if not is_last:
             text = to_haeyo(text)   # 말투 통일: 합쇼체 → 해요체
             claim = _unsupported_claim(text, usp)
             if claim:
                 logger.info(f"[허위 차단] 씬 {i + 1}: USP에 없는 표현 '{claim}' → 템플릿 대사로 교체")
                 text = lines.get(role, lines["exterior"])
-            safe = lambda: (photo_fallback_line(tag_i, i, core_concept) or concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # noqa: E731
+            safe = lambda: (photo_fallback_line(tag_i, i, core_concept, short=rap) or concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # noqa: E731
             drift = find_concept_drift(text, core_concept, usp)
             if drift:
                 logger.info(f"[1컨셉 이탈 차단] 씬 {i + 1}: {drift} → 컨셉 안전 문구로 교체")
@@ -457,6 +485,10 @@ def plan_owner_storyboard(
             ctx_bad = vc.find_violation(text, ctx_kind)
             if ctx_bad:
                 logger.info(f"[업종 방문 맥락 위반 차단] 씬 {i + 1}: '{ctx_bad}' ({ctx_kind}) (대사: {text}) → 사진 기반 안전 문구로 교체")
+                text = safe()
+            ghost = find_unphotographed_menu(text, banned_menus, photo_text_all) if banned_menus else None
+            if ghost:
+                logger.info(f"[사진에 없는 메뉴 차단] 씬 {i + 1}: '{ghost}' (대사: {text}) → 그 사진을 말하는 문구로 교체")
                 text = safe()
             if tag_i and photo_subject_issues([text], [tag_i]):
                 logger.info(f"[사진-대사 불일치 차단] 씬 {i + 1}: 화면 '{tag_i}' (대사: {text}) → 그 사진을 말하는 문구로 교체")
@@ -614,6 +646,7 @@ def suggest_ad_concepts(
     mock: bool = False,
     photo_tags: Optional[Dict[str, str]] = None,
     cache_path: Optional[str] = None,
+    official_menus: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     """
     업종의 '실제 손님 방문 맥락'(core.venue_context)과 1단계에서 확정된 사진 전체(최대 10장)를 함께 보고 컨셉 3개를 제안한다.
@@ -629,11 +662,15 @@ def suggest_ad_concepts(
     if not tags and media and not mock and api_key:
         try:
             from core.store_facts import analyze_photos
-            tags, _b = analyze_photos(media, business_name=business_name, api_key=api_key, thumb_dir=thumb_dir, cache_path=cache_path)
+            tags, _b = analyze_photos(media, business_name=business_name, api_key=api_key, thumb_dir=thumb_dir, cache_path=cache_path, official_menus=official_menus)
         except Exception as e:
             logger.info(f"컨셉 제안용 사진 분석 건너뜀: {e}")
     from core import venue_context as vc
+    from core.script_guard import find_unphotographed_menu, photographed_menus
     kind = vc.detect(business_name, usp, tags.values())
+    _ph_text = " ".join(tags.values())
+    _shown = photographed_menus(official_menus or [], _ph_text)
+    _banned = [m for m in (official_menus or []) if m not in _shown] if tags else []
     type_info = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES[DEFAULT_BUSINESS_TYPE])
     type_label = type_info["label"]
 
@@ -687,6 +724,7 @@ def suggest_ad_concepts(
 사장님 특장점(USP/팩트): {usp or '(없음)'}
 
 {venue_block}
+{("[사진 속 메뉴만 사용] 컨셉에 쓸 수 있는 메뉴는 이번 사진에 찍힌 것뿐입니다: " + (", ".join(_shown) or "사진 설명에 보이는 것") + chr(10) + "⛔ 사진에 없는 메뉴(매장에 있어도 컨셉·헤드라인에 절대 쓰지 말 것): " + ", ".join(_banned[:40])) if _banned else ""}
 
 [확정된 사진 전체 구성 — 첫 사진만 보지 말고 전부 함께 보고, 컨셉은 이 사진들로 100% 뒷받침되어야 합니다]
 {photo_summary}
@@ -744,7 +782,7 @@ JSON만 출력:
             results = []
             for k, item in enumerate(raw_concepts[:3]):
                 blob = f"{item.get('headline', '')} {item.get('core_concept', '')} {item.get('description', '')}"
-                bad = vc.find_violation(blob, kind)
+                bad = vc.find_violation(blob, kind) or (find_unphotographed_menu(blob, official_menus or [], _ph_text) if tags else None)
                 if bad and k < len(fallback_concepts):
                     logger.info(f"[업종 맥락 위반 컨셉 교체] '{bad}' ({kind}) → 방문 맥락에 맞는 기본 컨셉")
                     results.append(fallback_concepts[k])

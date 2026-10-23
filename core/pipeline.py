@@ -237,7 +237,8 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
         elif (not photo_tags or not photo_buckets) and spec.media_paths and not spec.mock:
             # 사진을 직접 보고 피사체·5단계 버킷을 적어 둠 (캐시: 같은 사진은 다시 부르지 않음) → 올린 순서와 상관없이 맛집 시선 순서로 컷 정렬
             new_tags, new_buckets = analyze_photos(spec.media_paths, business_name=spec.name, api_key=spec.api_key, thumb_dir=job.assets_dir,
-                                                   cache_path=job.asset_path("photo_tags.json"))
+                                                   cache_path=job.asset_path("photo_tags.json"),
+                                                   official_menus=(spec.store_facts or {}).get("official_menus"))
             photo_tags = photo_tags or new_tags
             photo_buckets = photo_buckets or new_buckets
         scenes = plan_owner_storyboard(business_name=spec.name, usp=spec.usp, business_type=spec.business_type,

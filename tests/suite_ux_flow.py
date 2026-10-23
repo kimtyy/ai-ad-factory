@@ -108,6 +108,7 @@ check(not [e for e in at.expander if "직접 수정하기" in e.label] and "⚡ 
 fetch = [b for b in at.button if b.key == "place_fetch"]
 check(fetch and fetch[0].label == "🏪 가게 정보 가져오기" and not [b for b in at.button if b.key == "store_photo_find"], "1단계: 검색창 + [🏪 가게 정보 가져오기] 버튼 1개 (사진 찾기 버튼 따로 없음)")
 check(any(t.key == "owner_name" for t in at.text_input) and any(t.key == "owner_usp" for t in at.text_input), "가게 정보(상호·대표 메뉴·특장점) 입력칸이 바로 노출")
+check(any(t.key == "official_menu_text" and "공식 메뉴판" in t.label for t in at.text_area), "1단계에 📋 네이버 플레이스 공식 메뉴판 편집칸 노출")
 check(any(r.key == "script_style_radio" for r in at.radio), "2단계에 화자 시점 (좌측 바에서 이동)")
 check(side(at, "⏱️ 영상 길이") is not None and any("대본 만들기" in b.label for b in at.button), "3단계에 영상 길이 + 대본 만들기 버튼")
 _lbl = [b.label for b in at.button]

@@ -228,7 +228,8 @@ def merge_research(local: List[Dict[str, Any]], blog_snippets: List[str], ground
 def research_store(name: str, address: str = "", *, region: str = "", gemini_api_key: str = "", naver_id: str = "", naver_secret: str = "",
                    local_fn: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
                    blog_fn: Optional[Callable[[str], List[str]]] = None,
-                   gemini_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None) -> Dict[str, Any]:
+                   gemini_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+                   menu_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
     상호명(+선택 주소·지역)으로 공식 API 2종과 Gemini 웹 검색을 병렬 호출해 합친다. 각 단계는 실패해도 예외 없이 건너뛴다 (테스트용 *_fn 주입 가능).
     """
@@ -237,6 +238,7 @@ def research_store(name: str, address: str = "", *, region: str = "", gemini_api
     region = (region or "").strip()
     if not name or os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1":       # 테스트·오프라인: 외부 호출 없이 빈 결과
         return merge_research([], [], {}, name)
+    injected = any(f is not None for f in (local_fn, blog_fn, gemini_fn))             # 테스트처럼 단계를 직접 주입했으면 공식 메뉴판도 네트워크로 부르지 않음
     if local_fn is None and naver_id and naver_secret:
         from core.naver_local import NaverAPIError, NaverLocalSearch
         nl = NaverLocalSearch(naver_id, naver_secret)
@@ -261,9 +263,18 @@ def research_store(name: str, address: str = "", *, region: str = "", gemini_api
             logger.warning(f"매장 정보 수집 단계 실패 ({getattr(fn, '__name__', 'fn')}): {type(e).__name__}")
             return default
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    if menu_fn is None and injected:
+        menu_fn = lambda q, r: {}                                                               # noqa: E731
+    if menu_fn is None:
+        from core.naver_place_menu import collect_official_menu
+        menu_fn = lambda q, r: collect_official_menu(q, r, api_key=gemini_api_key)                  # noqa: E731  네이버 플레이스 공식 메뉴판 (실패하면 Gemini 검색)
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_menu = ex.submit(safe, menu_fn, name, region, default={})
         f_local = ex.submit(safe, local_fn, f"{region} {name}".strip() if region and region not in name else name, default=[])
         f_blog = ex.submit(safe, blog_fn, name, default=[])
         f_gem = ex.submit(safe, gemini_fn, name, region, default={})
         local, blog, grounded = f_local.result(), f_blog.result(), f_gem.result() or {}
-    return merge_research(local or [], blog or [], grounded, name)
+    res = merge_research(local or [], blog or [], grounded, name)
+    res["official_menu"] = f_menu.result() or {}
+    return res

@@ -1155,3 +1155,49 @@ def diversify_exclamations(lines: List[str], reserved: str = "") -> Tuple[List[s
             log.append(f"'{text}' → '{new}'")
         out.append(new)
     return out, log
+
+
+# ---------------------------------------------------------------- 사진에 없는 공식 메뉴 금지 (No Photo = No Script Mention)
+_FOOD_HEADS = ("피자", "치킨", "빙수", "스테이크", "스테이키", "불고기", "먹태", "골뱅이", "오징어", "맥주", "냉면", "국수", "아구찜", "코다리", "만두", "묵사발",
+               "감자튀김", "파스타", "볶음밥", "닭발", "화채", "쌀국수", "부대찌개", "소세지", "나쵸", "튀김", "새우", "두부", "계란찜", "하이볼", "소주", "막걸리")
+_MENU_GENERIC = {"무침", "세트", "메뉴", "기본", "스페셜", "모듬", "모둠", "대", "중", "소", "특", "한판", "한마리", "반마리", "인분", "추가", "사리", "음료", "주류"}
+
+
+def menu_keywords(menu: str) -> List[str]:
+    """공식 메뉴 이름 하나를 대본·사진 설명과 맞춰 볼 핵심어로 쪼갬 (예: '골뱅이 무침' → 골뱅이, '고르곤졸라피자' → 고르곤졸라피자·피자)"""
+    base = re.sub(r"[\(\[].*?[\)\]]", " ", menu or "")
+    norm = re.sub(r"\s+", "", base)
+    kws: List[str] = []
+    if len(norm) >= 2 and norm not in _MENU_GENERIC:
+        kws.append(norm)
+    for tok in base.split():
+        if len(tok) >= 2 and tok not in _MENU_GENERIC and tok not in kws:
+            kws.append(tok)
+    for h in _FOOD_HEADS:
+        if h in norm and h not in kws:
+            kws.append(h)
+    return kws
+
+
+def find_unphotographed_menu(text: str, official_menus: Iterable[str], photo_text: str) -> Optional[str]:
+    """
+    공식 메뉴(사진 여부와 상관없이 매장에 실제로 있는 것) 중 '이번 영상 사진에는 없는데' 대본이 말한 것의 이름 (없으면 None).
+    사진 설명(photo_text)에 그 메뉴의 핵심어가 하나라도 있으면 사진에 있는 메뉴로 본다.
+    """
+    t = re.sub(r"\s+", "", text or "")
+    pt = re.sub(r"\s+", "", photo_text or "")
+    if not t or not pt:
+        return None
+    for menu in official_menus or []:
+        kws = menu_keywords(menu)
+        if not kws or any(k in pt for k in kws):
+            continue                                             # 사진에 있는 메뉴 → 말해도 됨
+        if any(k in t for k in kws):
+            return menu
+    return None
+
+
+def photographed_menus(official_menus: Iterable[str], photo_text: str) -> List[str]:
+    """공식 메뉴 중 사진 설명에 나오는 것 (대본에 써도 되는 메뉴)"""
+    pt = re.sub(r"\s+", "", photo_text or "")
+    return [m for m in (official_menus or []) if any(k in pt for k in menu_keywords(m))]

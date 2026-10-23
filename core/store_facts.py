@@ -211,7 +211,8 @@ def clean_photo_tag(tag: str) -> str:
 
 
 def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
-                   cache_path: Optional[str] = None, mock: bool = False) -> Tuple[Dict[str, str], Dict[str, int]]:
+                   cache_path: Optional[str] = None, mock: bool = False,
+                   official_menus: Optional[List[str]] = None) -> Tuple[Dict[str, str], Dict[str, int]]:
     """
     사진·영상 대표 프레임마다 비전으로 ① 실제로 보이는 피사체 한 줄(subject) ② 맛집 5단계 버킷 번호(bucket 1~5)를 한 번에 받는다
     → ({경로: 피사체}, {경로: 버킷}). 버킷: 1=다 구워진 메인 요리·고기 자르기 / 2=전체 상차림·굽기 전 원육 / 3=구워지는 조리 장면 /
@@ -231,7 +232,9 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
         v = cache.get(_photo_key(p))
         return v if isinstance(v, dict) else ({"s": v} if v else {})          # 옛 캐시(문자열)는 피사체만 있는 것으로
 
-    todo = [p for p in media if entry(p).get("v") != 2]                   # 이미 (현재 기준으로) 물어본 사진은 다시 부르지 않음. 기준이 바뀐 옛 캐시는 다시 분류
+    menus = [m for m in (official_menus or []) if m][:60]
+    ver = 2 if not menus else f"2m{hashlib.md5('|'.join(menus).encode('utf-8')).hexdigest()[:8]}"      # 공식 메뉴판이 바뀌면 다시 판별
+    todo = [p for p in media if entry(p).get("v") != ver]                   # 이미 (현재 기준으로) 물어본 사진은 다시 부르지 않음. 기준이 바뀐 옛 캐시는 다시 분류
     if todo:
         from core.llm import generate_json
         from core.planners.owner import _media_preview_image
@@ -244,8 +247,14 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
                 order.append(p)
         if order:
             rubric = "\n".join(f"- Bucket {k}: {v}" for k, v in BUCKET_LABELS.items())
+            menu_rule = ""
+            if menus:
+                menu_rule = ("\n[공식 메뉴판 대조] 이 가게에 실제 등록된 메뉴: " + ", ".join(menus) + "\n"
+                             "subject에는 사진에 찍힌 음식·음료가 위 공식 메뉴 중 무엇인지 그 메뉴 이름을 그대로 쓰세요 (예: '버터먹은먹태 한 접시'). "
+                             "공식 메뉴에 없거나 구분이 안 되면 눈에 보이는 그대로 쓰세요. 이 가게 메뉴가 아닌 것을 지어내지 마세요.")
             contents.append(f"""[역할: 전 업종 로컬 매장 미디어 5단계 시각 정렬기]
-가게: {business_name or '(상호 미입력)'}
+가게: {business_name or '(상호 미입력)'}{menu_rule}
+[배경 사물 금지] 음식·음료, 그리고 가게 외관·간판·내부 공간만 기록하세요. 천장 선풍기·조명·포스터·메뉴판의 글자·벽 낙서·그릇 무늬 같은 배경 사물과 글씨는 절대 읽거나 적지 마세요.
 업로드된 사진·영상 대표 프레임 {len(order)}장을 분석하여, 어떤 업종(고깃집, 횟집, 맥주집, 카페, 일반식당 등)이든 시청자의 시선과 식욕을 가장 강하게 사로잡는 아래 5단계 버킷(Bucket 1~5)으로 분류하라.
 각 사진마다 세 가지를 기록하세요.
 1) subject: 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내). 맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 쓰지 마세요.
@@ -267,7 +276,7 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
                         bk = 0
                     if 0 <= k < len(order):
                         e = dict(entry(order[k]))
-                        e["v"] = 2
+                        e["v"] = ver
                         if subj:
                             e["s"] = subj[:60]
                         if bk in BUCKET_LABELS:
@@ -290,9 +299,10 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
 
 
 def tag_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
-               cache_path: Optional[str] = None, mock: bool = False) -> Dict[str, str]:
+               cache_path: Optional[str] = None, mock: bool = False,
+               official_menus: Optional[List[str]] = None) -> Dict[str, str]:
     """사진마다 실제로 보이는 사물 한 줄 → {경로: 피사체} (analyze_photos의 피사체 부분)"""
-    return analyze_photos(media_paths, business_name=business_name, api_key=api_key, thumb_dir=thumb_dir, cache_path=cache_path, mock=mock)[0]
+    return analyze_photos(media_paths, business_name=business_name, api_key=api_key, thumb_dir=thumb_dir, cache_path=cache_path, mock=mock, official_menus=official_menus)[0]
 
 
 # ---------------------------------------------------------------- 묶음 / 가게 자랑(USP) 반영
@@ -334,6 +344,10 @@ def facts_prompt_block(facts: Dict[str, Any], photo_lines: List[str]) -> str:
     lines.append(f"- special_menus(특이 메뉴명): {', '.join(sm) if sm else '(없음)'}")
     lines.append(f"- review_nouns(리뷰에서 2회 이상 반복된 명사): {', '.join(rn) if rn else '(없음)'}")
     lines.append(f"- location_context(방문 상황): {facts.get('location_context') or '(없음)'}")
+    if facts.get("official_menus"):
+        lines.append("- 이번 사진에 찍힌 메뉴(대본에 써도 되는 메뉴는 오직 이것뿐): " + (", ".join(facts.get("photo_menus") or []) or "(공식 메뉴와 대조되는 것 없음 — 사진에 보이는 그대로만)"))
+    if facts.get("banned_menus"):
+        lines.append("- ⛔ 사진에 없는 메뉴(매장에 실제로 있어도 이번 영상 대본·자막·제목에 이름을 절대 꺼내지 마세요): " + ", ".join(facts["banned_menus"][:40]))
     if photo_lines:
         lines.append("- photo_tags(사진 속에 실제로 보이는 것 — 컷 배치 참고용. 나레이션이 사진을 따라가며 주제를 바꾸면 안 됩니다):")
         lines += [f"    {ln}" for ln in photo_lines]

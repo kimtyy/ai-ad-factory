@@ -46,7 +46,7 @@ RELOAD_MODULES = (
     # 렌더 보조 모듈: 자막 분할·폰트·브랜드 카드·이미지 유틸은 컴포지터가 호출 시점에 import하므로, 목록에서 빠지면 옛 분할 함수가 그대로 쓰임 (실제 영상에서 확인된 문제)
     "core.affiliate_ota", "core.naver_local", "core.media.imgutil", "core.media.normalize",
     "core.render.caption_chunks", "core.render.fonts", "core.render.brand", "core.render.commerce_layout", "core.shoot_guide", "core.scene_images",
-    "core.script_guard", "core.store_facts", "core.store_research", "core.photo_safety", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.concepts", "core.naver_shop", "core.planners.shop", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
+    "core.script_guard", "core.store_facts", "core.naver_place_menu", "core.store_research", "core.photo_safety", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.concepts", "core.naver_shop", "core.planners.shop", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
@@ -592,7 +592,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
+           "owner_menu_text", "owner_review_text", "official_menu_text", "official_menu_meta", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
            "voice_tone", "voice_actor_select_box", "audio_choice", "script_style_radio", "travel_template", "show_home", "stay_aff_template", "stay_partner_id", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
@@ -1353,7 +1353,8 @@ def _fill_store_points(api_key_: str, mock_: bool):
     if not mock_ and st.session_state.uploaded_paths:
         # 사진마다 실제로 보이는 피사체를 적어 둠 (대본이 화면 사진과 어긋나지 않게)
         tags, buckets = analyze_photos(st.session_state.uploaded_paths, business_name=st.session_state.get("owner_name", ""), api_key=api_key_,
-                                       thumb_dir=current_job().assets_dir, cache_path=current_job().asset_path("photo_tags.json"))
+                                       thumb_dir=current_job().assets_dir, cache_path=current_job().asset_path("photo_tags.json"),
+                                       official_menus=facts.get("official_menus"))
         st.session_state.photo_tags = tags
         st.session_state.photo_buckets = buckets
     pts = suggest_store_points(st.session_state.get("owner_name", ""), st.session_state.get("owner_type", DEFAULT_BUSINESS_TYPE),
@@ -1392,6 +1393,8 @@ def _merged_store_facts() -> dict:
     facts = merge_facts(auto.get("confirmed") or {}, pasted)
     if st.session_state.get("use_unconfirmed_facts"):
         facts = merge_facts(facts, auto.get("unconfirmed") or {})
+    from core.naver_place_menu import parse_menu_text
+    facts["official_menus"] = parse_menu_text(st.session_state.get("official_menu_text", ""))
     return facts
 
 
@@ -1694,6 +1697,13 @@ def _run_store_research(name: str, address: str = ""):
         res = _sr.research_store(name.strip(), address, region=region, gemini_api_key=api_key,
                                  naver_id=os.getenv("NAVER_CLIENT_ID", ""), naver_secret=os.getenv("NAVER_CLIENT_SECRET", ""))
     st.session_state.store_research = res
+    _om = res.get("official_menu") or {}
+    if _om.get("names"):
+        from core.naver_place_menu import menu_text_lines
+        st.session_state.official_menu_text = menu_text_lines(_om)
+        st.session_state.official_menu_meta = {"url": _om.get("url", ""), "place_name": _om.get("place_name", ""), "source": _om.get("source", "")}
+    else:
+        st.session_state.official_menu_meta = {"url": "", "place_name": "", "source": "", "empty": True}
     if not st.session_state.get("owner_address", "").strip():
         addr = res.get("address") or res.get("address_candidate") or ""
         if addr:
@@ -1848,6 +1858,15 @@ with edit_box:
         if _mf["special_menus"] or _mf["review_nouns"] or _mf["location_context"]:
             st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_mf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
                        + (", ".join(_mf["review_nouns"]) or "없음") + " · 방문 상황: " + (_mf["location_context"] or "없음"))
+        _meta = st.session_state.get("official_menu_meta") or {}
+        st.text_area("📋 네이버 플레이스 공식 메뉴판 (한 줄에 메뉴 하나 — 틀리면 고치고, 빠진 메뉴는 추가해 주세요)", key="official_menu_text", height=150,
+                     placeholder="[🏪 가게 정보 가져오기]를 누르면 네이버 플레이스에 등록된 메뉴가 여기 채워져요")
+        _src = {"naver_place": "네이버 플레이스 메뉴판", "gemini": "웹 검색(Gemini)"}.get(_meta.get("source", ""), "")
+        if _src:
+            st.caption(f"출처: {_src}" + (f" · [{_meta.get('place_name') or '플레이스'} 메뉴 페이지 열기]({_meta['url']})" if _meta.get("url") else "")
+                       + " — 이 목록에 있어도 이번에 올린 사진에 없는 메뉴는 대본·컨셉에 쓰지 않아요.")
+        elif _meta.get("empty"):
+            st.caption("❔ 공식 메뉴판을 찾지 못했어요. 위 칸에 메뉴를 직접 적어 주시면 '사진에 없는 메뉴는 대본에서 제외' 기능이 켜져요.")
         _sr_state = st.session_state.get("store_research") or {}
         _unc = _sr_state.get("unconfirmed") or {}
         if _sr_state:
@@ -2128,6 +2147,7 @@ with edit_box:
                     mock=mock_mode,
                     photo_tags=dict(st.session_state.get("photo_tags") or {}) or None,
                     cache_path=current_job().asset_path("photo_tags.json"),       # 확정된 사진 전체를 보고 업종 맥락에 맞게 제안 (대본 기획과 같은 분석 캐시)
+                    official_menus=_merged_store_facts().get("official_menus"),    # 사진에 없는 공식 메뉴는 컨셉에서 제외
                 )
                 st.session_state.suggested_concepts = c_list
                 if c_list:
@@ -2425,6 +2445,10 @@ with edit_box:
         # 카드 입력값 → 세션 스토리보드 병합 (화면에 안 보이는 키: hook_title, role, image_path 등은 원본 그대로 보존)
         # 위젯 값은 key로 세션에 묶이고, 기획이 새로 만들어진 경우(스토리보드 텍스트가 마지막 편집값과 다름)에는 새 값으로 다시 채운다.
         synced = st.session_state.setdefault("_sb_synced", {})
+        from core.script_guard import find_unphotographed_menu, photographed_menus
+        _official_now = _merged_store_facts().get("official_menus") or [] if is_owner_mode else []
+        _photo_text_now = " ".join(((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).values()) if is_owner_mode else ""
+        _official_now = [m for m in _official_now if m not in photographed_menus(_official_now, _photo_text_now)]
         merged_records = []
         for _i, _sc in enumerate(st.session_state.storyboard):
             _n = _scene_num(_sc, _i + 1)
@@ -2454,6 +2478,10 @@ with edit_box:
                         st.caption("사진 없음")
                 _c1.markdown(f"**씬 {_n:02d}**")
                 _text = _c1.text_area("나레이션 · 자막 대사", key=_kt, height=90, label_visibility="collapsed")
+                if is_owner_mode and _official_now:
+                    _ghost = find_unphotographed_menu(_text or "", _official_now, _photo_text_now) if _photo_text_now else None
+                    if _ghost:
+                        _c1.warning(f"⚠️ '{_ghost}'는 이번 영상 사진에 없어요. 사진에 없는 메뉴는 빼 주세요.")
                 _dur = _c2.number_input("지속시간(초)", min_value=0.5, max_value=15.0, step=0.5, key=_kd)
             _text = (_text or "").strip()
             merged = {**_sc, "scene_index": _n, "scene_number": _n, "duration_sec": float(_dur)}
