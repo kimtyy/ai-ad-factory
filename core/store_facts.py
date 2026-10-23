@@ -197,6 +197,17 @@ def fix_bucket(bucket: int, subject: str = "", readiness: str = "") -> int:
 _VALID_ONE_SYLLABLE = set("밥물술불빵차국면떡김콩배밤꿀굴전탕죽알뼈입손발눈잔병컵위뜬속앞옆큰한")
 
 
+_MISREAD = re.compile(r"튀긴\s*오징어채|오징어채|진미채|오징어\s*튀김채")
+
+
+def canon_snack(tag: str, official_menus: Optional[List[str]] = None) -> str:
+    """비전이 먹태를 '튀긴 오징어채·진미채'로 읽은 것을 공식 메뉴(없으면 '먹태구이')로 바로잡음"""
+    if not tag or not _MISREAD.search(tag):
+        return tag
+    menu = next((m for m in (official_menus or []) if "먹태" in m), "먹태구이")
+    return re.sub(r"\s+", " ", _MISREAD.sub(menu, tag)).strip()
+
+
 def clean_photo_tag(tag: str) -> str:
     """비전·글자 인식이 만든 깨진 조각 제거: 한 글자 낱말과 '개와'처럼 뜻 없는 한 글자+조사 조각 (대본이 그대로 따라 쓰는 걸 막음)"""
     out = []
@@ -254,6 +265,12 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
                              "공식 메뉴에 없거나 구분이 안 되면 눈에 보이는 그대로 쓰세요. 이 가게 메뉴가 아닌 것을 지어내지 마세요.")
             contents.append(f"""[역할: 전 업종 로컬 매장 미디어 5단계 시각 정렬기]
 가게: {business_name or '(상호 미입력)'}{menu_rule}
+[한국 호프집 안주 판별 가이드 — 보이는 모습을 아래 이름으로 쓰세요]
+- 가늘고 노릇하게 찢어져 바삭하게 구워진 마른안주 → 반드시 '버터먹은먹태' (또는 먹태구이). '튀긴 오징어채'·'진미채'·'오징어채'라는 말은 절대 쓰지 마세요 (호프집에는 그런 메뉴가 없습니다).
+- 칼집을 내어 통째로 구워진 오징어 → '구운 통오징어' (또는 반건조 오징어)
+- 얼음 위에 팥이나 과일이 얹힌 디저트 → '눈꽃빙수' (또는 과일빙수·팥빙수)
+- 빨간 양념에 채소와 둥글게 만 소면 덩어리가 함께 있는 요리 → '골뱅이무침' (또는 골뱅이소면)
+- 눈처럼 갈린 얼음이 올라간 맥주잔 → '눈꽃맥주'
 [배경 사물 금지] 음식·음료, 그리고 가게 외관·간판·내부 공간만 기록하세요. 천장 선풍기·조명·포스터·메뉴판의 글자·벽 낙서·그릇 무늬 같은 배경 사물과 글씨는 절대 읽거나 적지 마세요.
 업로드된 사진·영상 대표 프레임 {len(order)}장을 분석하여, 어떤 업종(고깃집, 횟집, 맥주집, 카페, 일반식당 등)이든 시청자의 시선과 식욕을 가장 강하게 사로잡는 아래 5단계 버킷(Bucket 1~5)으로 분류하라.
 각 사진마다 세 가지를 기록하세요.
@@ -292,7 +309,7 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
                 json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False)
             except OSError:
                 pass
-    tags = {p: clean_photo_tag(entry(p)["s"]) for p in media if entry(p).get("s")}
+    tags = {p: canon_snack(clean_photo_tag(entry(p)["s"]), menus) for p in media if entry(p).get("s")}
     tags = {p: t for p, t in tags.items() if t}
     buckets = {p: int(entry(p)["b"]) for p in media if entry(p).get("b")}
     return tags, buckets

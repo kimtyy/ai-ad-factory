@@ -149,4 +149,45 @@ finally:
 check("공식 메뉴판 대조" in seen["vision"] and "철판불고기" in seen["vision"] and "배경 사물" in seen["vision"] and "선풍기" in seen["vision"], "사진 판별 프롬프트: 공식 메뉴판과 대조해 메뉴 이름으로 기록, 배경 사물·글씨 기록 금지")
 check(cached and redo, "같은 메뉴판이면 캐시 재사용, 메뉴판이 바뀌면 다시 판별")
 
+# ---------------------------------------------------------------- 6. 호프집 안주 오독('튀긴 오징어채')·명사 실종 비문('매콤하게 무친까지')
+from core.script_guard import find_broken_phrase
+from core.store_facts import canon_snack
+check(find_broken_phrase("눈꽃빙수에 매콤하게 무친까지 안주 라인업이 완벽해요!") and find_broken_phrase("튀긴 오징어채와, 구운 오징어와,")
+      and not find_broken_phrase("달콤한 눈꽃빙수에 매콤새콤 골뱅이소면까지 안주 라인업이 완벽해요!") and not find_broken_phrase("바삭한 먹태와 쫄깃한 구운 오징어까지 완벽해요!"),
+      "비문 가드: 명사가 빠진 '무친까지'·'튀긴 오징어채' 차단, 온전한 문장은 통과")
+check(canon_snack("튀긴 오징어채", OFFICIAL) == "버터먹은먹태" and canon_snack("찢어 구운 진미채 접시", []) == "찢어 구운 먹태구이 접시" and canon_snack("구운 통오징어") == "구운 통오징어",
+      "비전이 먹태를 오징어채로 읽으면 공식 메뉴(버터먹은먹태)로 교정, 통오징어는 그대로")
+rt._overrides = {"claude": lambda contents, system, temperature, max_tokens: (seen.__setitem__("v2", " ".join(c for c in contents if isinstance(c, str))) or
+                  json.dumps({"photos": [{"index": 1, "subject": "튀긴 오징어채와 구운 오징어", "bucket": 1, "readiness": "ready_to_eat"}, {"index": 2, "subject": "눈꽃빙수", "bucket": 1, "readiness": "ready_to_eat"}]}, ensure_ascii=False))}
+try:
+    tg2, _b2 = analyze_photos(pics, business_name=NAME, api_key="g", thumb_dir=W, cache_path=_os.path.join(W, "t2.json"), official_menus=OFFICIAL)
+finally:
+    rt._overrides = {}
+check(all(w in seen["v2"] for w in ("호프집 안주 판별 가이드", "버터먹은먹태", "구운 통오징어", "눈꽃빙수", "골뱅이무침")) and "오징어채" not in " ".join(tg2.values()) and "버터먹은먹태" in tg2[pics[0]],
+      f"Vision 프롬프트에 호프집 안주 가이드 + 오독 결과 교정: {list(tg2.values())}")
+
+TAGS2 = ["눈꽃맥주 잔", "눈꽃빙수", "골뱅이소면", "버터먹은먹태", "구운 통오징어", "안주 모둠", "매장 홀", "매장 입구 간판"]
+TAGMAP2 = dict(zip(PATHS, TAGS2))
+
+
+def fake_beat(contents, system, **kw):
+    lines = ["퇴근 후 밥 대신 눈꽃맥주 한 잔 어때요?", "안주 모둠이라 여럿이 나눠 먹기 좋아요.", "눈꽃빙수에 매콤하게 무친까지 안주 라인업이 완벽해요!", "홀도 넓어서 퇴근길에 편하게 들르기 좋아요."]
+    return ({"core_concept": "눈꽃맥주와 안주 라인업", "story": "s",
+             "scenes": [{"scene_index": i + 1, "role": "signature", "hook_title": "한 잔 더?" if i == 0 else "", "voiceover": t} for i, t in enumerate(lines + ["지금 저장하고 검색해 보세요!"])]}, "claude")
+
+
+ow._media_preview_image = lambda p, d=None: Image.new("RGB", (64, 64), (120, 90, 60))
+llm.script_llm_ready = lambda k=None: True
+llm.repair_scene_lines = lambda d, c, s_, rr, **kw: (d, [])
+llm.generate_json = fake_beat
+try:
+    scb = ow.plan_owner_storyboard(NAME, "눈꽃맥주, 버터먹은먹태", "food", NAME, PATHS, api_key="k", mock=False, region="경기 가평군", core_concept="눈꽃맥주와 안주 라인업",
+                                   photo_tags=TAGMAP2, keep_order=True, tempo="beat", store_facts={"special_menus": [], "review_nouns": [], "location_context": "", "official_menus": OFFICIAL})
+finally:
+    llm.generate_json, llm.script_llm_ready, llm.repair_scene_lines, ow._media_preview_image = _gj, _ready, _rep, _pv
+snack = scb[2]["voiceover"]
+pos = [snack.find(w) for w in ("눈꽃빙수", "골뱅이소면", "버터먹은먹태", "오징어")]
+check(len(scb) == 5 and all(p >= 0 for p in pos) and pos == sorted(pos) and not find_broken_phrase(snack) and "무친까지" not in snack and snack.count("오징어") == 1 and snack.endswith("완벽해요!"),
+      f"설맥 8장 비트형 안주 문장: 비문을 걸러 4컷 안주를 순서대로, 중복 없이 완전한 문장으로 호명: {snack}")
+
 finish(fails)

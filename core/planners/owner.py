@@ -185,6 +185,21 @@ def scrub_menus(text: str, banned: List[str]) -> str:
     return re.sub(r"\s+", " ", "".join(keep)).strip(" ,/·")
 
 
+_ADJ_END = ("게", "한", "은", "는", "운", "던", "친", "진", "른", "긴", "린", "낸", "온", "인", "된", "난")
+
+
+def _subject_phrase(part: str) -> str:
+    """사진 설명 한 토막 → 문장에 넣을 피사체 말 (끝 낱말이 중심 명사). '매콤하게 무친 골뱅이' → '골뱅이', '반건조 오징어' → '반건조 오징어'"""
+    from core.script_guard import _PHOTO_STOP
+    ws = [w for w in re.findall(r"[가-힣]{2,}", part or "") if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
+    if not ws:
+        return ""
+    head = ws[-1]
+    if len(ws) >= 2 and not ws[-2].endswith(_ADJ_END) and len(ws[-2]) + len(head) <= 8:
+        return f"{ws[-2]} {head}"
+    return head
+
+
 _PHOTO_TEMPLATES_SHORT = ("{n}, 한 입이면 끝!", "{n}, 놓치면 아쉬워요!", "{n}까지 완벽해요!", "{n} 이 맛이에요!")
 
 
@@ -194,15 +209,14 @@ def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "", short:
     if " / " in (tag or ""):                                  # 컷 여러 장이 빠르게 전환되는 문장: 피사체를 순서대로 호명
         subs = []
         for part in tag.split(" / "):
-            ws = [w for w in re.findall(r"[가-힣]{2,}", part) if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
-            if ws:
-                subs.append(f"{ws[0]} {ws[1]}" if len(ws) >= 2 and len(ws[0]) + len(ws[1]) <= 8 else ws[0])
+            s_ = _subject_phrase(part)
+            if s_ and not any(s_ in x or x in s_ for x in subs):        # 같은 안주를 두 번 부르지 않음 ('오징어와 오징어')
+                subs.append(s_)
         if len(subs) >= 2:
             return f"{', '.join(subs[:-1])}에 {subs[-1]}까지 안주 라인업이 완벽해요!"
-    words = [w for w in re.findall(r"[가-힣]{2,}", tag or "") if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
-    if not words:
+    subject = _subject_phrase(tag)                                  # '과일 화채', '반건조 오징어'처럼 명사 끝, 꾸미는 말은 한 낱말까지
+    if not subject:
         return ""
-    subject = f"{words[0]} {words[1]}" if len(words) >= 2 and len(words[0]) + len(words[1]) <= 8 else words[0]       # '과일 화채', '반건조 오징어'처럼 두 낱말까지
     if any(w in subject for w in ("매장", "홀", "내부", "실내", "좌석", "입구", "외관", "간판")):
         return f"{subject}에서 편하게 즐기기 좋아요!"                      # 공간 사진은 메뉴 문구 대신
     if short:
