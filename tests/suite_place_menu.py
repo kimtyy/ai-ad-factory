@@ -201,4 +201,9 @@ finally:
 check(rt.LAST_ENGINE["사진 피사체 태깅"]["engine"] == "claude" and rt.LAST_ENGINE["_script"] == rt.LAST_ENGINE["사장님 광고 대본"]
       and rt.LAST_ENGINE["_script"]["model"] == rt.claude_model_for("script")[0], f"엔진 기록: 사진 판독·대본이 실제 응답한 엔진·모델로 남음 {rt.LAST_ENGINE['_script']}")
 
+# ---------------------------------------------------------------- 8. 안전 문구: 여러 메뉴 모음·곁들임 사진 설명에서도 온전한 말
+fb = [ow.photo_fallback_line(t, 5, short=True) for t in ("여러 메뉴 모음: 양념 요리, 버터먹은먹태, 치즈 요리, 눈꽃빙수", "눈꽃맥주 한 잔과 생맥주잔, 떡 바구니", "구운 통오징어 한 접시와 땅콩")]
+check(fb[0] == "버터먹은먹태, 치즈 요리까지 한 상에!" and fb[1].startswith("눈꽃맥주,") and fb[2].startswith("통오징어,") and not any(w in " ".join(fb) for w in ("요리 눈꽃빙수", "잔과", "접시와", "땅콩", "바구니")),
+      f"사진 설명이 모음·곁들임이어도 메뉴 이름만 호명: {fb}")
+
 finish(fails)

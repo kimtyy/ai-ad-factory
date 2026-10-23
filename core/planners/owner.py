@@ -188,16 +188,42 @@ def scrub_menus(text: str, banned: List[str]) -> str:
 _ADJ_END = ("게", "한", "은", "는", "운", "던", "친", "진", "른", "긴", "린", "낸", "온", "인", "된", "난")
 
 
+_GENERIC_FOOD = {"요리", "메뉴", "모음", "음식", "양념", "여러", "한상", "한판"}
+
+
+def _tag_items(tag: str) -> List[str]:
+    """사진 설명 → 항목들. '구운 통오징어 한 접시와 땅콩' → ['구운 통오징어 한 접시', '땅콩'], '여러 메뉴 모음: A, B' → ['A', 'B']"""
+    t = tag.split(":", 1)[1] if ":" in (tag or "") else (tag or "")
+    t = re.sub(r"(접시|잔|그릇|컵|병|판)(와|과)\s+", lambda m: m.group(1) + " | ", t)
+    return [x.strip() for x in re.split(r"[,，|]|\s+및\s", t) if x.strip()]
+
+
 def _subject_phrase(part: str) -> str:
-    """사진 설명 한 토막 → 문장에 넣을 피사체 말 (끝 낱말이 중심 명사). '매콤하게 무친 골뱅이' → '골뱅이', '반건조 오징어' → '반건조 오징어'"""
+    """사진 설명 한 토막 → 문장에 넣을 피사체 말 (첫 항목의 중심 명사). '매콤하게 무친 골뱅이' → '골뱅이', '구운 통오징어 한 접시와 땅콩' → '통오징어', '치즈 요리' → '치즈 요리'"""
     from core.script_guard import _PHOTO_STOP
-    ws = [w for w in re.findall(r"[가-힣]{2,}", part or "") if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
-    if not ws:
-        return ""
-    head = ws[-1]
-    if len(ws) >= 2 and not ws[-2].endswith(_ADJ_END) and len(ws[-2]) + len(head) <= 8:
-        return f"{ws[-2]} {head}"
-    return head
+    items = _tag_items(part)
+    for it in items:
+        ws = [w for w in re.findall(r"[가-힣]{2,}", it) if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS and not w.endswith(("접시", "그릇"))
+              and not (len(w) >= 3 and w.endswith("잔"))]
+        if not ws or all(w in _GENERIC_FOOD for w in ws):
+            continue
+        head = ws[-1]
+        if head in _GENERIC_FOOD and len(ws) >= 2:
+            return f"{ws[-2]} {head}"
+        if len(ws) >= 2 and not ws[-2].endswith(_ADJ_END) and ws[-2] not in _GENERIC_FOOD and len(ws[-2]) + len(head) <= 8:
+            return f"{ws[-2]} {head}"
+        return head
+    return ""
+
+
+def _collage_items(tag: str) -> List[str]:
+    """여러 메뉴가 한 장에 담긴 사진 → 구체적인 메뉴 이름들 ('양념 요리'처럼 일반어뿐인 항목은 제외)"""
+    out: List[str] = []
+    for it in _tag_items(tag):
+        ph = _subject_phrase(it)
+        if ph and not any(ph in x or x in ph for x in out):
+            out.append(ph)
+    return out
 
 
 _PHOTO_TEMPLATES_SHORT = ("{n}, 한 입이면 끝!", "{n}, 놓치면 아쉬워요!", "{n}까지 완벽해요!", "{n} 이 맛이에요!")
@@ -214,6 +240,10 @@ def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "", short:
                 subs.append(s_)
         if len(subs) >= 2:
             return f"{', '.join(subs[:-1])}에 {subs[-1]}까지 안주 라인업이 완벽해요!"
+    if ":" in (tag or "") or (tag or "").count(",") >= 2:             # 여러 메뉴가 한 장에 담긴 사진: 구체적인 메뉴 이름 2~3개를 호명
+        items = _collage_items(tag)
+        if len(items) >= 2:
+            return (f"{', '.join(items[:2])}까지 한 상에!" if short else f"{', '.join(items[:-1][:2])}에 {items[:3][-1]}까지 한 상에 다 있어요!")
     subject = _subject_phrase(tag)                                  # '과일 화채', '반건조 오징어'처럼 명사 끝, 꾸미는 말은 한 낱말까지
     if not subject:
         return ""
