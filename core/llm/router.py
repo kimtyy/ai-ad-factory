@@ -47,6 +47,19 @@ REQUEST_TIMEOUT = 90.0
 SDK_RETRIES = 1                # SDK 자체 재시도 1회 뒤 다음 엔진으로 (즉시 전환)
 
 
+# 목적(purpose)별로 마지막에 실제 응답한 엔진: {"사진 피사체 태깅": {"engine": "claude", "model": "claude-haiku-5-5"}, ...}
+# "_script"는 최종 대본(보정 호출 제외)의 마지막 엔진 — 화면에 '지금 누가 쓰고 읽었는지' 보여 주는 용도
+LAST_ENGINE: Dict[str, Dict[str, str]] = {}
+
+
+def model_label(provider: str, tier: str = "backend") -> str:
+    if provider == "claude":
+        return claude_model_for(tier)[0]
+    if provider == "openai":
+        return (os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL).strip()
+    return (os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL).strip()
+
+
 class LLMUnavailable(RuntimeError):
     """모든 엔진이 실패 (각 엔진의 실패 사유를 errors에 담음)"""
 
@@ -205,6 +218,10 @@ def generate_json(contents: List[Any], system: str, *, temperature: float = 0.6,
             else:
                 logger.info(f"[{purpose}] {PROVIDER_LABEL[p]}로 생성"
                             + (f" ({claude_model_for(tier)[0]}, {tier})" if p == "claude" else ""))
+            info = {"engine": p, "model": model_label(p, tier)}
+            LAST_ENGINE[purpose] = info
+            if tier == "script" and purpose != "대본 규칙 보정":
+                LAST_ENGINE["_script"] = info
             return data, p
         except Exception as e:      # 엔진별 API 오류(잔액 부족·Rate Limit·5xx·네트워크)·거절·JSON 오류 → 다음 엔진
             reason = f"{PROVIDER_LABEL[p]}: {type(e).__name__}: {str(e)[:160]}"

@@ -190,4 +190,15 @@ pos = [snack.find(w) for w in ("눈꽃빙수", "골뱅이소면", "버터먹은�
 check(len(scb) == 5 and all(p >= 0 for p in pos) and pos == sorted(pos) and not find_broken_phrase(snack) and "무친까지" not in snack and snack.count("오징어") == 1 and snack.endswith("완벽해요!"),
       f"설맥 8장 비트형 안주 문장: 비문을 걸러 4컷 안주를 순서대로, 중복 없이 완전한 문장으로 호명: {snack}")
 
+# ---------------------------------------------------------------- 7. 화면에 보여 줄 '실제로 응답한 엔진' 기록
+rt._overrides = {"claude": lambda c, sy, t, m: json.dumps({"ok": 1})}
+try:
+    rt.generate_json(["x"], "s", purpose="사진 피사체 태깅")
+    rt.generate_json(["x"], "s", purpose="사장님 광고 대본")
+    rt.generate_json(["x"], "s", purpose="대본 규칙 보정")
+finally:
+    rt._overrides = {}
+check(rt.LAST_ENGINE["사진 피사체 태깅"]["engine"] == "claude" and rt.LAST_ENGINE["_script"] == rt.LAST_ENGINE["사장님 광고 대본"]
+      and rt.LAST_ENGINE["_script"]["model"] == rt.claude_model_for("script")[0], f"엔진 기록: 사진 판독·대본이 실제 응답한 엔진·모델로 남음 {rt.LAST_ENGINE['_script']}")
+
 finish(fails)

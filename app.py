@@ -592,7 +592,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "official_menu_text", "official_menu_meta", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
+           "owner_menu_text", "owner_review_text", "engine_info", "official_menu_text", "official_menu_meta", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
            "voice_tone", "voice_actor_select_box", "audio_choice", "script_style_radio", "travel_template", "show_home", "stay_aff_template", "stay_partner_id", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
@@ -2373,6 +2373,13 @@ if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
                     hook_hints=hook_hints if is_travel_mode else None,
                     core_concept=selected_concept,
                 )
+            from core.llm import router as _rt
+            _ei = dict(st.session_state.get("engine_info") or {})
+            if _rt.LAST_ENGINE.get("_script"):
+                _ei["script"] = _rt.LAST_ENGINE["_script"]
+            if _rt.LAST_ENGINE.get("사진 피사체 태깅"):
+                _ei["vision"] = _rt.LAST_ENGINE["사진 피사체 태깅"]
+            st.session_state.engine_info = _ei
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
             st.session_state.storyboard_layout = st.session_state.commerce_layout if is_commerce_mode else ""
@@ -2445,6 +2452,14 @@ with edit_box:
         # 카드 입력값 → 세션 스토리보드 병합 (화면에 안 보이는 키: hook_title, role, image_path 등은 원본 그대로 보존)
         # 위젯 값은 key로 세션에 묶이고, 기획이 새로 만들어진 경우(스토리보드 텍스트가 마지막 편집값과 다름)에는 새 값으로 다시 채운다.
         synced = st.session_state.setdefault("_sb_synced", {})
+        _ei = st.session_state.get("engine_info") or {}
+        _lab = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}
+        _fmt = lambda v: f"{_lab.get(v.get('engine'), v.get('engine'))} ({v.get('model')})" if v else "—"          # noqa: E731
+        if (st.session_state.storyboard[0] or {}).get("script_engine") == "template":
+            st.caption("🤖 대본: AI 미사용 (업종 기본 문구 — 키가 없거나 Mock 모드이거나 AI 호출이 모두 실패했어요)")
+        elif _ei:
+            st.caption(f"🤖 대본: **{_fmt(_ei.get('script'))}** · 사진 판독: **{_fmt(_ei.get('vision'))}**"
+                       + ("" if _ei.get("vision") else " (이전 분석 결과 재사용)"))
         from core.script_guard import find_unphotographed_menu, photographed_menus
         _official_now = _merged_store_facts().get("official_menus") or [] if is_owner_mode else []
         _photo_text_now = " ".join(((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).values()) if is_owner_mode else ""
