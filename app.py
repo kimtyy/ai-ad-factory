@@ -1398,6 +1398,21 @@ def _merged_store_facts() -> dict:
     return facts
 
 
+def _confirm_photo_menu(media_path: str, menu: str):
+    """사용자가 '이 사진은 ○○예요'로 확정 → 사진 설명(photo_tags)에 메뉴 이름을 보태 대본 가드가 그 메뉴를 사진 속 메뉴로 인정"""
+    base = os.path.basename(media_path or "")
+    pt = st.session_state.get("photo_tags") or {}
+    for k in list(pt):
+        if os.path.basename(k) == base and menu not in pt[k]:
+            pt[k] = f"{pt[k]} ({menu})".strip()
+    st.session_state.photo_tags = pt
+    sb = st.session_state.get("storyboard") or []
+    if sb and isinstance(sb[0], dict):
+        tags0 = sb[0].setdefault("photo_tags", {})
+        if menu not in str(tags0.get(base, "")):
+            tags0[base] = f"{tags0.get(base, '')} ({menu})".strip()
+
+
 def _search_store_photos(name: str, address: str = "", quiet: bool = False):
     """상호명으로 매장 사진 후보를 찾아 세션에 보관 (네이버 공식 이미지 검색). quiet=True면 실패해도 조용히 (가게 정보 가져오기 뒤 자동 시도용)"""
     if mock_mode or not (name or "").strip() or os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1":
@@ -2497,7 +2512,8 @@ with edit_box:
                 if is_owner_mode and _official_now:
                     _ghost = find_unphotographed_menu(_text or "", _official_now, _photo_text_now) if _photo_text_now else None
                     if _ghost:
-                        _c1.warning(f"⚠️ '{_ghost}'는 이번 영상 사진에 없어요. 사진에 없는 메뉴는 빼 주세요.")
+                        _c1.warning(f"⚠️ 사진 설명에서 '{_ghost}'가 확인되지 않아요. 이 사진이 맞다면 아래 버튼을 눌러 주세요 (아니면 문구에서 빼 주세요).")
+                        _c1.button(f"📸 이 사진은 '{_ghost}'예요", key=f"tagfix_{_n}", on_click=_confirm_photo_menu, args=(_mp, _ghost))
                 _dur = _c2.number_input("지속시간(초)", min_value=0.5, max_value=15.0, step=0.5, key=_kd)
             _text = (_text or "").strip()
             merged = {**_sc, "scene_index": _n, "scene_number": _n, "duration_sec": float(_dur)}
