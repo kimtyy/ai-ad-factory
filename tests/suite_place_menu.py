@@ -151,20 +151,26 @@ check(cached and redo, "같은 메뉴판이면 캐시 재사용, 메뉴판이 �
 
 # ---------------------------------------------------------------- 6. 호프집 안주 오독('튀긴 오징어채')·명사 실종 비문('매콤하게 무친까지')
 from core.script_guard import find_broken_phrase
-from core.store_facts import canon_snack
-check(find_broken_phrase("눈꽃빙수에 매콤하게 무친까지 안주 라인업이 완벽해요!") and find_broken_phrase("튀긴 오징어채와, 구운 오징어와,")
-      and not find_broken_phrase("달콤한 눈꽃빙수에 매콤새콤 골뱅이소면까지 안주 라인업이 완벽해요!") and not find_broken_phrase("바삭한 먹태와 쫄깃한 구운 오징어까지 완벽해요!"),
-      "비문 가드: 명사가 빠진 '무친까지'·'튀긴 오징어채' 차단, 온전한 문장은 통과")
-check(canon_snack("튀긴 오징어채", OFFICIAL) == "버터먹은먹태" and canon_snack("찢어 구운 진미채 접시", []) == "찢어 구운 먹태구이 접시" and canon_snack("구운 통오징어") == "구운 통오징어" and canon_snack("구운 통오징어 한 접시", ["반건조오징어", "먹태"]) == "반건조오징어 한 접시",
-      "비전이 먹태를 오징어채로 읽으면 공식 메뉴(버터먹은먹태)로 교정, 통오징어는 그대로")
-rt._overrides = {"claude": lambda contents, system, temperature, max_tokens: (seen.__setitem__("v2", " ".join(c for c in contents if isinstance(c, str))) or
-                  json.dumps({"photos": [{"index": 1, "subject": "튀긴 오징어채와 구운 오징어", "bucket": 1, "readiness": "ready_to_eat"}, {"index": 2, "subject": "눈꽃빙수", "bucket": 1, "readiness": "ready_to_eat"}]}, ensure_ascii=False))}
+from core.store_facts import _match_official
+check(find_broken_phrase("눈꽃빙수에 매콤하게 무친까지 안주 라인업이 완벽해요!") and not find_broken_phrase("달콤한 눈꽃빙수에 매콤새콤 골뱅이소면까지 안주 라인업이 완벽해요!")
+      and not find_broken_phrase("바삭한 먹태와 쫄깃한 반건조오징어까지 완벽해요!"), "비문 가드: 명사가 빠진 '무친까지' 차단, 온전한 문장은 통과")
+check(_match_official("버터먹은 먹태", OFFICIAL) == "버터먹은먹태" and _match_official("골뱅이무침", OFFICIAL) == "골뱅이 무침" and _match_official("노가리", OFFICIAL) == "", "비전이 고른 메뉴 이름 → 공식 메뉴판 이름 (없으면 채택 안 함)")
+
+
+def vision_reply(contents, system, temperature, max_tokens):
+    seen["v2"] = " ".join(c for c in contents if isinstance(c, str))
+    return json.dumps({"photos": [{"index": 1, "subject": "노릇하게 찢어 구운 마른안주", "menu": "버터먹은먹태", "confidence": "high", "bucket": 1, "readiness": "ready_to_eat"},
+                                  {"index": 2, "subject": "칼집 난 오징어 구이", "menu": "문어숙회", "confidence": "high", "bucket": 1, "readiness": "ready_to_eat"}]}, ensure_ascii=False)
+
+
+rt._overrides = {"claude": vision_reply}
 try:
     tg2, _b2 = analyze_photos(pics, business_name=NAME, api_key="g", thumb_dir=W, cache_path=_os.path.join(W, "t2.json"), official_menus=OFFICIAL)
 finally:
     rt._overrides = {}
-check(all(w in seen["v2"] for w in ("호프집 안주 판별 가이드", "버터먹은먹태", "반건조 오징어", "눈꽃빙수", "골뱅이무침")) and "오징어채" not in " ".join(tg2.values()) and "버터먹은먹태" in tg2[pics[0]],
-      f"Vision 프롬프트에 호프집 안주 가이드 + 오독 결과 교정: {list(tg2.values())}")
+check("판별 원칙" in seen["v2"] and "추측하거나 지어내지" in seen["v2"] and "menu" in seen["v2"] and "confidence" in seen["v2"] and "호프집" not in seen["v2"] and "눈꽃" not in seen["v2"].split("공식 메뉴판 대조")[0],
+      "Vision 프롬프트: 업소·업종 고유 단어 없이 '메뉴판과 비교해 고르고, 확신 없으면 지어내지 않기' 규칙만")
+check(tg2[pics[0]] == "버터먹은먹태" and tg2[pics[1]] == "칼집 오징어 구이", f"메뉴판에 있는 이름을 고르면 그 이름으로, 메뉴판에 없는 이름을 지어내면 채택하지 않고 보이는 그대로: {list(tg2.values())}")
 
 TAGS2 = ["눈꽃맥주 잔", "눈꽃빙수", "골뱅이소면", "버터먹은먹태", "구운 통오징어", "안주 모둠", "매장 홀", "매장 입구 간판"]
 TAGMAP2 = dict(zip(PATHS, TAGS2))

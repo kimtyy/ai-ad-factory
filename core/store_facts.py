@@ -197,20 +197,16 @@ def fix_bucket(bucket: int, subject: str = "", readiness: str = "") -> int:
 _VALID_ONE_SYLLABLE = set("밥물술불빵차국면떡김콩배밤꿀굴전탕죽알뼈입손발눈잔병컵위뜬속앞옆큰한")
 
 
-_MISREAD = re.compile(r"튀긴\s*오징어채|오징어채|진미채|오징어\s*튀김채")
-
-
-def canon_snack(tag: str, official_menus: Optional[List[str]] = None) -> str:
-    """비전이 먹태를 '튀긴 오징어채·진미채'로 읽은 것을 공식 메뉴(없으면 '먹태구이')로 바로잡음"""
-    if not tag:
-        return tag
-    if _MISREAD.search(tag):
-        menu = next((m for m in (official_menus or []) if "먹태" in m), "먹태구이")
-        tag = re.sub(r"\s+", " ", _MISREAD.sub(menu, tag)).strip()
-    squid = next((m for m in (official_menus or []) if "오징어" in m), "")
-    if squid and re.search(r"통오징어|구운\s*오징어|오징어\s*구이", tag) and squid not in tag:
-        tag = re.sub(r"\s+", " ", re.sub(r"구운\s*통오징어|통오징어|구운\s*오징어|오징어\s*구이", squid, tag)).strip()      # 메뉴판에 없는 이름 → 공식 메뉴 이름
-    return tag
+def _match_official(name: str, menus: List[str]) -> str:
+    """비전이 고른 메뉴 이름 → 공식 메뉴판의 이름 (공백 무시, 한쪽이 다른 쪽을 포함하면 같은 메뉴). 메뉴판에 없으면 빈 문자열"""
+    n = re.sub(r"\s+", "", name or "")
+    if len(n) < 2:
+        return ""
+    for m in menus or []:
+        mm = re.sub(r"\s+", "", m)
+        if mm and (n == mm or (len(n) >= 3 and (n in mm or mm in n))):
+            return m
+    return ""
 
 
 def clean_photo_tag(tag: str) -> str:
@@ -220,7 +216,7 @@ def clean_photo_tag(tag: str) -> str:
         bare = w.strip(",.")
         if len(bare) == 1 and bare not in _VALID_ONE_SYLLABLE:
             continue
-        if len(bare) == 2 and bare[1] in "와과을를이가은는에의도" and bare[0] not in _VALID_ONE_SYLLABLE:
+        if len(bare) == 2 and bare[1] in "와과을를" and bare[0] not in _VALID_ONE_SYLLABLE:
             continue
         out.append(w)
     return " ".join(out).strip()
@@ -270,23 +266,21 @@ def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: 
                              "공식 메뉴에 없거나 구분이 안 되면 눈에 보이는 그대로 쓰세요. 이 가게 메뉴가 아닌 것을 지어내지 마세요.")
             contents.append(f"""[역할: 전 업종 로컬 매장 미디어 5단계 시각 정렬기]
 가게: {business_name or '(상호 미입력)'}{menu_rule}
-[한국 호프집 안주 판별 가이드 — 보이는 모습을 아래 이름으로 쓰세요]
-- 가늘고 노릇하게 찢어져 바삭하게 구워진 마른안주 → 반드시 '버터먹은먹태' (또는 먹태구이). '튀긴 오징어채'·'진미채'·'오징어채'라는 말은 절대 쓰지 마세요 (호프집에는 그런 메뉴가 없습니다).
-- 칼집을 내어 통째로 구워진 오징어 → '반건조 오징어' (공식 메뉴판에 오징어 메뉴가 있으면 반드시 그 메뉴 이름 그대로. '구운 통오징어'처럼 메뉴판에 없는 이름은 쓰지 마세요)
-- 얼음 위에 팥이나 과일이 얹힌 디저트 → '눈꽃빙수' (또는 과일빙수·팥빙수)
-- 빨간 양념에 채소와 둥글게 만 소면 덩어리가 함께 있는 요리 → '골뱅이무침' (또는 골뱅이소면)
-- 눈처럼 갈린 얼음이 올라간 맥주잔 → '눈꽃맥주'
-[subject 작성 형식] 중심이 되는 메뉴 이름만 쓰세요 (예: '구운 통오징어'). '한 접시와 땅콩'·'떡 바구니' 같은 곁들임·그릇·장식은 쓰지 마세요. 한 사진에 메뉴가 여러 개면 '메뉴 모음: A, B, C'처럼 메뉴 이름만 쉼표로 나열하세요.
+[판별 원칙 — 어떤 업종이든 같은 규칙]
+1) 공식 메뉴판이 주어졌으면, 사진 속 음식·음료가 그중 무엇인지 비교해서 고르세요 (모양·재료·조리 상태·곁들임을 근거로). 고른 이름은 반드시 메뉴판에 있는 그대로 menu 필드에 쓰세요.
+2) 확신이 없으면 menu는 빈 문자열로 두고 confidence를 "low"로 하세요. 비슷해 보인다고 이름을 추측하거나 지어내지 마세요. 이때 subject에는 눈에 보이는 그대로(재료·모양)만 쓰세요.
+3) subject에는 중심이 되는 음식·음료 이름 한두 개만 쓰세요. '한 접시와 땅콩'·'떡 바구니' 같은 곁들임·그릇·장식은 쓰지 마세요. 한 사진에 메뉴가 여러 개면 '메뉴 모음: A, B, C'처럼 이름만 쉼표로 나열하세요.
 [배경 사물 금지] 음식·음료, 그리고 가게 외관·간판·내부 공간만 기록하세요. 천장 선풍기·조명·포스터·메뉴판의 글자·벽 낙서·그릇 무늬 같은 배경 사물과 글씨는 절대 읽거나 적지 마세요.
 업로드된 사진·영상 대표 프레임 {len(order)}장을 분석하여, 어떤 업종(고깃집, 횟집, 맥주집, 카페, 일반식당 등)이든 시청자의 시선과 식욕을 가장 강하게 사로잡는 아래 5단계 버킷(Bucket 1~5)으로 분류하라.
 각 사진마다 세 가지를 기록하세요.
 1) subject: 프레임 안에 실제로 눈으로 보이는 피사체만 한 줄(공백 포함 40자 이내). 맛·분위기·형용사, 사진에 없는 메뉴·재료·수량은 쓰지 마세요.
+   menu: 공식 메뉴판 중 사진 속 메뉴의 이름 (메뉴판이 없거나 확신이 없으면 ""), confidence: "high" 또는 "low".
 2) bucket: 아래 5단계 중 하나.
 {rubric}
    * 주의: 구이류(돼지갈비, 삼겹살 등)는 반드시 불판 위에서 노릇하게 다 구워진 상태만 Bucket 1이며, 굽기 전 생고기는 Bucket 2다. 단, 원래 가열하지 않고 먹는 완성 요리(모둠회, 물회, 초밥, 육회, 생맥주, 케이크, 샐러드 등)는 그 자체가 완성품이므로 Bucket 1로 분류하라. 가게 외관·간판·주차장은 반드시 Bucket 5.
 3) readiness: 음식·음료가 보이면 "unready_raw_meat"(손님이 그 상태로는 먹을 수 없고 반드시 불에 익혀야만 하는 가열 조리 전 식재료: 굽기 전 생돼지갈비·생삼겹살·생소고기 구이육·생닭·생버섯·조리 전 반죽), "ready_to_eat"(이미 완성되어 손님이 바로 먹거나 마실 수 있는 메뉴: 구워진 고기, 모둠회, 물회, 초밥, 육회, 생맥주, 케이크, 샐러드 등), "cooking"(불 위에서 한창 조리되는 중) 중 하나, 음식이 아니면 "none".
    (구이류는 갈색 양념이 묻어 있어도 접시에 담긴 날고기·선홍빛 날고기·생버섯·그을음 없는 석쇠 위 막 올린 상태면 unready_raw_meat이다. 회·육회처럼 원래 날것으로 먹는 완성 메뉴는 ready_to_eat이다.)
-JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readiness": "ready_to_eat"}}, ...]}}""")
+JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "menu": "...", "confidence": "high", "bucket": 1, "readiness": "ready_to_eat"}}, ...]}}""")
             try:
                 data, _ = generate_json(contents, "당신은 사진에 보이는 사실만 기록하는 꼼꼼한 사진 분석가입니다. 응답은 JSON만 출력합니다.",
                                         temperature=0.2, gemini_api_key=api_key, purpose="사진 피사체 태깅")
@@ -300,7 +294,10 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
                     if 0 <= k < len(order):
                         e = dict(entry(order[k]))
                         e["v"] = ver
-                        if subj:
+                        picked = _match_official(str(item.get("menu") or ""), menus) if str(item.get("confidence") or "high").lower() != "low" else ""
+                        if picked:
+                            e["s"] = picked                           # 공식 메뉴판 이름으로 확정 (비교해서 고른 것)
+                        elif subj:
                             e["s"] = subj[:60]
                         if bk in BUCKET_LABELS:
                             fixed = fix_bucket(bk, subj, str(item.get("readiness") or item.get("doneness") or ""))
@@ -315,7 +312,7 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
                 json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False)
             except OSError:
                 pass
-    tags = {p: canon_snack(clean_photo_tag(entry(p)["s"]), menus) for p in media if entry(p).get("s")}
+    tags = {p: clean_photo_tag(entry(p)["s"]) for p in media if entry(p).get("s")}
     tags = {p: t for p, t in tags.items() if t}
     buckets = {p: int(entry(p)["b"]) for p in media if entry(p).get("b")}
     return tags, buckets
