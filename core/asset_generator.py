@@ -341,7 +341,10 @@ class AssetGenerator:
             if hook:
                 scene["hook_sec"] = HOOK_SOLO_SEC
             from core.mode_policy import get_mode_policy
-            dur = max(1.0, SILENT_SCENE_SEC - get_mode_policy(self.mode).tail_sec)       # 문장(씬)마다 같은 길이: 화면 3.6초 (5문장 약 18초)
+            pol = get_mode_policy(self.mode)
+            n_cuts = len(scene.get("media_group") or [0])
+            base = max(float(getattr(pol, "silent_scene_sec", SILENT_SCENE_SEC)), 1.35 * n_cuts)       # 문장(씬)마다 같은 길이(3.6초, 랩형 2초). 컷이 여러 장이면 컷당 1.35초 이상 (안주 컷 고속 전환)
+            dur = max(1.0, base - pol.tail_sec)
             self._create_silent_audio(dur, out_path)
             logger.info(f"[Silent Mode] 씬 {scene_num} 무음 오디오 생성 완료 ({dur:.2f}초): {out_path}")
             return out_path

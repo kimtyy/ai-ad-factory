@@ -403,12 +403,37 @@ def _broken_da_yo(text: str) -> bool:
     return jong == 4 or ch in ("있", "없", "좋", "같", "싶")     # ㄴ 받침(진·한·는·간) 또는 형용사·존재사 어간
 
 
+_DRINK_END = ("맥주", "소주", "막걸리", "하이볼", "와인", "사케", "칵테일", "위스키", "커피", "라떼", "음료", "에이드", "스무디", "주스", "생맥", "술", "차", "사이다", "콜라", "탄산")
+_FOOD_BEFORE_JAN = ("건어물", "안주", "먹태", "오징어", "골뱅이", "소면", "화채", "튀김", "치킨", "고기", "갈비", "삼겹", "냉면", "밥", "국", "찌개", "전", "떡볶이", "과일", "감자", "어묵", "노가리", "꼬치", "탕", "찜", "볶음", "구이", "무침", "파스타", "피자", "빵", "케이크", "디저트")
+_GARBLE = re.compile(r"(?:^|\s)(?:개와|잔 개|[가-힣]\s개와)(?:\s|$)")
+
+
+def find_broken_phrase(text: str) -> Optional[str]:
+    """
+    어색한 결합·깨진 조각 (비문): '건어물 한 잔'·'튀긴 건어물 한 잔'처럼 술이 아닌 음식에 '한 잔'을 붙이거나, 사진 글자 인식이 깨진 '맥주잔 개와' 같은 조각.
+    걸리면 그 말 (없으면 None) — 대본에 새로 넣을 수 없게 find_banned_style이 함께 본다
+    """
+    t = (text or "").replace(",", " ")
+    for m in re.finditer(r"([가-힣]{2,})\s*(?:한\s*잔|한잔|한\s*병)", t):
+        w = m.group(1)
+        if any(w.endswith(d) for d in _DRINK_END):
+            continue
+        if any(w.endswith(f) or w == f for f in _FOOD_BEFORE_JAN):
+            return f"'{w} 한 잔' (음식에 '한 잔'을 붙인 비문)"
+    if _GARBLE.search(t):
+        return "깨진 조각('개와' 등)"
+    return None
+
+
 def find_banned_style(text: str) -> Optional[str]:
     """판에 박힌 구어 패턴('~거든요', '~되고요', '솔직히', '근데')·'~ㄴ다요' 비문 → 걸린 표현 설명 (없으면 None)"""
     t = (text or "").strip()
     for pat, label in BANNED_STYLE_PATTERNS:
         if re.search(pat, t):
             return label
+    broken = find_broken_phrase(t)
+    if broken:
+        return broken
     if _broken_da_yo(t):
         return "'~ㄴ다요' 비문 (평서형에 '요')"
     return None
@@ -678,6 +703,17 @@ def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]]) -> Di
             continue
         sent = re.sub(r"\s+", "", t)
         tag_n = re.sub(r"\s+", "", tag)
+        parts = [x.strip() for x in tag.split(" / ") if x.strip()]
+        if len(parts) >= 2:
+            # 한 문장 동안 컷 여러 장이 빠르게 전환되는 구간: 컷마다 피사체를 순서대로 호명해야 함 (2장이면 모두, 3장 이상이면 하나 빼고 모두)
+            def hit(part: str) -> bool:
+                ks = {k for k in (content_stems(part) | set(re.findall(r"[가-힣A-Za-z]{2,}", part))) if k not in _PHOTO_STOP and len(k) >= 2}
+                return any(k in sent for k in ks)
+            named = sum(1 for p_ in parts if hit(p_))
+            if named >= (len(parts) if len(parts) == 2 else len(parts) - 1):
+                continue
+            out[i] = f"이 문장 동안 화면이 {' → '.join(parts)} 순서로 빠르게 전환돼요 → 문장이 이 피사체들을 같은 순서로 하나씩 불러 줘야 해요"
+            continue
         if any(k in sent for k in keys) or any(len(w) >= 2 and w in tag_n for w in content_stems(t)):
             continue
         out[i] = f"이 문장이 나오는 화면은 '{tag}' → 문장이 이 사진 속 피사체를 직접 말해야 해요 (다른 사진 이야기 금지)"

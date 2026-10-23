@@ -21,7 +21,8 @@ from core.script_guard import (photo_subject_issues, VO_HARD_MAX, valid_cta, fin
                                 concept_fallback_line, repeated_line_issues)
 from core.llm import script_llm_ready
 from core.radar.hints import HookHints, copies_reference
-from core.mode_policy import (OWNER_POLICY, clamp_line_to_policy, complete_owner_sentence,
+from dataclasses import replace as _dc_replace
+from core.mode_policy import (RAP_POLICY, OWNER_POLICY, clamp_line_to_policy, complete_owner_sentence,
                                create_length_violation_checker, build_ad_system_prompt, build_one_concept_guidelines)
 
 logger = logging.getLogger("ad_factory.planners.owner")
@@ -177,6 +178,14 @@ _PHOTO_TEMPLATES = ("{n} 한 잔이 생각나는 날 있죠?", "{n}, 이 집에�
 def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "") -> str:
     """그 문장이 나오는 사진 속 피사체(tag)를 직접 말하는 안전 문구. LLM 대사가 사진과 어긋나 버려질 때 쓴다 (피사체를 모르면 빈 문자열)"""
     from core.script_guard import _PHOTO_STOP
+    if " / " in (tag or ""):                                  # 컷 여러 장이 빠르게 전환되는 문장: 피사체를 순서대로 호명
+        subs = []
+        for part in tag.split(" / "):
+            ws = [w for w in re.findall(r"[가-힣]{2,}", part) if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
+            if ws:
+                subs.append(f"{ws[0]} {ws[1]}" if len(ws) >= 2 and len(ws[0]) + len(ws[1]) <= 8 else ws[0])
+        if len(subs) >= 2:
+            return f"{', '.join(subs[:-1])}에 {subs[-1]}까지 안주 라인업이 완벽해요!"
     words = [w for w in re.findall(r"[가-힣]{2,}", tag or "") if w not in _PHOTO_STOP and w not in _CONTAINER_WORDS]
     if not words:
         return ""
@@ -268,6 +277,80 @@ def media_groups(n_media: int) -> List[List[int]]:
     return out
 
 
+# ---------------------------------------------------------------- 비트 리듬형: 사진 6~10장을 5문장에 역할별로 묶음 (안주 컷은 한 문장 안에서 고속 전환)
+_EXTERIOR_TAG = ("간판", "외관", "입구", "출입구", "건물", "전경", "가게 앞")
+_VENUE_TAG = ("홀", "내부", "실내", "테이블", "좌석", "인테리어", "매장", "조명")
+_SPREAD_TAG = ("모둠", "한 상", "한상", "세트", "상차림", "푸짐", "플래터", "한판")
+_DRINK_TAG = ("맥주", "생맥", "하이볼", "소주", "막걸리", "와인", "사케", "칵테일", "음료", "커피", "라떼", "잔")
+
+
+def photo_role(tag: str) -> str:
+    """사진 피사체 → 역할: exterior(간판·외관) / spread(안주 모둠·한 상) / drink(술·음료) / venue(홀·내부) / snack(그 밖의 메뉴)"""
+    t = tag or ""
+    if any(w in t for w in _EXTERIOR_TAG):
+        return "exterior"
+    if any(w in t for w in _SPREAD_TAG):
+        return "spread"
+    if any(w in t for w in _DRINK_TAG):
+        return "drink"
+    if any(w in t for w in _VENUE_TAG):
+        return "venue"
+    return "snack"
+
+
+def beat_groups(media_sorted: List[str], tags: Dict[str, str]) -> List[List[int]]:
+    """
+    정렬된 사진 N장(6~10) → 5문장 묶음 [S1 후킹, S2 공감, S3 메뉴 라인업(컷 여러 장), S4 분위기, S5 CTA]. 번호는 media_sorted 인덱스.
+    S1 첫 사진 / S5 간판·외관 / S4 홀·내부 / S2 모둠·한 상(없으면 남는 술 사진, 그래도 없으면 S1 사진 재사용) / S3 나머지 메뉴 전부(순서 유지).
+    5장 이하는 1장 = 1문장. 피사체 정보가 없으면 가운데 문장(S3)에 중간 사진을 몰아서 [1,1,N-4,1,1]
+    """
+    n = len(media_sorted)
+    if n <= 5:
+        return [[k] for k in range(n)]
+    if not any((tags or {}).get(p) for p in media_sorted):
+        out, k = [], 0
+        for size in (1, 1, n - 4, 1, 1):
+            out.append(list(range(k, k + size)))
+            k += size
+        return out
+    roles = [photo_role((tags or {}).get(p, "")) for p in media_sorted]
+    used = {0}
+    s1 = [0]
+    ext = [i for i in range(1, n) if roles[i] == "exterior"]
+    s5 = [ext[-1]] if ext else [n - 1]
+    used.add(s5[0])
+    s4 = [i for i in range(1, n) if roles[i] == "venue" and i not in used][:2]
+    used.update(s4)
+    s2 = [i for i in range(1, n) if roles[i] == "spread" and i not in used][:2]
+    if not s2:
+        s2 = [i for i in range(1, n) if roles[i] == "drink" and i not in used][:1]
+    used.update(s2)
+    s3 = [i for i in range(n) if i not in used]
+    if not s4:                                              # 분위기 컷이 없으면 메뉴 컷의 마지막 1장(3장 이상일 때) 또는 간판 사진을 다시 씀
+        s4 = [s3.pop()] if len(s3) >= 3 else [s5[0]]
+    if not s2:                                              # 공감 컷이 없으면 첫 사진을 이어서 사용
+        s2 = [0]
+    if not s3:
+        s3 = [s2[0]]
+    return [s1, sorted(s2), s3, sorted(s4), s5]
+
+
+def rap_cta(search_keyword: str, context_kind: str = "") -> str:
+    """랩형 마지막 줄: 저장 유도 없이 상호로 바로 오세요 (예: '오늘 밤 시원한 맥주 생각나면 설맥 가평현리점으로 바로 오세요!')"""
+    from core.script_guard import with_josa
+    kw = (search_keyword or "").strip()
+    if not kw:
+        return "오늘 바로 들러 보세요!"
+    lead = {"bar": "오늘 밤 시원한 맥주 생각나면 ", "cafe": "커피 한 잔 생각나면 "}.get(context_kind, "오늘은 ")
+    return f"{lead}{with_josa(kw, '으로/로')} 바로 오세요!"
+
+
+def valid_rap_cta(text: str, search_keyword: str = "") -> bool:
+    t = (text or "").strip()
+    kw = re.sub(r"\s+", "", search_keyword or "")
+    return bool(t) and len(t) <= 44 and t.endswith("!") and "저장" not in t and "검색" not in t and (not kw or kw in re.sub(r"\s+", "", t)) and not find_banned_style(t)
+
+
 def _scene(i: int, role: str, text: str, hook: str = "") -> Dict[str, Any]:
     motions = ["zoom_in", "pan_right", "zoom_out", "pan_left", "pan_down", "pan_up"]
     return {
@@ -298,6 +381,7 @@ def plan_owner_storyboard(
     photo_tags: Optional[Dict[str, str]] = None,
     photo_buckets: Optional[Dict[str, int]] = None,
     keep_order: bool = False,
+    tempo: str = "beat",
 ) -> List[Dict[str, Any]]:
     """
     사장님 홍보 콘티 생성.
@@ -312,7 +396,14 @@ def plan_owner_storyboard(
     order = list(range(len(media_orig))) if keep_order else order_media_for_concept(media_orig, photo_tags or {}, core_concept, photo_buckets or {})
     media = [media_orig[k] for k in order]                       # 컨셉 순서로 정렬한 미디어 (대본 프롬프트·컷 묶음은 이 순서)
     reordered = order != list(range(len(media_orig)))           # 순서가 바뀌었거나 일부 사진(여분의 외관)을 뺀 경우
-    groups = [[k] for k in range(len(media))] if len(media) >= 2 else []        # 사진 N장 = 문장 N개 (사진·대사 1:1, 임의로 쪼개 붙이지 않음)
+    rap = tempo == "rap"
+    pol = RAP_POLICY if rap else OWNER_POLICY
+    if len(media) < 2:
+        groups = []
+    elif rap or len(media) <= 5:
+        groups = [[k] for k in range(len(media))]                              # 랩형: 사진 N장 = 2초 숏카피 N줄 (1:1). 5장 이하는 비트형도 1:1
+    else:
+        groups = beat_groups(media, photo_tags or {})                          # 비트형: 사진 6~10장도 5문장 18초 호흡 (안주 컷은 한 문장 안에서 고속 전환)
     if reordered and not groups:
         groups = [[k] for k in range(len(media))]
     count = len(groups) if groups else max(int(num_scenes or 4), 2)
@@ -324,7 +415,7 @@ def plan_owner_storyboard(
     from core import venue_context as vc
     tag_by_scene = [" / ".join((photo_tags or {}).get(media[k], "") for k in g if k < len(media) and (photo_tags or {}).get(media[k])) for g in groups] if groups else []
     ctx_kind = vc.detect(business_name, usp, (photo_tags or {}).values(), extra=" ".join((store_facts or {}).get("special_menus") or []))
-    cta_line = owner_cta(search_keyword, region, business_type, ctx_kind)
+    cta_line = rap_cta(search_keyword, ctx_kind) if rap else owner_cta(search_keyword, region, business_type, ctx_kind)
     fact_evidence = " ".join([usp or "", core_concept or "", " ".join((store_facts or {}).get("special_menus") or []),
                               " ".join((store_facts or {}).get("review_nouns") or []), " ".join((photo_tags or {}).values())])
     llm = None
@@ -334,7 +425,7 @@ def plan_owner_storyboard(
             llm = _plan_with_llm(business_name, usp, business_type, roles, media, cta_line,
                                  tone_instruction, api_key, thumb_dir, hook_hints, core_concept=core_concept, region=region,
                                  groups=groups, store_facts=store_facts, photo_tags=photo_tags,
-                                 search_keyword=search_keyword, context_kind=ctx_kind)
+                                 search_keyword=search_keyword, context_kind=ctx_kind, tempo=tempo, policy=pol)
             llm_story = str(getattr(llm, "story", "") or "")
         except Exception as e:
             logger.warning(f"사장님 대본 엔진(Claude·GPT·Gemini) 모두 실패, 업종 템플릿으로 대체: {e}")
@@ -345,7 +436,8 @@ def plan_owner_storyboard(
         item = (llm or [])[i] if llm and i < len(llm) else {}
         tag_i = tag_by_scene[i] if i < len(tag_by_scene) else ""
         llm_cta = str(item.get("voiceover") or "").strip() if is_last else ""
-        text = (llm_cta if (llm_cta and valid_cta(llm_cta, search_keyword)) else cta_line) if is_last else str(item.get("voiceover") or "").strip() or (
+        cta_ok = valid_rap_cta(llm_cta, search_keyword) if rap else valid_cta(llm_cta, search_keyword)
+        text = (llm_cta if (llm_cta and cta_ok) else cta_line) if is_last else str(item.get("voiceover") or "").strip() or (
             photo_fallback_line(tag_i, i, core_concept) or concept_fallback_line(core_concept, i) or lines.get(role, lines["exterior"]))   # 엔진 실패 시에도 사진·컨셉을 유지
         if not is_last:
             text = to_haeyo(text)   # 말투 통일: 합쇼체 → 해요체
@@ -380,12 +472,18 @@ def plan_owner_storyboard(
                 text = re.sub(re.escape(business_name.replace(" ", "")), "여기", text.replace(business_name, "여기"))
             text = strip_brochure_words(text)
             text = sanitize_signboard_words(text)
-            if len(text) > VO_HARD_MAX:
-                text = shorten_line(text, VO_HARD_MAX - 3, VO_HARD_MAX)
-            # 온전한 친절한 구어체 어미 검증 및 완성 (~있어요, ~만나보세요, ~챙겨가세요)
-            text = complete_owner_sentence(text)
-            text = clamp_line_to_policy(text, OWNER_POLICY)
-            text = ensure_natural_pauses(text)
+            n_cut = len(groups[i]) if i < len(groups) else 1
+            hard_max = 26 if rap else max(VO_HARD_MAX, 12 * n_cut + 8)
+            if len(text) > hard_max:
+                text = shorten_line(text, hard_max - 3, hard_max)
+            if rap:
+                text = text.strip() if re.search(r"[!?,.…]$", text.strip()) else text.strip() + "!"        # 랩형 숏카피: 어미 완성 대신 짧은 끊김 허용
+                text = clamp_line_to_policy(text, pol)
+            else:
+                # 온전한 친절한 구어체 어미 검증 및 완성 (~있어요, ~만나보세요, ~챙겨가세요)
+                text = complete_owner_sentence(text)
+                text = clamp_line_to_policy(text, _dc_replace(pol, max_chars=max(pol.max_chars, 12 * n_cut + 8)) if n_cut > 1 else pol)
+                text = ensure_natural_pauses(text)
         if llm and i < len(llm) and llm[i].get("role") in ROLE_LABELS_KO and not is_last:
             role = llm[i]["role"]
         hook = ""
@@ -404,6 +502,7 @@ def plan_owner_storyboard(
                 logger.info(f"[후킹 반복 차단] 헤드라인 '{hook}' ≈ 서브 '{text}' → 기본 후킹으로 교체")
                 hook = default_hook
         scenes.append(_scene(i, "cta" if is_last else role, text, hook))
+        scenes[-1]["duration_sec"] = pol.default_scene_sec if rap else max(pol.default_scene_sec, 1.35 * (len(groups[i]) if i < len(groups) else 1))
         if groups and (reordered or any(len(g) > 1 for g in groups)):
             scenes[-1]["media_group"] = [order[k] for k in groups[i]]   # 이 문장 동안 보여 줄 '올린 순서' 기준 미디어 번호들 (첫 번째가 대표, 나머지는 문장 중간 전환 컷)
         if i == 0 and hook_hints:
@@ -426,8 +525,12 @@ def plan_owner_storyboard(
         if scenes:
             scenes[0]["script_engine"] = getattr(llm, "engine", "") if llm else "template"
         varied, changes = diversify_exclamations([sc["voiceover"] for sc in scenes[:-1]], reserved=scenes[0].get("hook_title", ""))
-        for sc, vo in zip(scenes[:-1], varied):
-            vo_clean = ensure_natural_pauses(clamp_line_to_policy(complete_owner_sentence(vo), OWNER_POLICY))
+        for k_, (sc, vo) in enumerate(zip(scenes[:-1], varied)):
+            if rap:
+                vo_clean = clamp_line_to_policy(vo, pol)
+            else:
+                n_cut_ = len(groups[k_]) if k_ < len(groups) else 1
+                vo_clean = ensure_natural_pauses(clamp_line_to_policy(complete_owner_sentence(vo), _dc_replace(pol, max_chars=max(pol.max_chars, 12 * n_cut_ + 8)) if n_cut_ > 1 else pol))
             sc["voiceover"] = sc["subtitle"] = sc["caption"] = vo_clean
         for c in changes:
             logger.info(f"[감탄사 중복 분산] {c}")
@@ -438,6 +541,8 @@ def plan_owner_storyboard(
         scenes[0]["story"] = llm_story
     if scenes and reordered:
         scenes[0]["photo_reordered"] = True
+    if scenes:
+        scenes[0]["tempo"] = tempo
     if output_plan_path:
         with open(output_plan_path, "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
@@ -689,7 +794,7 @@ FEWSHOT_BLOCK = """[Few-Shot: 1컨셉 + 문장마다 화면 1:1 구조 예시 �
 def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, tone_instruction, api_key, thumb_dir,
                    hook_hints=None, core_concept: str = "", region: str = "", groups=None,
                    store_facts: Optional[Dict[str, Any]] = None, photo_tags: Optional[Dict[str, str]] = None,
-                   search_keyword: str = "", context_kind: str = ""):
+                   search_keyword: str = "", context_kind: str = "", tempo: str = "beat", policy=None):
     from core.llm import generate_json, repair_scene_lines
     from core.script_guard import script_violation_finder
     from core.store_facts import facts_prompt_block
@@ -724,7 +829,35 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
                          " ".join(tags_by_path.values())])
     role_hint = ", ".join(f"씬{i + 1}={ROLE_LABELS_KO.get(r, r)}" for i, r in enumerate(roles))
     cta_tail = owner_cta_tail(search_keyword, region)
-    concept_guidelines = build_one_concept_guidelines("owner", n, type_label, f"<선택한 1메시지를 한 구절로 요약> 찾으신다면 {cta_tail}", OWNER_POLICY)
+    rap = tempo == "rap"
+    pol = policy or (RAP_POLICY if rap else OWNER_POLICY)
+    concept_guidelines = build_one_concept_guidelines("owner", n, type_label, (rap_cta(search_keyword, context_kind) if rap else f"<선택한 1메시지를 한 구절로 요약> 찾으신다면 {cta_tail}"), pol)
+    multi = any(len(g) > 1 for g in sentence_groups)
+    max_cuts = max((len(g) for g in sentence_groups), default=1)
+    chk_pol = pol if rap or not multi else _dc_replace(pol, max_chars=max(pol.max_chars, 12 * max_cuts + 8))
+    if rap:
+        scene_rule = (f"- 총 {n}줄 = 사진 {n}장 (줄 i = 사진 i, 위 '문장별 화면 사진·피사체' 목록과 1:1). 한 줄은 2초 안팎의 짧고 강렬한 숏카피입니다. "
+                      f"줄 i는 그 순간 화면에 나오는 사진 속 피사체를 직접 말해야 해요. 다른 사진 이야기나 사진에 없는 메뉴는 금지입니다.")
+        length_rule = ("- 각 voiceover는 공백 포함 10~20자(최대 24자)의 랩처럼 리듬 있는 숏카피. '~해요' 완결형일 필요 없이 '~!', '~,'로 끊어도 되지만 "
+                       "비문·어색한 낱말 결합은 금지입니다 (음식에 '한 잔'을 붙이는 '건어물 한 잔', 깨진 낱말 '개와' 같은 표현 금지). 문법이 맞는 말만 쓰세요.")
+        readable_rule = "- [길이] 줄마다 2초 안에 읽히게 20자 안팎. 늘어지는 서술어는 빼고 핵심 명사 + 짧은 동사로."
+        structure_rule = (f"- [랩형 구조 (사진 {n}장 = 숏카피 {n}줄)]: 1줄=후킹(상호 없이, 방문 맥락 + 1번 사진 피사체) → 중간 줄=각 사진의 피사체 한 줄씩(맛·식감·온도 한 가지) → "
+                          f"마지막 줄=상호명으로 바로 오세요 CTA ('{rap_cta(search_keyword, context_kind)}' 형태, 저장 유도·'검색해 보세요'는 쓰지 않음).")
+        last_rule = f"* 마지막 줄은 정확히 '{rap_cta(search_keyword, context_kind)}' 형태로 상호명을 말하며 끝내세요 (상호명·지역은 이 줄에서만 공개)."
+    else:
+        scene_rule = (f"- 총 {n}문장({'5문장 호흡' if n == 5 else '사진 1장 = 문장 1개'}). "
+                      + ("사진 " + str(len(media)) + "장이 문장에 묶여 있어요: 아래 '문장별 화면 사진·피사체' 목록대로, 한 문장 동안 컷 여러 장이 1.2~1.5초 간격으로 빠르게 전환되는 문장은 "
+                         "그 피사체들을 화면에 나오는 순서대로 모두 호명하세요. " if multi else "문장 i = 사진 i (위 목록과 1:1). ")
+                      + "컨셉은 하나로 관통하되 각 문장은 그 순간 화면에 나오는 사진 속 피사체를 직접 말해야 합니다. 다른 사진 이야기나 사진에 없는 메뉴는 금지입니다.")
+        length_rule = (f"- 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {pol.min_chars + 6}~{pol.max_chars - 2}자 (최대 {pol.max_chars}자)."
+                       + (f" 단, 컷이 여러 장 전환되는 문장은 컷당 약 11~14자를 더해 길게 쓰세요 (컷 4장 = 44~56자, 그 구간이 5~6초라 말이 모자라면 화면이 끊겨 보여요)." if multi else "")
+                       + " 한 문장에 한 가지 이야기만 하세요. 비문·어색한 결합('건어물 한 잔'처럼 음식에 '한 잔')과 깨진 낱말('개와')은 금지입니다.")
+        readable_rule = ("- [길이·자막 가독성] 마지막 CTA를 뺀 각 문장은 공백 포함 20~28자로 간결하게 (컷 여러 장 문장은 예외). 자막이 최대 2줄씩 나뉘어 읽혀야 합니다.\n"
+                         "  늘어지는 서술어('~하는 분들은 여기서 확인해 보세요')는 빼고, 핵심 명사와 짧은 동사 위주로 끊어 쓰세요.")
+        structure_rule = ("- [비트 리듬형 5문장 구조]: 1문장=후킹(상호 없이, 1번 사진 피사체 + 방문 맥락) → 2문장=공감·대비(방문 상황) → 3문장=메뉴 컷 라인업을 순서대로 호명 "
+                          "→ 4문장=매장 분위기·편하게 즐기는 상황 → 5문장=컨셉 한 구절 요약 + 저장 유도 + 상호명 검색 CTA." if n == 5 else
+                          f"- [1컨셉 문장 구조 (사진 {n}장 = 문장 {n}개, CTA 포함)]: 1문장=후킹(상호 없이, 1번 사진 피사체) → 중간 문장=각 사진의 메뉴·장면으로 같은 컨셉을 다른 각도로 증명 → 마지막=컨셉 한 구절 요약 + 저장 유도 + 상호명 검색 CTA.")
+        last_rule = f"* 마지막 씬은 선택한 1메시지를 한 구절로 요약한 뒤 반드시 '{cta_tail}'로 끝내세요 (상호명·지역은 이 문장에서만 공개)."
 
     from core import venue_context as _vc
     vc_block = _vc.prompt_block(context_kind)
@@ -755,24 +888,21 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 {concept_guidelines}
 
 [추가 세부 지침]
-- 총 {n}개 씬 = 사진 {n}장 (문장 i = 사진 i, 위 '문장별 화면 사진·피사체' 목록과 1:1). 컨셉은 하나로 관통하되 각 문장은 그 순간 화면에 나오는 사진 속 피사체를 직접 말하세요. 다른 사진 이야기나 사진에 없는 메뉴는 금지입니다.
+{scene_rule}
 - 가격, 할인, 무료, 순위(1위 등), 수상, 이벤트처럼 USP에 없는 수치·혜택은 절대 쓰지 마세요.
 - 씬 1의 hook_title은 스크롤을 멈추게 하는 8~12자 헤드라인 (상호명 포함 가능, 읽는 데 2초 이내).
-- 각 voiceover는 해요체로 끝나는 한 문장, 공백 포함 {OWNER_POLICY.min_chars + 6}~{OWNER_POLICY.max_chars - 2}자 (최대 {OWNER_POLICY.max_chars}자){' (사진이 7장 이상이면 문장당 16~22자로 더 짧고 경쾌하게)' if n >= 7 else ''}. 한 문장에 한 가지 이야기만 하세요.
+{length_rule}
 - 씬마다 같은 메시지를 다른 각도(대비·증거·체감)로 증명하세요. 헤드라인이나 앞 씬의 말을 바꿔 되풀이하면 안 됩니다.
 - 상투구 금지: '한 땀 한 땀', '정성껏', '맛보실 수 있어요', '따라서', '그러므로', '또한', '그리고'.
-- [길이·자막 가독성] 마지막 CTA를 뺀 각 문장은 공백 포함 20~28자로 간결하게 (절대 30자를 넘기지 마세요). 자막이 최대 2줄씩 나뉘어 읽혀야 합니다.
-  늘어지는 서술어('~하는 분들은 여기서 확인해 보세요', '~충분해요, 이게 이유예요')는 빼고, 핵심 명사와 짧은 동사 위주로 끊어 쓰세요.
-  나쁜 예(31자): "<지역>에서 <메뉴> 고민되면, <상호> <대표 메뉴> 한 상부터 확인해 보세요!"
-  좋은 예(22자): "<지역> <메뉴> 고민될 땐, <상호> <대표 메뉴> 한 상이면 끝납니다!"   (<꺾쇠>는 이 매장 정보로 채우기)
-- [1컨셉 문장 구조 (사진 {n}장 = 문장 {n}개, CTA 포함)]: 1문장=후킹(상호 없이, 1메시지와 직결된 질문·상황 + 1번 사진 피사체) → 중간 문장=각 사진의 메뉴·장면으로 같은 컨셉을 다른 각도(공감·대비 → 핵심 증거 → 체감 → 곁들임·분위기)로 증명 → 마지막=컨셉 한 구절 요약 + 저장 유도 + 상호명 검색 CTA.
+{readable_rule}
+{structure_rule}
 - [카피 규칙: 설명이 아니라 세일즈 카피]
   * 조리 과정·행동 묘사 금지: '~구워요', '~잘라요', '그릇에 담아요', '집게로 뒤집을수록' 같은 일기장식 설명문은 쓰지 마세요.
   * 대신 손님이 얻는 감각과 이유를 쓰세요: 육즙, 숯불 향, 식감, 윤기, 살얼음처럼 미각·후각·시각을 건드리는 단어를 씬마다 하나 이상 넣으세요.
     단, 감각어는 USP·사진에 있는 메뉴와 조리 방식에 붙는 것만 쓰고, 없는 재료·'비법'·가격·수치 같은 새 사실은 만들지 마세요.
   * 씬 1 첫 문장은 후킹: 지역명({short_region(region) or '지역명'}) 또는 누구를 위한 곳인지(타깃)를 짚으세요.
     (구조 예: '{short_region(region) or '동네'} 사람들이 ○○ 생각날 때 찾는 곳이에요!' — 문구는 이 매장 정보로 새로 쓰기)
-  * 마지막 씬은 선택한 1메시지를 한 구절로 요약한 뒤 반드시 '{cta_tail}'로 끝내세요 (상호명·지역은 이 문장에서만 공개).
+  {last_rule}
 {FEWSHOT_BLOCK}
 - 사장님이 적은 특장점(USP)과 첨부 사진에 없는 메뉴·반찬·조리 방식·시설·서비스는 지어내지 마세요 (예: 적히지 않은 계란찜·냉면·미리 손질).
   매장 운영 방식(손님이 직접 굽는지, 구워서 내는지 등)은 USP에 있는 한 가지로만 일관되게 쓰고, 모르면 방식을 단정하지 말고 맛·분위기·상황으로 말하세요.
@@ -788,11 +918,11 @@ JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시�
     vo_lines = [str(s.get("voiceover") or "") for s in (data.get("scenes") or [])[:-1] if isinstance(s, dict)] if isinstance(data, dict) else []
     hook_line = str(((data.get("scenes") or [{}])[0] or {}).get("hook_title") or "") if isinstance(data, dict) else ""
     violation_checker = create_length_violation_checker(
-        OWNER_POLICY, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True,
+        chk_pol, script_violation_finder(vo_lines, core_concept=core_concept, hook=hook_line, usp=usp, lock_topic=True,
                                               evidence=evidence + " " + (core_concept or ""),
                                               business_name=business_name, region=short_region(region),
                                               line_tags=line_tags[:len(vo_lines)], context_kind=context_kind))
-    data, fixes = repair_scene_lines(data, violation_checker, OWNER_SCRIPT_SYSTEM, OWNER_POLICY.repair_instruction, gemini_api_key=api_key)
+    data, fixes = repair_scene_lines(data, violation_checker, OWNER_SCRIPT_SYSTEM, pol.repair_instruction, gemini_api_key=api_key)
     for f in fixes:
         logger.info(f"[owner 대본 규칙 보정] {f}")
     scenes = data.get("scenes", data) if isinstance(data, dict) else data
@@ -802,8 +932,11 @@ JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시�
     for sc in scenes[:-1]:
         if isinstance(sc, dict) and sc.get("voiceover"):
             cleaned = sanitize_signboard_words(str(sc["voiceover"]))
+            if rap:
+                sc["voiceover"] = clamp_line_to_policy(cleaned, chk_pol)
+                continue
             completed = complete_owner_sentence(cleaned)
-            clamped = clamp_line_to_policy(completed, OWNER_POLICY)
+            clamped = clamp_line_to_policy(completed, chk_pol)
             sc["voiceover"] = ensure_natural_pauses(clamped)
     out = _ScenesWithStory(scenes)
     out.core_concept = str(data.get("core_concept") or "").strip() if isinstance(data, dict) else ""

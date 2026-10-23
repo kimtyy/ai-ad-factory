@@ -28,6 +28,13 @@ logger = logging.getLogger("ad_factory.compositor")
 #   쇼핑(commerce)도 실물 상품 사진만 쓰게 되어 같은 레이아웃 사용 (AI 배경 위 누끼 합성 방식은 제거됨)
 CENTER_CAPTION_MODES = ("travel", "owner", "commerce", "book")
 XFADE_SEC = 0.35            # 씬 전환 디졸브 길이 (초)
+def _xfade_for(mode: str) -> float:
+    """모드별 디졸브 길이: 시골책방 0.6초, 매장 랩형(사진당 2초)은 짧게, 그 밖은 기본"""
+    if mode == "owner" and os.getenv("OWNER_TEMPO", "").strip().lower() == "rap":
+        return 0.12
+    return XFADE_BY_MODE.get(mode, XFADE_SEC)
+
+
 XFADE_BY_MODE = {"book": 0.6}          # 시골책방: 차분한 호흡 (긴 디졸브)
 DUCK_BY_MODE = {"book": 0.25}          # 시골책방: 나레이션 중 BGM을 조금 더 낮게 (기본 32%)
 BGM_FROM_START_MODES = ("book",)       # 잔잔한 곡은 드롭이 아니라 처음부터
@@ -837,7 +844,7 @@ class AdCompositor:
         if kwargs.get("caption_font"):
             self.caption_font = kwargs["caption_font"]
         self.semantic_captions = (audio_mode == "silent")
-        self.xfade = XFADE_BY_MODE.get(mode, XFADE_SEC)
+        self.xfade = _xfade_for(mode)
         self.duck = DUCK_BY_MODE.get(mode)
         self.bgm_from_start = mode in BGM_FROM_START_MODES
         final_output_path = os.path.join(self.output_dir, output_filename)
@@ -916,7 +923,7 @@ class AdCompositor:
         brand(BrandOverlay)가 주어지면 전 씬 워터마크 + (end_card 설정 시) 엔딩 카드 클립을 추가.
         disclosure(제휴 광고 표시 문구, 예: 쿠팡 파트너스)가 주어지면 전 씬 위쪽에 작게 표시.
         """
-        XFADE = XFADE_BY_MODE.get(mode, XFADE_SEC)     # 모드별 디졸브 (시골책방 0.6초)
+        XFADE = _xfade_for(mode)     # 모드별 디졸브 (시골책방 0.6초)
         final_output_path = os.path.join(self.output_dir, output_filename)
         logger.info(f"Step 3 시작 (모드={mode}): 타임라인 조립, 자막 오버레이 합성 진행 (총 {len(asset_manifest)}개 씬, 오디오 모드: {audio_mode})")
 

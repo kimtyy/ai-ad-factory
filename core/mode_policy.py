@@ -60,6 +60,7 @@ class ModePolicy:
 
     # 6. 자막 배치 보조 (기본값은 기존 동작 그대로)
     caption_max_width: float = 0.72      # 자막 줄 폭 상한 (화면 너비 대비)
+    silent_scene_sec: float = 3.6        # 나레이션 없음(BGM+자막)일 때 씬 1개의 화면 길이 (랩형은 2초대)
     semantic_chunks: bool = False        # True면 글자 수가 아니라 의미 단위(조사·쉼표 뒤, 9~13자 1줄)로 자막을 끊어 순차 전환 (나레이션 없는 영상은 항상 이 방식)
     caption_chunk_chars: int = 0         # 0이 아니면: 이 글자 수(공백 포함)를 넘는 문장은 자막을 앞/뒤 덩어리로 나눠 순차 표시 (TTS는 그대로)
     landscape_fg_center_y: float = 0.50  # 가로 영상을 흐린 배경 위에 얹을 때 원본의 세로 중심 (0.50 = 정중앙)
@@ -184,6 +185,19 @@ STAY_POLICY = replace(
     default_scene_sec=3.6, tts_rate="+8%", xfade_sec=0.25, tail_sec=0.20, caption_font_ratio=0.064, caption_stroke_ratio=0.0075,
     center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18, semantic_chunks=True,
 )
+
+
+# 매장 '1컷 1카피 랩형': 사진 1장 = 2초 안팎 숏카피 1줄 (6~10장도 16~20초). 씬 최소 길이·디졸브·꼬리를 줄이고 낭독을 빠르게
+RAP_POLICY = replace(
+    OWNER_POLICY, name_ko="매장 1컷 1카피 랩형", min_chars=6, target_chars=16, max_chars=24, min_scene_sec=1.6, max_scene_sec=2.9, default_scene_sec=2.0,
+    tts_rate="+18%", xfade_sec=0.12, tail_sec=0.05, caption_chunk_chars=0, semantic_chunks=False, silent_scene_sec=2.0,
+)
+RAP_TOP_POLICY = replace(RAP_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+
+
+def owner_tempo() -> str:
+    """매장 대본 호흡: 'beat'(비트 리듬형 5문장·안주 컷 고속 전환, 기본) / 'rap'(1컷 1카피 랩형). core.pipeline이 JobSpec에 따라 켜고 끔"""
+    return "rap" if os.getenv("OWNER_TEMPO", "").strip().lower() == "rap" else "beat"
 
 
 STAY_TOP_POLICY = replace(STAY_POLICY, center_y=0.24)             # 상단 여백 옵션 (사장님 모드와 같은 24%)
@@ -343,6 +357,8 @@ def get_mode_policy(mode: Optional[str]) -> ModePolicy:
     """모드별 격리 정책 객체 반환 (미지정 시 owner 기본)"""
     m = (mode or "owner").strip().lower()
     top = os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top"      # 자막 위치 선택(중단 55% / 상단 24%): 중앙 자막 모드가 공유하는 단일 스위치
+    if m == "owner" and owner_tempo() == "rap":
+        return RAP_TOP_POLICY if top else RAP_POLICY
     if m == "owner" and top:
         return OWNER_TOP_POLICY
     if m == "travel" and os.getenv("TRAVEL_STAY_STYLE", "").strip() == "1":
@@ -425,7 +441,7 @@ def clamp_line_to_policy(text: str, policy: ModePolicy) -> str:
     if not t:
         return ""
     if len(t) <= policy.max_chars + 2:
-        return complete_owner_sentence(t) if policy.mode == "owner" else t
+        return complete_owner_sentence(t) if (policy.mode == "owner" and policy is not RAP_POLICY and policy is not RAP_TOP_POLICY) else t
 
     # ② 완결 문장 단위 (문장 부호 뒤 공백으로 분리)
     sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", t) if x.strip()]
@@ -440,7 +456,7 @@ def clamp_line_to_policy(text: str, policy: ModePolicy) -> str:
             return acc
 
     # ③ 완결되게 줄일 수 없으면 원문 보존 (쉼표 앞 절을 떼면 컨셉어가 사라지거나 의미가 깨지므로 자르지 않음)
-    return complete_owner_sentence(t) if policy.mode == "owner" else t
+    return complete_owner_sentence(t) if (policy.mode == "owner" and policy is not RAP_POLICY and policy is not RAP_TOP_POLICY) else t
 
 
 def create_length_violation_checker(policy: ModePolicy, base_checker: Optional[Callable[[str], Optional[str]]] = None):

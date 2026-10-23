@@ -67,6 +67,7 @@ class JobSpec:
     # 공통
     voice_actor: str = "female_20s"
     audio_mode: str = "voice_and_sub"
+    tempo: str = "beat"                          # 매장 대본 호흡: 'beat' 비트 리듬형(5문장, 18초) / 'rap' 1컷 1카피 랩형(사진 N장 = 2초 숏카피 N줄)
     caption_font: str = ""                       # 자막 폰트 프리셋 'impact'/'serif'/'pop' (비우면 모드 기본)
     bgm_path: Optional[str] = None
     api_key: Optional[str] = None
@@ -145,6 +146,10 @@ def apply_style_env(spec: "JobSpec") -> None:
         os.environ["COMMERCE_SHOP_STYLE"] = "1"
     else:
         os.environ.pop("COMMERCE_SHOP_STYLE", None)
+    if spec.mode == "owner" and getattr(spec, "tempo", "beat") == "rap":
+        os.environ["OWNER_TEMPO"] = "rap"
+    else:
+        os.environ.pop("OWNER_TEMPO", None)
 
 
 def _scene_num(scene: dict, default: int) -> int:
@@ -241,7 +246,7 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
                                        core_concept=spec.core_concept, tone_instruction=spec.tone_instruction,
                                        region=region_of(spec.address) if spec.address else "",
                                        store_facts=facts, photo_tags=photo_tags, photo_buckets=photo_buckets,
-                                       keep_order=spec.keep_photo_order, **common)
+                                       keep_order=spec.keep_photo_order, tempo=spec.tempo, **common)
         if photo_tags and scenes:
             scenes[0]["photo_tags"] = {os.path.basename(k): v for k, v in photo_tags.items()}      # 화면 확인용
     elif spec.mode == "book":

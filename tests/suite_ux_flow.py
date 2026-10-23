@@ -109,10 +109,13 @@ fetch = [b for b in at.button if b.key == "place_fetch"]
 check(fetch and fetch[0].label == "🏪 가게 정보 가져오기" and not [b for b in at.button if b.key == "store_photo_find"], "1단계: 검색창 + [🏪 가게 정보 가져오기] 버튼 1개 (사진 찾기 버튼 따로 없음)")
 check(any(t.key == "owner_name" for t in at.text_input) and any(t.key == "owner_usp" for t in at.text_input), "가게 정보(상호·대표 메뉴·특장점) 입력칸이 바로 노출")
 check(any(r.key == "script_style_radio" for r in at.radio), "2단계에 화자 시점 (좌측 바에서 이동)")
-check(side(at, "⏱️ 영상 길이") is not None and any("대본 만들기" in b.label for b in at.button), "3단계에 영상 길이 + [🚀 선택된 컨셉으로 대본 만들기]")
+check(side(at, "⏱️ 영상 길이") is not None and any("대본 만들기" in b.label for b in at.button), "3단계에 영상 길이 + 대본 만들기 버튼")
+_lbl = [b.label for b in at.button]
+check(any(l.startswith("🎵 비트 리듬형 (18초)") for l in _lbl) and any(l.startswith("⚡ 1컷 1카피 랩형 (18초)") for l in _lbl) and "🚀 선택된 컨셉으로 대본 만들기" not in _lbl,
+      "매장 3단계: [🎵 비트 리듬형 (18초)] · [⚡ 1컷 1카피 랩형 (18초)] 두 스타일 버튼")
 check(side(at, "오디오 모드") is not None and side(at, "자막 폰트") is not None and side(at, "📐 자막 위치") is not None and any(t.key == "bgm_on" for t in at.toggle),
       "4단계에 오디오·성우·BGM·자막 폰트·자막 위치 (영상 만들기 버튼 위)")
-check([b.label for b in at.button].index("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기") > [b.label for b in at.button].index("🚀 선택된 컨셉으로 대본 만들기"), "영상 만들기 버튼은 대본 단계 뒤")
+check([b.label for b in at.button].index("✨ 인스타 릴스 / 유튜브 쇼츠용 영상 만들기") > [b.label for b in at.button].index([l for l in _lbl if l.startswith("🎵 비트 리듬형")][0]), "영상 만들기 버튼은 대본 단계 뒤")
 check(any(t.key == "demo_mode" for t in at.toggle), "매장 홍보 상단 우측에 🎯 점주 시연 모드 스위치")
 
 STEP_NAMES = {"owner": "🏢 매장", "travel": "🏨 숙소", "commerce": "🛍️ 상품", "book": "📚 도서"}

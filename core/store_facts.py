@@ -194,6 +194,22 @@ def fix_bucket(bucket: int, subject: str = "", readiness: str = "") -> int:
     return 1
 
 
+_VALID_ONE_SYLLABLE = set("밥물술불빵차국면떡김콩배밤꿀굴전탕죽알뼈입손발눈잔병컵위뜬속앞옆큰한")
+
+
+def clean_photo_tag(tag: str) -> str:
+    """비전·글자 인식이 만든 깨진 조각 제거: 한 글자 낱말과 '개와'처럼 뜻 없는 한 글자+조사 조각 (대본이 그대로 따라 쓰는 걸 막음)"""
+    out = []
+    for w in (tag or "").split():
+        bare = w.strip(",.")
+        if len(bare) == 1 and bare not in _VALID_ONE_SYLLABLE:
+            continue
+        if len(bare) == 2 and bare[1] in "와과을를이가은는에의도" and bare[0] not in _VALID_ONE_SYLLABLE:
+            continue
+        out.append(w)
+    return " ".join(out).strip()
+
+
 def analyze_photos(media_paths: List[str], *, business_name: str = "", api_key: Optional[str] = None, thumb_dir: Optional[str] = None,
                    cache_path: Optional[str] = None, mock: bool = False) -> Tuple[Dict[str, str], Dict[str, int]]:
     """
@@ -267,7 +283,8 @@ JSON만 출력: {{"photos": [{{"index": 1, "subject": "...", "bucket": 1, "readi
                 json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False)
             except OSError:
                 pass
-    tags = {p: entry(p)["s"] for p in media if entry(p).get("s")}
+    tags = {p: clean_photo_tag(entry(p)["s"]) for p in media if entry(p).get("s")}
+    tags = {p: t for p, t in tags.items() if t}
     buckets = {p: int(entry(p)["b"]) for p in media if entry(p).get("b")}
     return tags, buckets
 

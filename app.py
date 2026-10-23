@@ -592,7 +592,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
 for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
-           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
+           "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
            "voice_tone", "voice_actor_select_box", "audio_choice", "script_style_radio", "travel_template", "show_home", "stay_aff_template", "stay_partner_id", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
            "product_name_input", "product_usp_input", "commerce_layout", "bundle_theme", "bundle_bottom",
@@ -2209,9 +2209,25 @@ with edit_box:
     if is_travel_mode:
         _w_travel_template()
 
-    col_plan_btn, col_plan_desc = st.columns([1.2, 2.8])
-    with col_plan_btn:
-        generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary")
+    generate_rap_btn = False
+    if is_owner_mode:
+        st.caption("사진을 6~10장 올려도 18초 쇼츠 템포를 지켜요. 두 스타일을 각각 뽑아 비교해 보세요.")
+        _b1, _b2 = st.columns(2)
+        with _b1:
+            generate_plan_btn = st.button("🎵 비트 리듬형 (18초) 대본 만들기 — 추천", use_container_width=True, type="primary", key="generate_plan_btn",
+                                          help="5문장 호흡. 안주 소개 구간에서 사진이 1.2~1.5초 간격으로 빠르게 넘어가요.")
+        with _b2:
+            generate_rap_btn = st.button("⚡ 1컷 1카피 랩형 (18초) 대본 만들기", use_container_width=True, key="generate_rap_btn",
+                                         help="사진 N장 = 2초 숏카피 N줄. 컷마다 그 사진에 딱 맞는 한 줄.")
+        if generate_plan_btn:
+            st.session_state.owner_tempo = "beat"
+        elif generate_rap_btn:
+            st.session_state.owner_tempo = "rap"
+        col_plan_desc = st.container()
+    else:
+        col_plan_btn, col_plan_desc = st.columns([1.2, 2.8])
+        with col_plan_btn:
+            generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary")
     # 레이더 후킹 패턴 → 씬 1 후킹 힌트 (숙소 제휴 / 사장님 숙소·음식점)
     hook_vertical = vertical_for(pipeline_mode, business_type)
     hook_hints = load_hook_hints(hook_vertical, allow_dryrun=allow_dryrun_hints()) if (hints_enabled() and hook_vertical) else None
@@ -2252,6 +2268,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
         photo_buckets=dict(ss.get("photo_buckets") or {}) if is_owner_mode else {},
         keep_photo_order=bool(ss.get("keep_photo_order")) if is_owner_mode else False,
+        tempo=(ss.get("owner_tempo") or "beat") if is_owner_mode else "beat",
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)
@@ -2260,7 +2277,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
 # 원클릭(쇼핑): 콘티 없이 '영상 만들기'를 누르면 기획부터 자동으로 하고 이어서 렌더
 auto_flow = bool(st.session_state.pop("auto_plan_then_render", False))
 auto_plan_only = bool(st.session_state.pop("auto_plan_now", False))      # 대상 선택(카드·검색) 직후 자동 기획 (렌더는 따로)
-if generate_plan_btn or auto_flow or auto_plan_only:
+if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
     plan_spinner_msg = {
         "owner": "🧠 올린 사진·영상을 보고 우리 가게 홍보 대본을 쓰고 있습니다...",
         "travel": f"🧠 숙소 제휴 스토리보드({script_style_options[selected_script_style]})를 기획하고 있습니다...",
@@ -2423,11 +2440,16 @@ with edit_box:
                 _cth, _c1, _c2 = st.columns([1.4, 4.6, 1])
                 _mp = _sc.get("image_path") or _sc.get("source_path") or _sc.get("video_path")
                 with _cth:                                   # 이 문장과 짝인 사진 (사진 ↔ 대본 1:1)
-                    if _mp and os.path.exists(_mp):
-                        st.image(_media_thumb(_mp)[0], use_container_width=True)
-                        _tg = ((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).get(os.path.basename(_mp))
-                        if _tg:
-                            st.caption(_tg)
+                    _cuts = [m for m in [_mp] + [(x.get("image_path") or x.get("video_path")) if isinstance(x, dict) else x for x in (_sc.get("extra_media") or [])] if m and os.path.exists(m)]
+                    if _cuts:
+                        _ptags = (st.session_state.storyboard[0] or {}).get("photo_tags") or {}
+                        for _cm in _cuts:
+                            st.image(_media_thumb(_cm)[0], use_container_width=True)
+                        _tgs = [t for t in (_ptags.get(os.path.basename(m)) for m in _cuts) if t]
+                        if _tgs:
+                            st.caption(" / ".join(_tgs))
+                        if len(_cuts) > 1:
+                            st.caption(f"🎞️ 컷 {len(_cuts)}장 빠르게 전환")
                     else:
                         st.caption("사진 없음")
                 _c1.markdown(f"**씬 {_n:02d}**")

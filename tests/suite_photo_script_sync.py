@@ -96,28 +96,61 @@ def plan(paths, tags, lines, **kw):
         llm.generate_json = _gj
 
 
+RAP = ["살얼음 눈꽃맥주 한 잔!", "매콤새콤 골뱅이소면부터!", "시원한 과일 화채로 입가심!", "바삭한 먹태는 맥주 짝꿍!", "쫄깃한 반건조 오징어까지!", "안주 모둠이라 푸짐하게!",
+       "홀도 넓어 편하게 한 잔!", "하이볼 한 잔도 시원하게!", "소주잔 세트로 분위기 업!"]
+BEAT = ["저녁 먹고 아쉬울 때, 살얼음 눈꽃맥주 한 잔 어때요?", "안주 모둠이라 여럿이 나눠 먹기 좋아요.",
+        "매콤새콤 골뱅이소면부터 시원한 과일 화채, 바삭한 먹태와 쫄깃한 오징어까지 안주 라인업도 완벽해요!", "홀도 넓어서 퇴근길에 편하게 들르기 좋아요."]
+
 try:
-    sc8 = plan(PATHS, TAGMAP, good_lines(8))
-    check(len(sc8) == 8 and all(not s.get("media_group") or len(s["media_group"]) == 1 for s in sc8), f"사진 8장 → 문장 8개 (5문장 고정 아님, 사진을 쪼개 붙이지 않음): {len(sc8)}씬")
+    # --- B형 랩형: 사진 N장 = 숏카피 N줄 (1:1), 한 줄 2초
+    sc8 = plan(PATHS, TAGMAP, RAP[:7], tempo="rap")
+    check(len(sc8) == 8 and all(not s.get("media_group") or len(s["media_group"]) == 1 for s in sc8), f"랩형: 사진 8장 → 줄 8개 (사진을 쪼개 붙이지 않음): {len(sc8)}씬")
     bad = [i for i in range(7) if photo_subject_issues([sc8[i]["voiceover"]], [TAGS[i]])]
-    check(not bad and "설맥" in sc8[-1]["voiceover"] and "주말 외식" not in sc8[-1]["voiceover"], f"문장마다 그 사진의 피사체를 말함, 마지막은 상호 CTA: {[s['voiceover'][:14] for s in sc8[:3]]}…")
+    check(not bad and "설맥" in sc8[-1]["voiceover"] and "주말 외식" not in sc8[-1]["voiceover"] and sc8[-1]["voiceover"].startswith("오늘 밤 시원한 맥주 생각나면"),
+          f"랩형: 줄마다 그 사진의 피사체, 마지막은 '상호로 바로 오세요': {[s['voiceover'] for s in sc8[:2]]} … {sc8[-1]['voiceover']}")
+    check(all(len(s["voiceover"]) <= 26 for s in sc8[:-1]) and all(abs(s["duration_sec"] - 2.0) < 0.01 for s in sc8) and abs(sum(s["duration_sec"] for s in sc8) - 16.0) < 0.5,
+          f"랩형: 줄당 26자 이내·2초, 합계 {sum(s['duration_sec'] for s in sc8):.1f}초 (16~18초 템포, 30초로 늘어지지 않음)")
     # 사진-대본 불일치(설맥 영상 결함): 화채·먹태 화면에서 맥주 거품 이야기만
-    mism = good_lines(8)
-    mism[2] = "봉긋 솟아오른 크림 거품이 먼저 보이죠?"
-    mism[3] = "맥주 거품과 목넘김이 정말 부드러워요."
-    sc_m = plan(PATHS, TAGMAP, mism)
+    mism = list(RAP[:7])
+    mism[2] = "봉긋 솟아오른 크림 거품!"
+    mism[3] = "맥주 거품과 목넘김 부드럽게!"
+    sc_m = plan(PATHS, TAGMAP, mism, tempo="rap")
     check(photo_subject_issues([sc_m[2]["voiceover"]], [TAGS[2]]) == {} and photo_subject_issues([sc_m[3]["voiceover"]], [TAGS[3]]) == {} and "거품" not in sc_m[2]["voiceover"] + sc_m[3]["voiceover"],
-          f"화채·먹태 화면에서 맥주 거품 이야기를 하면 그 사진을 말하는 문장으로 교체: '{sc_m[2]['voiceover']}' / '{sc_m[3]['voiceover']}'")
-    ctx_bad = good_lines(8)
-    ctx_bad[0] = "나들이 가서 시원한 눈꽃맥주 한 잔 어때요?"
-    sc_c = plan(PATHS, TAGMAP, ctx_bad)
+          f"화채·먹태 화면에서 맥주 거품 이야기를 하면 그 사진을 말하는 줄로 교체: '{sc_m[2]['voiceover']}' / '{sc_m[3]['voiceover']}'")
+    ctx_bad = list(RAP[:7])
+    ctx_bad[0] = "나들이 가서 눈꽃맥주 한 잔!"
+    sc_c = plan(PATHS, TAGMAP, ctx_bad, tempo="rap")
     check("나들이" not in " ".join(s["voiceover"] for s in sc_c), "맥주집 대본에 '나들이'가 들어가면 걸러냄")
-    sc5 = plan(PATHS[:5], dict(zip(PATHS[:5], TAGS[:5])), good_lines(5))
-    check(len(sc5) == 5, f"사진 5장 → 5문장 ({len(sc5)})")
+    garble = list(RAP[:7])
+    garble[3] = "튀긴 건어물 한 잔!"
+    garble[1] = "맥주잔 개와 골뱅이소면!"
+    sc_g = plan(PATHS, TAGMAP, garble, tempo="rap")
+    check("건어물 한 잔" not in sc_g[3]["voiceover"] and "개와" not in sc_g[1]["voiceover"], f"깨진 문구('튀긴 건어물 한 잔', '맥주잔 개와') 차단 → '{sc_g[1]['voiceover']}' / '{sc_g[3]['voiceover']}'")
     p10 = [f"/m/{i}.jpg" for i in range(10)]
     t10 = dict(zip(p10, TAGS + ["하이볼 잔", "소주잔 세트"]))
-    sc10 = plan(p10, t10, good_lines(8) + ["하이볼 한 잔도 시원해요.", "소주 한 잔에 안주가 술술 넘어가요."])
-    check(len(sc10) == 10 and sc10[-1]["role"] == "cta", f"사진 10장 → 문장 10개, 마지막은 CTA ({len(sc10)}씬)")
+    sc10 = plan(p10, t10, RAP[:9], tempo="rap")
+    check(len(sc10) == 10 and sc10[-1]["role"] == "cta" and abs(sum(s["duration_sec"] for s in sc10) - 20.0) < 0.5, f"랩형 사진 10장 → 줄 10개, 마지막은 CTA ({len(sc10)}씬, {sum(s['duration_sec'] for s in sc10):.0f}초)")
+
+    # --- A형 비트 리듬형: 사진 6~10장도 5문장, 안주 컷은 한 문장 안에서 고속 전환
+    grp = ow.beat_groups(PATHS, TAGMAP)
+    check(grp == [[0], [5], [1, 2, 3, 4], [6], [7]], f"비트형 묶음: 후킹(1)·모둠(1)·안주 4컷·홀(1)·간판(1) = {grp}")
+    scb = plan(PATHS, TAGMAP, BEAT, tempo="beat")
+    check(len(scb) == 5 and [len(s.get("media_group") or [0]) for s in scb] == [1, 1, 4, 1, 1] and scb[-1]["role"] == "cta",
+          f"비트형: 사진 8장 → 5문장, 안주 소개 문장에 컷 4장: {[len(s.get('media_group') or [0]) for s in scb]}")
+    snack = scb[2]["voiceover"]
+    order = [snack.find(w) for w in ("골뱅이", "화채", "먹태", "오징어")]
+    check(all(o >= 0 for o in order) and order == sorted(order), f"안주 문장이 사진 순서대로 골뱅이→화채→먹태→오징어를 호명: {snack}")
+    tot = sum(s["duration_sec"] for s in scb)
+    cut_sec = scb[2]["duration_sec"] / 4
+    check(15 <= tot <= 21 and 1.2 <= cut_sec <= 1.6, f"비트형: 합계 {tot:.1f}초(≈18초), 안주 컷 {cut_sec:.2f}초 간격 전환")
+    check(photo_subject_issues([snack], [scb[2].get("photo_tag") or " / ".join(TAGS[1:5])]) == {}, "비트형: 안주 문장이 4컷 피사체와 모두 맞음")
+    # 안주 문장이 일부 안주만 말하거나 엉뚱하면 4컷을 모두 호명하는 안전 문구로 교체
+    off = ow.photo_fallback_line(" / ".join(["골뱅이소면 한 접시", "과일 화채", "먹태", "반건조 오징어"]))
+    check(all(w in off for w in ("골뱅이", "화채", "먹태", "오징어")) and "안주 라인업" in off, f"안전 문구도 4컷 안주를 순서대로 호명: {off}")
+    sc5 = plan(PATHS[:5], dict(zip(PATHS[:5], TAGS[:5])), BEAT + ["x"], tempo="beat")
+    check(len(sc5) == 5 and all(not s.get("media_group") or len(s["media_group"]) == 1 for s in sc5), f"사진 5장 이하는 비트형도 1장 = 1문장 ({len(sc5)})")
+    scb10 = plan(p10, t10, BEAT, tempo="beat")
+    check(len(scb10) == 5 and sum(len(s.get("media_group") or [0]) for s in scb10) == 10, f"비트형: 사진 10장도 5문장에 전부 사용 ({[len(s.get('media_group') or [0]) for s in scb10]})")
 finally:
     llm.script_llm_ready = _ready
     llm.repair_scene_lines = _rep
@@ -137,8 +170,14 @@ for i in range(8):
     shutil.copy(fixture("photo_pool.jpg" if i % 2 == 0 else "photo_room.jpg"), dst)
     ups.append(dst)
 spec = pl.JobSpec(mode="owner", name=NAME, usp="눈꽃맥주 골뱅이소면", business_type="food", search_keyword=NAME, address="경기 가평군", media_paths=ups, mock=True, keep_photo_order=True)
+spec.tempo = "rap"
 scenes = pl.plan(spec, job)
 check(len(scenes) == 8 and all(not (s.get("extra_media")) for s in scenes) and [s.get("image_path") for s in scenes] == ups,
       f"렌더 입력: 씬 8개가 업로드 사진 8장과 1:1 (추가 컷 없음) — 각 사진은 자기 문장 구간 동안만 나옴")
+
+spec.tempo = "beat"
+sb = pl.plan(spec, job)
+check(len(sb) == 5 and sum(1 + len(s.get("extra_media") or []) for s in sb) == 8 and max(len(s.get("extra_media") or []) for s in sb) >= 1,
+      f"비트형 렌더 입력: 사진 8장이 5문장에 모두 배정, 일부 문장은 컷 여러 장: {[1 + len(s.get('extra_media') or []) for s in sb]}")
 
 finish(fails)

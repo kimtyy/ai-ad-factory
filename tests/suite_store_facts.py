@@ -98,7 +98,7 @@ spec = pl.JobSpec(mode="owner", name="효정명인갈비", usp="참숯 갈비, �
 sc = pl.plan(spec, J)
 rt._overrides = {}
 p = sent.get("prompt", "")
-check(len(sc) == 8 and "눈꽃버섯 갈비탕" in p and "격자 칼집" in p and "사진 1번" in p and "사진 8번" in p and "문장 4 구간 화면" in p
+check(len(sc) == 5 and "눈꽃버섯 갈비탕" in p and "격자 칼집" in p and "사진 1번" in p and "사진 8번" in p and "문장 4 구간 화면" in p
       and "참숯 불판 위 노릇한 갈비" in p and sc[0].get("photo_tags"),
       "기획: 자동 사진 태깅 → 팩트·사진 번호별 피사체가 프롬프트에 들어가고 문장 번호와 맞물림, 화면 확인용 photo_tags 저장")
 # ---------------------------------------------------------------- 상호명은 마지막 CTA에서만: LLM이 1~4문장에 상호를 써도 제거, 가짜 메뉴는 안전 문구로
@@ -132,10 +132,10 @@ check(ordr[:3] == [2, 4, 6] and ordr[-1] == 0 and sorted(ordr) == list(range(8))
 
 def claude_concept(contents, system, temperature, max_tokens):
     return json.dumps({"core_concept": "직접 재운 수제양념갈비", "story": "...", "scenes": [{"scene_index": i + 1, "role": "exterior", "hook_title": "수제 양념 갈비" if i == 0 else "",
-                       "voiceover": ["똑같은 돼지갈비인데 왜 굽자마자 타버릴까요?", "단맛만 강한 양념은 겉면만 태워요.", "직접 재운 수제 양념이 칼집 속까지 스며들어요.",
-                                     "마지막 한 점까지 은은한 감칠맛이 돌아요.", "시원한 물냉면을 곁들이면 한 끼가 든든해요.", "상차림 반찬도 넉넉하게 나와요.",
-                                     "통버섯 구이까지 곁들여 마무리해요.", "제대로 재운 수제양념갈비 찾으신다면 지금 저장하고 가평 효정명인갈비를 검색해 보세요!"][i]}
-                      for i in range(8)]}, ensure_ascii=False)
+                       "voiceover": ["똑같은 돼지갈비인데 왜 굽자마자 타버릴까요?", "직접 재운 수제 양념이 칼집 속까지 스며들어요.",
+                                     "마지막 한 점까지 은은한 감칠맛이 돌아요.", "시원한 물냉면을 곁들이면 한 끼가 든든해요.",
+                                     "제대로 재운 수제양념갈비 찾으신다면 지금 저장하고 가평 효정명인갈비를 검색해 보세요!"][i]}
+                      for i in range(5)]}, ensure_ascii=False)
 
 
 rt._overrides = {"claude": claude_concept}
@@ -143,8 +143,8 @@ sc_c = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food
                              store_facts={"special_menus": [], "review_nouns": [], "location_context": ""}, photo_tags=tags8)
 rt._overrides = {}
 check(sc_c[-1]["voiceover"].startswith("제대로 재운 수제양념갈비 찾으신다면") and sc_c[-1]["voiceover"].endswith("지금 저장하고 가평 효정명인갈비를 검색해 보세요!")
-      and sc_c[0].get("photo_reordered") and len(sc_c) == 8 and [s["media_group"] for s in sc_c] == [[2], [4], [6], [1], [3], [5], [7], [0]],
-      f"1컨셉 + 사진 8장 = 문장 8개: 마지막 문장은 1메시지 요약 + 저장 CTA를 채택, 사진은 컨셉 순서로 재배치(올린 순서 번호로 기록, 문장마다 사진 1장): {[s.get('media_group') for s in sc_c]}")
+      and sc_c[0].get("photo_reordered") and len(sc_c) == 5 and sorted(k for s in sc_c for k in s["media_group"]) == list(range(8)) and sc_c[-1]["media_group"] == [0],
+      f"1컨셉 + 사진 8장 = 비트형 5문장: 마지막 문장은 1메시지 요약 + 저장 CTA를 채택, 사진 8장 모두 5문장에 배정(올린 순서 번호로 기록, 외관은 CTA 컷): {[s.get('media_group') for s in sc_c]}")
 # ---------------------------------------------------------------- 5단계 버킷 정렬: 무작위 업로드도 1→5 순서, 외관은 마지막 컷에만 (여분의 외관은 제외)
 from core.planners.owner import media_groups
 bk = {ups[0]: 5, ups[1]: 4, ups[2]: 1, ups[3]: 3, ups[4]: 2, ups[5]: 1, ups[6]: 4, ups[7]: 5}          # 외관이 첫 번째로 올라온 무작위 순서 + 외관 2장
@@ -153,7 +153,7 @@ tg = {ups[0]: "가게 외관 간판", ups[1]: "물냉면", ups[2]: "노릇하게
 o5 = order_media_for_concept(ups, tg, "수제 양념 갈비", bk)
 check([bk[ups[k]] for k in o5] == [1, 1, 2, 3, 4, 4, 5] and len(o5) == 7 and o5[-1] == 0 and 7 not in o5 and len(media_groups(len(o5))) == 5,
       f"5단계 버킷 정렬: 외관이 먼저 올라와도 1→5단계 순서, 외관은 마지막 컷 한 장만(남는 외관 제외), 사진 7장 → 5문장 {[bk[ups[k]] for k in o5]}")
-sc_b = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, region="경기 가평군", core_concept="수제 양념 갈비",
+sc_b = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, tempo="rap", region="경기 가평군", core_concept="수제 양념 갈비",
                              photo_tags=tg, photo_buckets=bk)
 check(len(sc_b) == 7 and sc_b[0]["media_group"] == [o5[0]] and sc_b[-1]["media_group"] == [0] and sc_b[0].get("photo_reordered"),
       "기획: 첫 문장(0~3초) 컷은 버킷 1(먹음직한 고기), 마지막 문장 컷은 가게 외관 (사진 7장 = 문장 7개)")
@@ -221,7 +221,7 @@ check(all(fix_bucket(1, s, r) == 1 for s, r in (("모둠회 한 접시", "ready_
       and fix_bucket(1, "석쇠 위에서 구워지는 삼겹살", "cooking") == 3 and fix_bucket(1, "접시에 담긴 생닭", "") == 2,
       "범용 보정: 회·물회·초밥·육회·생맥주·케이크·샐러드 같은 완성 메뉴는 날것이어도 1번 유지, 가열 전 식재료(생갈비·생삼겹·생닭·생버섯·반죽)만 2번, 조리 중은 3번")
 # ---------------------------------------------------------------- 📌 내가 올린 순서 그대로 유지: AI 정렬·외관 제외·비전 분류 호출 모두 생략
-sc_k = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, region="경기 가평군", core_concept="수제 양념 갈비",
+sc_k = plan_owner_storyboard("효정명인갈비", "수제 양념 갈비", "food", "효정명인갈비", ups, mock=True, tempo="rap", region="경기 가평군", core_concept="수제 양념 갈비",
                              photo_tags=tg, photo_buckets=bk, keep_order=True)
 check(len(sc_k) == 8 and not any("media_group" in s for s in sc_k) and not sc_k[0].get("photo_reordered"),
       "순서 유지: 버킷·태그가 있어도 올린 순서 그대로 (첫 번째 사진이 첫 컷, 외관 사진도 제외하지 않고 8장 모두 사용)")
