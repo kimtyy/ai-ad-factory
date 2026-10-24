@@ -23,7 +23,11 @@ _EDGE_TTS_NEW_WSS_URL = (
     "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
     f"?Ocp-Apim-Subscription-Key={edge_tts.constants.TRUSTED_CLIENT_TOKEN}"
 )
-_EDGE_TTS_DEFAULT_WSS_URL = edge_tts.constants.WSS_URL            # 라이브러리 기본 주소 (edge-tts 7.3.1+에서 정상 동작, 2026-10 확인)
+# 라이브러리 기본 주소를 직접 조립한다 (edge_tts.constants.WSS_URL을 읽으면 이전 실행이 바꿔 둔 값을 기본으로 착각함 — 서버는 코드만 갱신하고 프로세스를 재시작하지 않는다)
+_EDGE_TTS_DEFAULT_WSS_URL = (
+    f"wss://{getattr(edge_tts.constants, 'BASE_URL', 'speech.platform.bing.com/consumer/speech/synthesize/readaloud')}"
+    f"/edge/v1?TrustedClientToken={edge_tts.constants.TRUSTED_CLIENT_TOKEN}"
+)
 
 
 def _use_edge_endpoint(alt: bool):
