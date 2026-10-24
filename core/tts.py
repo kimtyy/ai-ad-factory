@@ -23,8 +23,16 @@ _EDGE_TTS_NEW_WSS_URL = (
     "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
     f"?Ocp-Apim-Subscription-Key={edge_tts.constants.TRUSTED_CLIENT_TOKEN}"
 )
-edge_tts.constants.WSS_URL = _EDGE_TTS_NEW_WSS_URL
-edge_tts.communicate.WSS_URL = _EDGE_TTS_NEW_WSS_URL
+_EDGE_TTS_DEFAULT_WSS_URL = edge_tts.constants.WSS_URL            # 라이브러리 기본 주소 (edge-tts 7.3.1+에서 정상 동작, 2026-10 확인)
+
+
+def _use_edge_endpoint(alt: bool):
+    """기본 주소를 먼저, 실패하면 대체 주소(api.msedgeservices.com)로 번갈아 시도 (마이크로소프트가 어느 쪽을 막아도 다른 쪽으로 합성)"""
+    url = _EDGE_TTS_NEW_WSS_URL if alt else _EDGE_TTS_DEFAULT_WSS_URL
+    edge_tts.constants.WSS_URL = url
+    edge_tts.communicate.WSS_URL = url
+
+
 
 def _safe_parse_rfc2616_date(date: str):
     try:
@@ -453,6 +461,7 @@ def generate_speech(
     last_err = None
     for attempt in range(1, EDGE_ATTEMPTS + 1):
         try:
+            _use_edge_endpoint(alt=(attempt % 2 == 0))
             _run_async_safe(_generate_edge_tts_async(
                 text=cleaned,
                 voice=voice,
