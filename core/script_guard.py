@@ -1206,3 +1206,29 @@ def photographed_menus(official_menus: Iterable[str], photo_text: str) -> List[s
     """공식 메뉴 중 사진 설명에 나오는 것 (대본에 써도 되는 메뉴)"""
     pt = re.sub(r"\s+", "", photo_text or "")
     return [m for m in (official_menus or []) if any(k in pt for k in menu_keywords(m))]
+
+
+# ---------------------------------------------------------------- 조사·어미 호응: '생버섯이 곁들여요'(주어 + 타동사) → '생버섯이 곁들여져요'
+_PASSIVE_FIX = {"곁들여요": "곁들여져요", "곁들입니다": "곁들여집니다", "얹어요": "얹어져요", "더해요": "더해져요", "담아요": "담겨요",
+                "깔아요": "깔려요", "채워요": "채워져요", "입혀요": "입혀져요", "섞어요": "섞여요", "버무려요": "버무려져요"}
+_SUBJ_VERB = re.compile(r"([가-힣]{1,}[이가])(\s+)(" + "|".join(_PASSIVE_FIX) + r")(?=[\s,.!?]|$)")
+
+
+def _is_subject_particle(word: str) -> bool:
+    """'생버섯이'처럼 받침 뒤의 '이' / '소스가'처럼 모음 뒤의 '가'만 주격 조사로 본다 ('오이'·'고기'는 낱말 자체)"""
+    stem, p = word[:-1], word[-1]
+    last = ord(stem[-1]) - 0xAC00
+    if not 0 <= last < 11172:
+        return False
+    has_batchim = last % 28 != 0
+    return (p == "이" and has_batchim) or (p == "가" and not has_batchim)
+
+
+def fix_voice_agreement(text: str) -> str:
+    """주격 조사(~이/가) 뒤에 타동사가 와서 어색한 표현을 자연스러운 어미로 바꿈 (사람 주어('손님이')는 건드리지 않음)"""
+    def rep(m):
+        subj = m.group(1)
+        if subj[:-1].endswith(("손님", "사장", "직원", "고객")) or not _is_subject_particle(subj):
+            return m.group(0)
+        return f"{subj}{m.group(2)}{_PASSIVE_FIX[m.group(3)]}"
+    return _SUBJ_VERB.sub(rep, text or "")

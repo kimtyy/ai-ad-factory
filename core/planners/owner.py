@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from core.script_guard import (photo_subject_issues, VO_HARD_MAX, valid_cta, find_example_copy, find_invented_menu, find_name_leak, complete_sentence, diversify_exclamations, find_promo_tone,
+from core.script_guard import (fix_voice_agreement, photo_subject_issues, VO_HARD_MAX, valid_cta, find_example_copy, find_invented_menu, find_name_leak, complete_sentence, diversify_exclamations, find_promo_tone,
                                 find_banned_style, find_concept_drift,
                                 find_unsupported_claim, is_hook_echo, shorten_line, strip_brochure_words, to_haeyo,
                                 concept_fallback_line, repeated_line_issues)
@@ -548,6 +548,7 @@ def plan_owner_storyboard(
                 text = re.sub(re.escape(business_name.replace(" ", "")), "여기", text.replace(business_name, "여기"))
             text = strip_brochure_words(text)
             text = sanitize_signboard_words(text)
+            text = fix_voice_agreement(text)
             n_cut = len(groups[i]) if i < len(groups) else 1
             hard_max = 26 if rap else max(VO_HARD_MAX, 12 * n_cut + 8)
             if len(text) > hard_max:
@@ -922,7 +923,8 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
                       f"줄 i는 그 순간 화면에 나오는 사진 속 피사체를 직접 말해야 해요. 다른 사진 이야기나 사진에 없는 메뉴는 금지입니다.")
         length_rule = ("- 각 voiceover는 공백 포함 10~20자(최대 24자)의 랩처럼 리듬 있는 숏카피. '~해요' 완결형일 필요 없이 '~!', '~,'로 끊어도 되지만 "
                        "비문·어색한 낱말 결합은 금지입니다 (음식에 '한 잔'을 붙이는 '건어물 한 잔', 깨진 낱말 '개와' 같은 표현 금지). 문법이 맞는 말만 쓰세요.")
-        readable_rule = "- [길이] 줄마다 2초 안에 읽히게 20자 안팎. 늘어지는 서술어는 빼고 핵심 명사 + 짧은 동사로."
+        readable_rule = ("- [길이] 줄마다 2초 안에 읽히게 20자 안팎. 늘어지는 서술어는 빼고 핵심 명사 + 짧은 동사로.\n"
+                         "- [조사·어미 호응] '~이/가'로 시작한 주어 뒤에는 타동사를 쓰지 마세요. '생버섯이 곁들여요'(X) → '생버섯이 곁들여져요'(O) 또는 '생버섯까지 곁들여요'(O).")
         structure_rule = (f"- [랩형 구조 (사진 {n}장 = 숏카피 {n}줄)]: 1줄=후킹(상호 없이, 방문 맥락 + 1번 사진 피사체) → 중간 줄=각 사진의 피사체 한 줄씩(맛·식감·온도 한 가지) → "
                           f"마지막 줄=상호명으로 바로 오세요 CTA ('{rap_cta(search_keyword, context_kind)}' 형태, 저장 유도·'검색해 보세요'는 쓰지 않음).")
         last_rule = f"* 마지막 줄은 정확히 '{rap_cta(search_keyword, context_kind)}' 형태로 상호명을 말하며 끝내세요 (상호명·지역은 이 줄에서만 공개)."

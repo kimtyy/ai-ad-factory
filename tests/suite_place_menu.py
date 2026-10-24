@@ -221,4 +221,30 @@ _o.environ.pop("ANTHROPIC_MODEL_VISION", None)
 check(rt.tier_for_purpose("사진 피사체 태깅") == "vision" and base == rt.claude_model_for("backend")[0] and v_model == "claude-sonnet-5-5" and s_model != v_model,
       "사진 판독만 ANTHROPIC_MODEL_VISION으로 모델을 바꿀 수 있고(미설정이면 기존 모델), 대본 모델은 그대로")
 
+# ---------------------------------------------------------------- 9. 조사·어미 호응 ('생버섯이 곁들여요' → '생버섯이 곁들여져요')
+from core.script_guard import fix_voice_agreement
+check(fix_voice_agreement("윤기 도는 양념갈비에 생버섯이 곁들여요!") == "윤기 도는 양념갈비에 생버섯이 곁들여져요!" and fix_voice_agreement("생버섯까지 곁들여요!") == "생버섯까지 곁들여요!"
+      and fix_voice_agreement("오이 곁들여요") == "오이 곁들여요" and fix_voice_agreement("손님이 곁들여요") == "손님이 곁들여요" and fix_voice_agreement("고기 향이 더해요!") == "고기 향이 더해져요!",
+      "주격 조사 뒤 타동사 교정 (목적어형·사람 주어·'오이' 같은 낱말은 그대로)")
+_gj2, _ready2, _rep2, _pv3 = llm.generate_json, llm.script_llm_ready, llm.repair_scene_lines, ow._media_preview_image
+
+
+def fake_agree(contents, system, **kw):
+    lines = ["가족 저녁 메뉴 고민이라면?", "윤기 도는 양념갈비에 생버섯이 곁들여요!", "시원한 물냉면으로 입가심!"]
+    return ({"core_concept": "c", "story": "s", "scenes": [{"scene_index": i + 1, "role": "signature", "hook_title": "고민?" if i == 0 else "", "voiceover": t}
+                                                     for i, t in enumerate(lines + ["오늘 바로 오세요!"])]}, "claude")
+
+
+ow._media_preview_image = lambda p, d=None: Image.new("RGB", (64, 64), (120, 90, 60))
+llm.script_llm_ready = lambda k=None: True
+llm.repair_scene_lines = lambda d, c, s_, rr, **kw: (d, [])
+llm.generate_json = fake_agree
+try:
+    ps = [f"/m/{i}.jpg" for i in range(4)]
+    sca = ow.plan_owner_storyboard("효정명인갈비", "숯불 양념 갈비", "food", "효정명인갈비", ps, api_key="k", mock=False, region="경기 가평군", core_concept="c", keep_order=True,
+                                   photo_tags=dict(zip(ps, ["양념 돼지갈비", "양념갈비와 생버섯", "물냉면", "매장 외관"])))
+finally:
+    llm.generate_json, llm.script_llm_ready, llm.repair_scene_lines, ow._media_preview_image = _gj2, _ready2, _rep2, _pv3
+check(len(sca) == 4 and "곁들여져요" in sca[1]["voiceover"] and "생버섯이 곁들여요" not in sca[1]["voiceover"], f"대본 생성 단계에서도 호응 교정: {sca[1]['voiceover']}")
+
 finish(fails)

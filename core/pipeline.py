@@ -67,7 +67,7 @@ class JobSpec:
     # 공통
     voice_actor: str = "female_20s"
     audio_mode: str = "voice_and_sub"
-    tempo: str = "beat"                          # 매장 대본 호흡: 'beat' 비트 리듬형(5문장, 18초) / 'rap' 1컷 1카피 랩형(사진 N장 = 2초 숏카피 N줄)
+    tempo: str = "rap"                           # 매장 대본 호흡: 'rap' 1컷 1카피(기본, 사진 N장 = 2초 숏카피 N줄) / 'beat' 비트 리듬형(5문장, 안주 컷 고속 전환 — 화면에서는 안 씀)
     caption_font: str = ""                       # 자막 폰트 프리셋 'impact'/'serif'/'pop' (비우면 모드 기본)
     bgm_path: Optional[str] = None
     api_key: Optional[str] = None

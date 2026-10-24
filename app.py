@@ -2246,18 +2246,10 @@ with edit_box:
 
     generate_rap_btn = False
     if is_owner_mode:
-        st.caption("사진을 6~10장 올려도 18초 쇼츠 템포를 지켜요. 두 스타일을 각각 뽑아 비교해 보세요.")
-        _b1, _b2 = st.columns(2)
-        with _b1:
-            generate_plan_btn = st.button("🎵 비트 리듬형 (18초) 대본 만들기 — 추천", use_container_width=True, type="primary", key="generate_plan_btn",
-                                          help="5문장 호흡. 안주 소개 구간에서 사진이 1.2~1.5초 간격으로 빠르게 넘어가요.")
-        with _b2:
-            generate_rap_btn = st.button("⚡ 1컷 1카피 랩형 (18초) 대본 만들기", use_container_width=True, key="generate_rap_btn",
-                                         help="사진 N장 = 2초 숏카피 N줄. 컷마다 그 사진에 딱 맞는 한 줄.")
-        if generate_plan_btn:
-            st.session_state.owner_tempo = "beat"
-        elif generate_rap_btn:
-            st.session_state.owner_tempo = "rap"
+        st.caption("올린 사진 한 장마다 짧은 한 줄 카피가 1:1로 붙어요 (사진 N장 = 2초 카피 N줄).")
+        generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary", key="generate_plan_btn",
+                                      help="사진 1장 = 문장 1개. 문장마다 그 사진에 찍힌 메뉴·장면만 말해요.")
+        st.session_state.owner_tempo = "rap"
         col_plan_desc = st.container()
     else:
         col_plan_btn, col_plan_desc = st.columns([1.2, 2.8])
@@ -2303,7 +2295,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
         photo_buckets=dict(ss.get("photo_buckets") or {}) if is_owner_mode else {},
         keep_photo_order=bool(ss.get("keep_photo_order")) if is_owner_mode else False,
-        tempo=(ss.get("owner_tempo") or "beat") if is_owner_mode else "beat",
+        tempo="rap",
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
         api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)

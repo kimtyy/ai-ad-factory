@@ -94,7 +94,7 @@ for i in range(8):
     shutil.copy(fixture("photo_pool.jpg" if i % 2 == 0 else "photo_room.jpg"), dst)
     ups.append(dst)
 spec = pl.JobSpec(mode="owner", name="효정명인갈비", usp="참숯 갈비, 눈꽃버섯 갈비탕", business_type="food", search_keyword="효정명인갈비",
-                  address="경기 가평군 설악면", media_paths=ups, mock=False, api_key="g", store_facts=facts)
+                  address="경기 가평군 설악면", media_paths=ups, mock=False, api_key="g", store_facts=facts, tempo="beat")
 sc = pl.plan(spec, J)
 rt._overrides = {}
 p = sent.get("prompt", "")
