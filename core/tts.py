@@ -427,7 +427,8 @@ def generate_speech(
     rate: str = DEFAULT_RATE,
     pitch: str = DEFAULT_PITCH,
     force: bool = False,
-    keep_commas: bool = False
+    keep_commas: bool = False,
+    engine: str = "edge",
 ) -> str:
     """
     Edge-TTS를 이용해 고품질 한국어 나레이션 오디오 파일(MP3)을 생성합니다.
@@ -461,6 +462,16 @@ def generate_speech(
     print(f"[TTS] [보이스 매핑] Edge-TTS Voice: '{voice}' [{gender_label}]")
     print(f"[TTS] [오디오 설정] Rate={rate}, Pitch={pitch} -> 대상 파일: {output_path}")
     print(f"[TTS] ========================================================")
+
+    if engine == "gtts":
+        # 백업 성우: 마이크로소프트가 막혔을 때 모든 씬을 같은 엔진(gTTS)으로 만들기 위해 Edge를 건너뛰고 바로 합성 (목소리 일관성 유지)
+        try:
+            from gtts import gTTS
+            gTTS(text=cleaned, lang="ko", slow=False).save(output_path)
+            logger.info(f"[gTTS 백업 성우] {output_path}")
+            return output_path
+        except Exception as ge:
+            raise RuntimeError(f"백업 성우(gTTS)도 실패: {ge}")
 
     last_err = None
     for attempt in range(1, EDGE_ATTEMPTS + 1):

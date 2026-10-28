@@ -71,7 +71,7 @@ TTS_KEEP_TAIL_SEC = 0.12
 TTS_MIN_SEC_PER_CHAR = 0.06
 TTS_RETRIES = 2
 # 씬 음성 동시 생성 수: 너무 많은 동시 요청 시 429 발생 방지를 위해 2개로 안정화
-TTS_WORKERS = 2
+TTS_WORKERS = max(1, int(os.getenv("TTS_WORKERS", "2") or 2))          # 단독 매장 앱은 1 (씬을 하나씩 순차 호출해 마이크로소프트 차단·동시 접속 오류를 줄임)
 
 
 def tts_too_short(text: str, seconds: Optional[float]) -> bool:
@@ -330,11 +330,12 @@ class AssetGenerator:
         if self.audio_mode != "silent" and not force:
             try:
                 with open(out_path + ".voice.json", "r", encoding="utf-8") as cache_file:
-                    cached_actor = json.load(cache_file).get("voice_actor")
+                    _meta = json.load(cache_file)
+                    cached_actor, cached_engine = _meta.get("voice_actor"), _meta.get("engine", "edge")
             except (OSError, ValueError, AttributeError):
-                cached_actor = None
-            if cached_actor != self.voice_actor:
-                force = True
+                cached_actor, cached_engine = None, "edge"
+            if cached_actor != self.voice_actor or cached_engine != getattr(self, "tts_engine", "edge"):
+                force = True                        # 성우나 합성 엔진이 다르면 다시 만든다 (한 영상에 두 목소리가 섞이지 않게)
 
         if self.audio_mode == "silent":
             # 나레이션 없음(TTS 호출 없음): 소리는 없지만 자막 전환 시점은 동일하게 유지. 매번 새로 만듦(길이 규칙이 바뀌어도 낡은 캐시를 쓰지 않게)
@@ -384,7 +385,7 @@ class AssetGenerator:
         metadata_path = audio_path + ".voice.json"
         temp_path = metadata_path + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as cache_file:
-            json.dump({"voice_actor": self.voice_actor}, cache_file)
+            json.dump({"voice_actor": self.voice_actor, "engine": getattr(self, "tts_engine", "edge")}, cache_file)
         os.replace(temp_path, metadata_path)
 
     def generate_voices(self, scenes: List[Dict[str, Any]], force: bool = False,
@@ -393,8 +394,20 @@ class AssetGenerator:
         여러 씬 음성을 TTS_WORKERS개씩 동시에 생성 → scenes와 같은 순서의 경로. 씬마다 파일·scene['hook_sec']가 따로라 안전.
         on_done(완료 수, 전체 수): 진행률 표시용 (호출한 스레드에서 실행)
         """
+        try:
+            return self._generate_voices_once(scenes, force, on_done)
+        except RuntimeError as e:
+            # 백업 성우: Edge-TTS가 어느 한 씬이라도 끝내 실패하면 '전 씬'을 백업 엔진(gTTS)으로 다시 만든다. 한 영상 안에서 목소리가 섞이는 것보다 낫다.
+            if os.getenv("TTS_BACKUP_ALL", "").strip() != "1" or getattr(self, "tts_engine", "edge") != "edge" or self.mock or self.audio_mode == "silent":
+                raise
+            logger.warning(f"Edge-TTS 실패 → 전 씬 백업 성우(gTTS)로 일괄 전환: {str(e)[:160]}")
+            self.tts_engine = "gtts"
+            return self._generate_voices_once(scenes, True, on_done)
+
+    def _generate_voices_once(self, scenes: List[Dict[str, Any]], force: bool = False,
+                              on_done: Optional[Any] = None) -> List[str]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        if len(scenes) <= 1 or self.mock or self.audio_mode == "silent":
+        if len(scenes) <= 1 or self.mock or self.audio_mode == "silent" or TTS_WORKERS <= 1:         # 1개씩 순차: 첫 실패에서 바로 멈춤
             out = []
             for i, sc in enumerate(scenes, 1):
                 out.append(self.generate_voice(sc, force=force))
@@ -405,7 +418,11 @@ class AssetGenerator:
         with ThreadPoolExecutor(max_workers=min(TTS_WORKERS, len(scenes))) as ex:
             futs = {ex.submit(self.generate_voice, sc, force): i for i, sc in enumerate(scenes)}
             for done, fut in enumerate(as_completed(futs), 1):
-                results[futs[fut]] = fut.result()
+                try:
+                    results[futs[fut]] = fut.result()
+                except Exception:
+                    ex.shutdown(wait=False, cancel_futures=True)      # 한 씬이라도 실패하면 남은 씬은 부르지 않음 (불필요한 호출·대기 방지)
+                    raise
                 if on_done:
                     on_done(done, len(scenes))
         logger.info(f"씬 음성 {len(scenes)}개 동시 생성 완료 (최대 {TTS_WORKERS}개씩)")
@@ -416,7 +433,7 @@ class AssetGenerator:
         from core.tts import generate_speech
         for attempt in range(TTS_RETRIES + 1):
             generate_speech(text=text, output_path=path, voice_actor=self.voice_actor, rate=rate, pitch=pitch, force=True,
-                            keep_commas=keep_commas)
+                            keep_commas=keep_commas, engine=getattr(self, "tts_engine", "edge"))
             sec = _audio_seconds(path)
             if not tts_too_short(text, sec):
                 return path

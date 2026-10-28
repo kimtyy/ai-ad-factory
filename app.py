@@ -116,9 +116,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("ad_factory.app")
 
 # Streamlit 와이드 반응형 레이아웃 설정
+# 🏪 단독 매장 앱(app_store.py가 STORE_APP=1을 켜고 이 파일을 실행): 매장 홍보 1~5단계만, 좌측 바는 [처음으로]·[설정]만
+STORE_APP = os.getenv("STORE_APP", "").strip() == "1"
 st.set_page_config(
-    page_title="AI 광고 공장 - 숏폼 자동 제작 대시보드",
-    page_icon="🎬",
+    page_title="샵스토리 - AI 사장님 매장 홍보 영상 제작소" if STORE_APP else "AI 광고 공장 - 숏폼 자동 제작 대시보드",
+    page_icon="🏪" if STORE_APP else "🎬",
     layout="wide",
     initial_sidebar_state="auto"  # 데스크톱은 펼침, 모바일은 접힘 (모바일에서 펼치면 본문을 덮음)
 )
@@ -439,6 +441,8 @@ try:
 except Exception:
     _demo_q = False
 st.session_state.setdefault("demo_mode", os.getenv("DEMO_MODE", "").strip().lower() in ("1", "true", "on", "yes") or _demo_q)
+if STORE_APP:
+    st.session_state.demo_mode = True
 DEMO_MODE = bool(st.session_state.get("demo_mode"))
 MODES = {"🏠 사장님 매장 홍보": "owner", "🧳 숙소 제휴 쇼츠": "travel", "🛒 쇼핑 제휴 쇼츠": "commerce",
          "📚 시골책방 도서 큐레이션": "book", "📹 촬영 영상 원본 직가공": "video_overlay"}
@@ -647,6 +651,8 @@ NAV_CSS = """
 
 
 def _nav_items():
+    if STORE_APP:
+        return [("home", "🏠 처음으로 (초기화)", "🏠 처음으로")]
     return [it for it in NAV_ITEMS if it[0] in ("home", "owner")] if DEMO_MODE else NAV_ITEMS
 
 
@@ -663,6 +669,13 @@ def _nav_go(view: str):
     ss = st.session_state
     if view == "home":
         start_new_job()
+        if STORE_APP:
+            ss.show_home = False                         # 단독 매장 앱에는 모드 선택 홈이 없다: 처음으로 = 입력·사진·결과를 모두 비운 새 작업
+            reset_mode_session_state("owner", "owner")
+            for _k in ("official_menu_text", "official_menu_meta", "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "engine_info",
+                       "store_photo_candidates", "web_photo_paths", "place_results", "keep_photo_order", "use_unconfirmed_facts"):
+                ss.pop(_k, None)
+            return
         ss.show_home = True
         ss.page_switch = "make"
         return
@@ -750,8 +763,11 @@ st.markdown(NAV_CSS, unsafe_allow_html=True)
 with st.sidebar:
     _render_nav("side")
 _render_nav("bottom")
+if STORE_APP:
+    st.title("🏪 샵스토리 - AI 사장님 매장 홍보 영상 제작소")
+    st.caption("가게 이름만 넣으면 메뉴판을 가져와, 사진 한 장마다 한 줄 카피를 붙인 16~18초 쇼츠를 만들어요.")
 page = st.session_state.get("page_switch", "make")
-if st.session_state.get("show_home"):
+if st.session_state.get("show_home") and not STORE_APP:
     _render_home()
     st.stop()
 if page == "radar":
@@ -1757,6 +1773,7 @@ if is_owner_mode:
     with _oh1:
         st.markdown("### [1단계] 🏢 매장 정보 & 사진·영상 준비")
     with _oh2:
+      if not STORE_APP:
         st.toggle("🎯 점주 시연 모드", key="demo_mode", help="소상공인 점주 미팅·강의 시연용: 매장 홍보만 보이는 단일 목적 앱으로 바꿔요. 항상 켜려면 환경변수 DEMO_MODE=1 또는 주소 뒤 ?demo=1")
 elif is_travel_mode:
     st.markdown("### [1단계] 🏨 숙소 정보 & 사진·영상 준비")
@@ -2858,6 +2875,14 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             st.markdown("**📝 첫 댓글 패키지 — 네이버 쇼핑커넥트 링크 + 공정위 대가성 문구 + 사진 출처 문구**")
             st.code(_tx["comment"], language=None)
             copy_button(_tx["comment"], "📋 첫 댓글 패키지 원클릭 복사", key="copy_shop_comment")
+        elif is_owner_mode:
+            from core.shorts_meta import build_first_comment as _bfc
+            _owner_comment = _bfc("owner", "", None, search_keyword=owner_search_kw, business_type=business_type, usp=usp_desc,
+                                  core_concept=st.session_state.get("selected_core_concept", ""), address=st.session_state.get("owner_address", "") or "")
+            if _owner_comment.strip():
+                st.markdown("**💬 첫 댓글 패키지** (매장 위치·네이버 검색 안내) — 업로드 후 첫 댓글로 달고 고정하세요")
+                st.code(_owner_comment, language=None)
+                copy_button(_owner_comment, "📋 첫 댓글 원클릭 복사", key="copy_owner_comment")
         elif is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
