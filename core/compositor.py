@@ -884,7 +884,7 @@ class AdCompositor:
         mode = manifest[0].get("mode", "commerce") if manifest else "commerce"
         policy = get_mode_policy(mode)
         xf = getattr(self, "xfade", XFADE_SEC)
-        durs = [max(policy.min_scene_sec, a + (1.0 if i == len(a_durs) - 1 else policy.tail_sec + xf) + float(manifest[i].get("hold_sec") or 0))
+        durs = [max(policy.min_scene_sec, float(manifest[i].get("min_sec") or 0), a + (1.0 if i == len(a_durs) - 1 else policy.tail_sec + xf) + float(manifest[i].get("hold_sec") or 0))
                 for i, a in enumerate(a_durs)]
         starts, _ = build_timeline(durs, xf)
         intervals = bgm_mod.narration_intervals(zip(starts, a_durs)) if narration else []
@@ -959,7 +959,7 @@ class AdCompositor:
                 policy = get_mode_policy(mode)
                 tail_margin = (1.0 if is_last_scene else policy.tail_sec + XFADE) + float(item.get("hold_sec") or 0)
                 scene_target_duration = audio_duration + tail_margin
-                scene_target_duration = max(policy.min_scene_sec, scene_target_duration)
+                scene_target_duration = max(policy.min_scene_sec, scene_target_duration, float(item.get("min_sec") or 0))       # 실제 촬영 영상 컷은 그 길이만큼 끝까지
                 logger.info(f"씬 {scene_num} (마지막={is_last_scene}): 오디오 {audio_duration:.2f}초 + 테일 마진 {tail_margin:.2f}초 -> 비디오 목표 재생 시간: {scene_target_duration:.2f}초")
 
                 # 3. 비디오 로드 및 목표 재생 시간에 맞춤

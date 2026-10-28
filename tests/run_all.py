@@ -35,6 +35,7 @@ SUITES = [
     ("suite_app_longform.py", "Streamlit 롱폼 하이라이트 화면: 입력 검증·백그라운드 분석 진행률·후보 카드(썸네일·트랙·점수·경고)·렌더·오류 안내·화면 이동 후 유지", True),
     ("suite_longform_fixes.py", "롱폼 실영상 피드백: 시작/끝 장면 전환 잔상 제거(컷 가드·J-cut 홀드)·원본 비율 유지 레이아웃/자막 위치·TTS 영문 약어 발음", False),
     ("suite_stay_pipeline.py", "숙소 제휴 5단계 전자동: 데이터랩+지역·블로그 TOP5·여기어때 매칭(403 폴백)·1인 체감가·3-2-2 정렬·5문장 대본·제휴 링크·고정 댓글·원클릭 화면 흐름", False),
+    ("suite_store_video.py", "매장 영상 처리: 단일 영상 실제 길이 100% 맞춤(4~8문장) + 사진·영상 혼합 1에셋 1컷 (기획·렌더 길이)", True),
     ("suite_store_app.py", "단독 매장 앱(app_store.py): 1~5단계만·좌측 바 처음으로/설정·처음으로 초기화 + 음성 순차 호출·전 씬 백업 성우(gTTS)", False),
     ("suite_place_menu.py", "네이버 플레이스 공식 메뉴판 수집 + '사진에 없는 메뉴는 대본·컨셉 금지' 가드 + 사진 판별 시 공식 메뉴 대조", False),
     ("suite_photo_script_sync.py", "컨셉·대본 사진 1:1: 업종 현실 맥락(맥주집 금지어·방문 맥락)·확정 사진 전체 컨셉 제안·사진 N장=문장 N개·문장마다 그 사진 피사체·불일치 교체", False),
@@ -88,7 +89,7 @@ SUITES = [
 # 모드별 쾌속 테스트: 수정한 모드의 스위트 + 전 모드가 공유하는 코어 스위트만 (2~3분). 전체 회귀는 큰 구조 변경·배포 전 점검용
 CORE_QUICK = ["suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py", "suite_caption_engine.py"]
 MODE_SUITES = {
-    "owner": ["suite_store_app.py", "suite_place_menu.py", "suite_photo_script_sync.py", "suite_ux_flow.py", "suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
+    "owner": ["suite_store_video.py", "suite_store_app.py", "suite_place_menu.py", "suite_photo_script_sync.py", "suite_ux_flow.py", "suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
     "stay": ["suite_ux_flow.py", "suite_stay_pipeline.py", "suite_audio_fonts.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
     "commerce": ["suite_ux_flow.py", "suite_commerce.py", "suite_coupang.py", "suite_naver_shop.py"],
     "book": ["suite_book_info.py", "suite_book_reflect.py"],

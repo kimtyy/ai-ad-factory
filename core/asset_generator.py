@@ -872,7 +872,7 @@ class AssetGenerator:
         """업로드 영상을 씬 길이에 맞춰 트림/정규화(1080x1920, 24fps CFR, 무음)하여 Ken Burns 클립 자리에 배치"""
         scene_num = int(scene.get("scene_index") or scene.get("scene_number", 1))
         # Ken Burns와 동일하게 나레이션 + 테일 마진을 덮는 길이로 생성 (compositor가 오디오 길이에 맞춰 컷)
-        duration_sec = max(float(scene.get("duration_sec", 3.0)) + 2.0, 5.0)
+        duration_sec = max(float(scene.get("duration_sec", 3.0)) + 2.0, 5.0, float(scene.get("min_sec") or 0) + 1.5)
         from core.mode_policy import get_mode_policy
         fg_cy = float(get_mode_policy(self.mode).landscape_fg_center_y)          # 가로 영상은 위쪽에 배치해 하단 자막 자리 확보 (매장 0.43)
         signature = {

@@ -110,7 +110,7 @@ check(fetch and fetch[0].label == "🏪 가게 정보 가져오기" and not [b f
 check(any(t.key == "owner_name" for t in at.text_input) and any(t.key == "owner_usp" for t in at.text_input), "가게 정보(상호·대표 메뉴·특장점) 입력칸이 바로 노출")
 check(any(t.key == "official_menu_text" and "공식 메뉴판" in t.label for t in at.text_area), "1단계에 📋 네이버 플레이스 공식 메뉴판 편집칸 노출")
 check(any(r.key == "script_style_radio" for r in at.radio), "2단계에 화자 시점 (좌측 바에서 이동)")
-check(side(at, "⏱️ 영상 길이") is not None and any("대본 만들기" in b.label for b in at.button), "3단계에 영상 길이 + 대본 만들기 버튼")
+check(side(at, "⏱️ 영상 길이") is None and any("⏱️" in c.value for c in at.caption) and any("대본 만들기" in b.label for b in at.button), "매장 3단계: 길이는 드롭다운이 아니라 올린 사진·영상 기준 자동 안내 + 대본 만들기 버튼")
 _lbl = [b.label for b in at.button]
 check("🚀 선택된 컨셉으로 대본 만들기" in _lbl and not any(l.startswith(("🎵", "⚡")) for l in _lbl),
       "매장 3단계: [🚀 선택된 컨셉으로 대본 만들기] 버튼 하나 (1컷 1카피 1:1 단일화)")
@@ -129,7 +129,7 @@ for mode in ("owner", "travel", "commerce", "book"):
           f"{mode}: 매장 홍보와 같은 1~4단계 일직선 제목 {[h[:14] for h in heads[:4]]}")
     check(not [e for e in at.expander if "직접 수정하기" in e.label] and "⚡ 정보 불러오기 & 자동 기획 (5줄 대본)" not in labels_ and not [e for e in at.main if getattr(e, "key", None) == "summary_card"],
           f"{mode}: 🛠️ 접이식·자동 기획 버튼·요약 카드 없음")
-    check(side(at, "오디오 모드") is not None and side(at, "자막 폰트") is not None and "오디오 모드" not in in_exp and "자막 폰트" not in in_exp and side(at, "⏱️ 영상 길이") is not None
+    check(side(at, "오디오 모드") is not None and side(at, "자막 폰트") is not None and "오디오 모드" not in in_exp and "자막 폰트" not in in_exp and (side(at, "⏱️ 영상 길이") is not None or mode == "owner")
           and any(r.key == "script_style_radio" for r in at.radio) and any("대본 만들기" in l for l in labels_),
           f"{mode}: 화자 시점·길이·오디오·폰트가 접힘 없이 바로 노출, [대본 만들기] 버튼")
 go(at, "home") if False else None

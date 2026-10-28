@@ -222,6 +222,10 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     if spec.mode not in PIPELINE_MODES:
         raise ValueError(f"'{spec.mode}' 모드 기획은 화면에서만 할 수 있어요 (지원: {', '.join(PIPELINE_MODES)}).")
     apply_style_env(spec)
+    if spec.mode == "owner" and len(spec.media_paths) == 1:
+        from core.media import is_video_file
+        if is_video_file(spec.media_paths[0]):
+            return plan_single_video(spec, job)
     common = dict(api_key=spec.api_key, mock=spec.mock, thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
     if spec.mode == "owner":
         if not spec.name.strip():
@@ -277,6 +281,67 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
                                           num_scenes=spec.num_scenes or DEFAULT_SCENES, product_boxes=spec.product_boxes,
                                           core_concept=spec.core_concept, **common)
     assign_scene_media(spec, job, scenes)
+    if spec.mode == "owner":
+        fit_video_cuts(scenes)
+    return scenes
+
+
+MIXED_VIDEO_CAP_SEC = 10.0        # 사진과 섞어 올린 영상 컷 한 개의 최대 재생 시간
+
+
+def single_video_sentences(length_sec: float) -> int:
+    """영상 하나의 실제 길이 → 쇼츠 문장(컷) 수: 17초까지 4문장, 24초까지 5문장, 더 길면 약 4.5초마다 한 문장 (최대 8)"""
+    if length_sec <= 17.0:
+        return 4
+    if length_sec <= 24.0:
+        return 5
+    return min(8, max(5, round(length_sec / 4.5)))
+
+
+def fit_video_cuts(scenes: List[Dict[str, Any]]) -> None:
+    """사진 + 영상 혼합: 영상 컷은 그 영상의 실제 시간(최대 MIXED_VIDEO_CAP_SEC) 동안 처음부터 재생, 사진 컷은 기존대로 약 2초 줌인"""
+    from core.media import probe_media
+    for sc in scenes:
+        m = sc.get("media")
+        if not (isinstance(m, dict) and m.get("type") == "video" and m.get("path")):
+            continue
+        try:
+            length = float(probe_media(m["path"]).duration)
+        except (ValueError, OSError):
+            continue
+        use = max(1.0, min(length, MIXED_VIDEO_CAP_SEC))
+        m["trim_start"] = 0.0
+        sc["min_sec"] = round(use, 2)
+        sc["duration_sec"] = round(use, 2)
+    return None
+
+
+def plan_single_video(spec: JobSpec, job) -> List[Dict[str, Any]]:
+    """
+    직접 촬영한 영상 1개: 15초로 못박지 않고 실제 길이 전체를 배경으로 쓴다.
+    길이에 맞는 4~8개 구간의 대표 프레임을 뽑아 사진처럼 판독·대본(1컷 1카피)을 만들고, 각 문장은 영상의 해당 구간을 이어서 재생한다.
+    """
+    import dataclasses
+    from core.media import extract_thumbnail, probe_media
+    video = spec.media_paths[0]
+    info = probe_media(video)
+    length = float(info.duration)
+    n = single_video_sentences(length)
+    seg = length / n
+    frames = []
+    for i in range(n):
+        fp = job.asset_path(f"vframe_{i + 1:02d}.jpg")
+        extract_thumbnail(video, fp, at=min(seg * (i + 0.5), max(length - 0.2, 0.0)))
+        frames.append(fp)
+    scenes = plan(dataclasses.replace(spec, media_paths=frames, keep_photo_order=True, tempo="rap"), job)
+    for i, sc in enumerate(scenes[:n]):
+        assign_media_to_scene(job, sc, video, "uploaded")
+        sc["media"]["trim_start"] = round(seg * i, 3)
+        sc["source_path"] = frames[i]                       # 카드 미리보기·사진 설명은 그 구간의 대표 프레임
+        sc["duration_sec"] = round(seg, 2)
+        sc["min_sec"] = round(seg + (0.0 if i == len(scenes[:n]) - 1 else 0.15), 2)       # 디졸브로 겹치는 만큼 보태 영상이 끊기지 않게
+    if scenes:
+        scenes[0]["single_video"] = {"path": video, "length_sec": round(length, 2), "segments": n}
     return scenes
 
 

@@ -179,7 +179,7 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
         policy = get_mode_policy(mode)
         is_last = idx == len(manifest) - 1
         dur = a_dur + (1.0 if is_last else policy.tail_sec + xfade) + float(item.get("hold_sec") or 0)
-        dur = max(policy.min_scene_sec, dur)
+        dur = max(policy.min_scene_sec, dur, float(item.get("min_sec") or 0))        # 실제 촬영 영상 컷은 그 길이만큼 끝까지
         caption = item.get("subtitle") or item.get("caption") or item.get("voiceover", "")
         quote = item.get("quote_card") or ""
         if quote:

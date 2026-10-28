@@ -122,7 +122,7 @@ st.set_page_config(
     page_title="샵스토리 - AI 사장님 매장 홍보 영상 제작소" if STORE_APP else "AI 광고 공장 - 숏폼 자동 제작 대시보드",
     page_icon="🏪" if STORE_APP else "🎬",
     layout="wide",
-    initial_sidebar_state="auto"  # 데스크톱은 펼침, 모바일은 접힘 (모바일에서 펼치면 본문을 덮음)
+    initial_sidebar_state="collapsed" if STORE_APP else "auto"  # 데스크톱은 펼침, 모바일은 접힘 (단독 매장 앱은 사이드바 자체를 쓰지 않음)
 )
 
 # 색상/폰트는 .streamlit/config.toml 테마가 담당. 아래 CSS는 key로 지정한 요소(st-key-*)의 레이아웃만 다룸
@@ -759,13 +759,33 @@ def _render_home():
                 st.button("시작하기", key=f"home_{view}", use_container_width=True, type="primary", on_click=_nav_go, args=(view,))
 
 
-st.markdown(NAV_CSS, unsafe_allow_html=True)
-with st.sidebar:
-    _render_nav("side")
-_render_nav("bottom")
+STORE_CSS = """
+<style>
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"], .st-key-nav_bottom { display: none !important; }
+.st-key-store_header [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: .4rem !important; align-items: center; }
+.st-key-store_header [data-testid="stColumn"] { min-width: 0 !important; }
+.st-key-store_header h1 { font-size: clamp(1.1rem, 3.6vw, 2.1rem) !important; line-height: 1.25 !important; padding: 0 !important; white-space: nowrap; }
+.st-key-store_header button { min-height: 2.6rem; padding: 0 .4rem; white-space: nowrap; font-size: .9rem; }
+@media (max-width: 640px) { .st-key-store_header h1 { white-space: normal; } }
+</style>
+"""
 if STORE_APP:
-    st.title("🏪 샵스토리 - AI 사장님 매장 홍보 영상 제작소")
-    st.caption("가게 이름만 넣으면 메뉴판을 가져와, 사진 한 장마다 한 줄 카피를 붙인 16~18초 쇼츠를 만들어요.")
+    st.markdown(STORE_CSS, unsafe_allow_html=True)
+    with st.container(key="store_header"):
+        _hc1, _hc2, _hc3 = st.columns([5, 1.25, 1.25], vertical_alignment="center")
+        with _hc1:
+            st.title("🏪 샵스토리 - AI 사장님 매장 홍보 영상 제작소")
+        with _hc2:
+            st.button("🏠 처음으로", key="nav_home", use_container_width=True, on_click=_nav_go, args=("home",), help="입력·사진·결과를 모두 지우고 새로 시작해요")
+        with _hc3:
+            if st.button("⚙️ 설정", key="nav_settings", use_container_width=True):
+                _settings_dialog()
+    st.caption("가게 이름만 넣으면 메뉴판을 가져와, 사진·영상 한 컷마다 한 줄 카피를 붙인 쇼츠를 만들어요.")
+else:
+    st.markdown(NAV_CSS, unsafe_allow_html=True)
+    with st.sidebar:
+        _render_nav("side")
+    _render_nav("bottom")
 page = st.session_state.get("page_switch", "make")
 if st.session_state.get("show_home") and not STORE_APP:
     _render_home()
@@ -924,6 +944,27 @@ def _w_pov():
 
 def _w_duration():
     st.selectbox("⏱️ 영상 길이", duration_keys, key="duration_choice", format_func=lambda k: str(DURATION_PRESETS[k]["name"]))
+
+
+def _owner_duration_notice():
+    """매장 3단계: 길이는 고르는 값이 아니라 올린 사진·영상에서 자동으로 정해진다 (사진 1장 = 약 2초 카피, 영상 컷 = 실제 시간)"""
+    from core.media import is_video_file, probe_media
+    from core.pipeline import MIXED_VIDEO_CAP_SEC
+    paths = list(st.session_state.get("uploaded_paths") or [])
+    if not paths:
+        st.caption("⏱️ 사진·영상을 올리면 길이가 자동으로 계산돼요 (사진 1장 = 약 2초 카피 한 줄).")
+        return
+
+    def _len(p):
+        try:
+            return float(probe_media(p).duration)
+        except (ValueError, OSError):
+            return 3.0
+    if len(paths) == 1 and is_video_file(paths[0]):
+        st.info(f"⏱️ 영상 맞춤: 업로드된 영상({_len(paths[0]):.1f}초) 길이에 맞춰 대본이 자동 배분됩니다.")
+        return
+    total = sum(min(_len(p), MIXED_VIDEO_CAP_SEC) if is_video_file(p) else 2.0 for p in paths)
+    st.info(f"⏱️ 자동 계산: 선택된 {len(paths)}개 에셋에 맞춰 약 {int(round(total))}초 쇼츠로 제작됩니다.")
 
 
 def _w_travel_template():
@@ -1754,7 +1795,7 @@ def _run_store_research(name: str, address: str = ""):
 # ==============================================================================
 single_v_detected = bool(st.session_state.uploaded_paths and len(st.session_state.uploaded_paths) == 1 and is_video_file(st.session_state.uploaded_paths[0]))
 
-if single_v_detected and not is_video_overlay_mode:
+if single_v_detected and not is_video_overlay_mode and not STORE_APP:
     with st.container(border=True):
         b_c1, b_c2 = st.columns([3.8, 1.2], vertical_alignment="center")
         with b_c1:
@@ -2126,8 +2167,6 @@ with edit_box:
             st.markdown("**📤 내 폰·PC 사진 및 직접 찍은 영상(JPG/PNG/MP4/MOV) 추가 업로드** — 자동 사진과 섞어 쓰거나 내 사진·영상만으로도 만들 수 있어요")
         render_media_manager()
 
-st.markdown("---")
-
 # ==============================================================================
 # [광고의 핵심] 메인 화면: 시각 팩트 기반 전 업종 AI 떡상 1컨셉 제안 & 선택 엔진
 # ==============================================================================
@@ -2250,14 +2289,15 @@ with edit_box:
             st.session_state.selected_core_concept = str(active_c.get("core_concept") or "")
             st.info(f"🎯 **선택된 코어 컨셉:** {st.session_state.selected_core_concept}\n\n💡 *전략 방향:* {str(active_c.get('description') or '')}")
 
-st.markdown("---")
-
 # ==============================================================================
 # 2단계: AI 대본 기획 및 실시간 편집 (st.data_editor)
 # ==============================================================================
 with edit_box:
     st.markdown("### [3단계] 📝 대본 만들기")
-    _w_duration()
+    if is_owner_mode:
+        _owner_duration_notice()
+    else:
+        _w_duration()
     if is_travel_mode:
         _w_travel_template()
 

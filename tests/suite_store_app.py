@@ -24,11 +24,11 @@ check(not base.exception and len(base.sidebar.button) == 9 and not any("샵스�
 # ---------------------------------------------------------------- 2. 단독 매장 앱(app_store.py)
 at = AppTest.from_file(_os.path.join(ROOT, "app_store.py"), default_timeout=300).run()
 check(not at.exception, f"app_store.py 오류 없이 실행 {[e.value[:80] for e in at.exception]}")
-check(any("샵스토리" in t.value and "AI 사장님 매장 홍보 영상 제작소" in t.value for t in at.title), "헤더: 🏪 샵스토리 - AI 사장님 매장 홍보 영상 제작소")
-side = [b.label for b in at.sidebar.button]
-check(side == ["🏠 처음으로 (초기화)", "⚙️ 설정"], f"좌측 바에는 [처음으로]·[설정]만: {side}")
-bottom = [b.key for b in at.button if b.key and b.key.startswith("navb_")]
-check(bottom == ["navb_home", "navb_settings"], f"스마트폰 하단 바도 2개만: {bottom}")
+check(any("샵스토리" in t.value and "AI 사장님 매장 홍보 영상 제작소" in t.value for t in at.title) and len([c for c in at.columns]) >= 3, "헤더: 🏪 샵스토리 - AI 사장님 매장 홍보 영상 제작소")
+check(len(at.sidebar.button) == 0 and not at.sidebar.markdown, f"왼쪽 사이드바에는 아무것도 렌더하지 않음 (버튼 {len(at.sidebar.button)}개)")
+hdr = {b.key: b.label for b in at.button if b.key in ("nav_home", "nav_settings")}
+check(hdr == {"nav_home": "🏠 처음으로", "nav_settings": "⚙️ 설정"} and not [b for b in at.button if b.key and b.key.startswith("navb_")],
+      f"[처음으로]·[설정]은 헤더 우측 (하단 바 없음): {hdr}")
 check(not [t for t in at.toggle if t.key == "demo_mode"] and not [e for e in at.main if getattr(e, "key", None) in ("mode_switch", "page_switch")],
       "모드 선택·시연 모드 토글 없음")
 heads = [m.value for m in at.markdown if m.value.startswith("###")]
@@ -41,6 +41,32 @@ check(any(r.key == "script_style_radio" for r in at.radio), "2단계: 화자 시
 at.text_input(key="owner_name").set_value("테스트 매장").run()
 at.button(key="nav_home").click().run()
 check(not at.exception and at.text_input(key="owner_name").value == "" and any("샵스토리" in t.value for t in at.title), "[처음으로]: 입력 초기화, 같은 매장 화면 유지")
+check(len([m for m in at.markdown if m.value.strip() == "---"]) == 1, "구분선(---) 연속 출력 없음 (4단계 위 구분선은 1개)")
+check(any("⏱️" in (i.value if hasattr(i, "value") else "") for i in list(at.caption) + list(at.info)) and not any(getattr(sb, "label", "") == "⏱️ 영상 길이" for sb in at.selectbox),
+      "3단계: 길이 드롭다운 대신 자동 길이 안내 (영상 길이 모순 제거)")
+
+# ---------------------------------------------------------------- 길이 안내문: 올린 에셋 기준 (영상 길이 모순 제거)
+VW = tmp("store_notice_")
+vid = _os.path.join(VW, "v.mp4")
+subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=540x960:rate=24:duration=15", "-pix_fmt", "yuv420p", vid], check=True)
+at2 = AppTest.from_file(_os.path.join(ROOT, "app_store.py"), default_timeout=300).run()
+at2.session_state["uploaded_paths"] = [vid]
+at2.run()
+infos = [i.value for i in at2.info]
+check(any("영상 맞춤: 업로드된 영상(15.0초) 길이에 맞춰 대본이 자동 배분됩니다." in v for v in infos), f"단일 영상: {[v for v in infos if '⏱️' in v]}")
+import shutil
+photos = []
+for _i in range(8):
+    _p = _os.path.join(VW, f"p{_i}.jpg")
+    shutil.copy(fixture("photo_pool.jpg"), _p)
+    photos.append(_p)
+at2.session_state["uploaded_paths"] = [photos[0], vid, photos[1]]
+at2.run()
+infos = [i.value for i in at2.info]
+check(any("자동 계산: 선택된 3개 에셋에 맞춰 약 14초 쇼츠로 제작됩니다." in v for v in infos), f"사진+영상 혼합(2+15→10초 상한): {[v for v in infos if '⏱️' in v]}")
+at2.session_state["uploaded_paths"] = photos
+at2.run()
+check(any("선택된 8개 에셋에 맞춰 약 16초" in i.value for i in at2.info), "사진 8장: 약 16초")
 
 # ---------------------------------------------------------------- 3. 음성: 순차 호출 + 실패 시 전 씬 백업 성우(gTTS) 일괄 전환
 import core.asset_generator as ag
