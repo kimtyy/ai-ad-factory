@@ -2859,6 +2859,39 @@ if render_btn:
                 st.error(f"렌더링 도중 에러 발생: {re}")
                 logger.exception("렌더링 실패")
 
+def _render_social_tabs():
+    """5단계 매장 모드: 영상 1개로 4대 숏폼 플랫폼에 올릴 제목·본문·해시태그·댓글을 탭별로 원클릭 복사"""
+    from core.social_packages import build_social_packages, LABELS, PLATFORMS
+    facts = _merged_store_facts()
+    sb = st.session_state.get("storyboard") or []
+    spoken = " ".join(str(x.get("voiceover") or "") for x in sb)
+    menus = [m for m in (facts.get("official_menus") or []) if m and m.replace(" ", "") in spoken.replace(" ", "")]
+    pk = build_social_packages(name=product_name, address=st.session_state.get("owner_address", "") or "", scenes=sb,
+                               business_type=business_type, usp=usp_desc, place_link=st.session_state.get("place_link", "") or "",
+                               menus=menus, core_concept=st.session_state.get("selected_core_concept", ""))
+    st.markdown("#### 🚀 4대 플랫폼 원스톱 배포 패키지")
+    st.caption("영상 1개로 유튜브·인스타·네이버·틱톡에 모두 올리세요. 탭마다 [복사] 후 앱에 붙여넣기만 하면 돼요.")
+    tabs = st.tabs([LABELS[k] for k in PLATFORMS])
+    for tab, k in zip(tabs, PLATFORMS):
+        d = pk[k]
+        with tab:
+            if d["title"]:
+                st.markdown("**제목**")
+                st.code(d["title"], language=None)
+                copy_button(d["title"], "📋 제목 복사", key=f"copy_{k}_title")
+            st.markdown("**본문 · 해시태그**")
+            st.code(d["body"], language=None)
+            copy_button(d["body"], "📋 이 내용 원클릭 복사", key=f"copy_{k}_body")
+            if d["comment"]:
+                st.markdown("**첫 댓글 (고정용)**")
+                st.code(d["comment"], language=None)
+                copy_button(d["comment"], "📋 첫 댓글 원클릭 복사", key=f"copy_{k}_comment")
+            if d["tip"]:
+                st.info(d["tip"])
+            if k == "youtube":
+                st.caption("유튜브 자동 업로드 버튼은 오른쪽(스마트폰은 아래) 업로드 패널에 그대로 있어요.")
+
+
 # 결과물 표출
 if st.session_state.final_video_path and os.path.exists(st.session_state.final_video_path):
     st.markdown("### [5단계] 📤 만들어진 영상 확인 및 채널 업로드")
@@ -2870,7 +2903,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
 
         with open(st.session_state.final_video_path, "rb") as f:
             st.download_button(
-                label="⬇️ 인스타 릴스 / 유튜브 쇼츠용 고화질 MP4 저장",
+                label=("⬇️ 스마트폰 갤러리 / PC에 MP4 영상 저장하기" if is_owner_mode else "⬇️ 인스타 릴스 / 유튜브 쇼츠용 고화질 MP4 저장"),
                 data=f,
                 file_name=f"{product_name}_shortform_video.mp4",
                 mime="video/mp4",
@@ -2916,13 +2949,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             st.code(_tx["comment"], language=None)
             copy_button(_tx["comment"], "📋 첫 댓글 패키지 원클릭 복사", key="copy_shop_comment")
         elif is_owner_mode:
-            from core.shorts_meta import build_first_comment as _bfc
-            _owner_comment = _bfc("owner", "", None, search_keyword=owner_search_kw, business_type=business_type, usp=usp_desc,
-                                  core_concept=st.session_state.get("selected_core_concept", ""), address=st.session_state.get("owner_address", "") or "")
-            if _owner_comment.strip():
-                st.markdown("**💬 첫 댓글 패키지** (매장 위치·네이버 검색 안내) — 업로드 후 첫 댓글로 달고 고정하세요")
-                st.code(_owner_comment, language=None)
-                copy_button(_owner_comment, "📋 첫 댓글 원클릭 복사", key="copy_owner_comment")
+            _render_social_tabs()
         elif is_commerce_mode:
             st.markdown("**📝 영상 설명·고정 댓글에 함께 올릴 문구** (쿠팡 파트너스 안내 + 공정위 추천·보증 심사지침)")
             link = st.session_state.get("affiliate_link") or "(쿠팡 파트너스 링크를 붙여 넣으세요)"
