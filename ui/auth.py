@@ -69,7 +69,8 @@ def require_pin():
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        st.markdown("## 🔒 AI 광고 공장")
+        store = os.getenv("STORE_APP", "").strip() == "1"          # 단독 매장 앱(app_store.py)은 샵스토리 이름으로 표시
+        st.markdown("## 🔒 샵스토리" if store else "## 🔒 AI 광고 공장")
         if not pin:
             st.error("외부 접속이 잠겨 있습니다. PC의 .env에 DASHBOARD_PIN을 설정한 뒤 다시 접속해 주세요.")
             st.stop()
@@ -80,7 +81,7 @@ def require_pin():
             wait_min = int((LOCK_SEC - (now - fails[0])) // 60) + 1
             st.error(f"PIN을 {MAX_FAILS}번 틀려 잠겼습니다. 약 {wait_min}분 뒤에 다시 시도해 주세요.")
             st.stop()
-        st.caption("대시보드를 열려면 PIN을 입력하세요.")
+        st.caption("점주 전용입니다. 이용 코드(PIN)를 입력하세요. 코드 문의: kimtyy@gmail.com" if store else "대시보드를 열려면 PIN을 입력하세요.")
         with st.form("pin_form", clear_on_submit=True):
             entered = st.text_input("PIN", type="password", max_chars=16, key="pin_input", label_visibility="collapsed",
                                     placeholder="PIN 입력")
