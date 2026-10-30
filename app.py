@@ -227,7 +227,7 @@ if "job" not in st.session_state:
     # 폴더는 첫 저장 시점에 생성됨 (접속만 한 세션은 빈 폴더를 남기지 않음)
     st.session_state.job = JobContext.create(app="streamlit")
 
-UPLOAD_TYPES = ["jpg", "jpeg", "png", "mp4", "mov", "m4v"]
+UPLOAD_TYPES = ["jpg", "jpeg", "png", "webp", "heic", "heif", "mp4", "mov", "m4v"]      # 안드로이드·아이폰 갤러리 형식(HEIC·WebP)은 올릴 때 JPG로 바꿔 저장
 
 
 def current_job() -> JobContext:
@@ -289,9 +289,16 @@ def save_uploaded_file(up_file) -> str:
 
     fname = getattr(up_file, "name", "") or ""
     ext = (os.path.splitext(fname)[-1] or "").lower() or ".jpg"
+    if ext in (".heic", ".heif", ".webp"):
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()                    # HEIC/HEIF를 PIL로 열 수 있게 (WebP는 PIL 기본 지원)
+        except Exception:
+            pass
+        ext = ".jpg"
     path = os.path.join(current_job().uploads_dir, f"upload_{hashlib.md5(data).hexdigest()[:12]}{ext}")
     if not os.path.exists(path):
-        if ext in (".jpg", ".jpeg", ".png", ".webp"):
+        if ext in (".jpg", ".jpeg", ".png"):
             try:
                 from PIL import Image, ImageOps
                 import io
@@ -398,7 +405,7 @@ def render_media_manager():
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
         new_files = st.file_uploader(
-            "➕ 내 폰 사진·영상 추가 (JPG/PNG/MP4/MOV)", accept_multiple_files=True, type=UPLOAD_TYPES,
+            "➕ 내 폰 사진·영상 추가 (JPG/PNG/HEIC/MP4/MOV)", accept_multiple_files=True, type=UPLOAD_TYPES,
             key=f"file_uploader_{curr_mode}_{nonce}", disabled=len(paths) >= MAX_MEDIA,
             help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
         )
