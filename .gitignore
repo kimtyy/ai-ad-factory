@@ -42,3 +42,6 @@ assets/bgm/*
 
 # 캘린더 자동 제작 사진 폴더 (사용자 사진)
 inbox/
+
+# 홈페이지(GitHub Pages) 배경·샘플 영상
+!docs/hero-bg.mp4

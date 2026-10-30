@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# 영상은 docs/hero-bg.mp4 에 있음 (빌드 전 site/public/hero-bg.mp4 로 복사)
+public/hero-bg.mp4
