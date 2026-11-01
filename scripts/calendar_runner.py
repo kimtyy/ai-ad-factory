@@ -11,11 +11,32 @@ import argparse
 import datetime as dt
 import logging
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
+
+# pythonw.exe(검은 창 없음)로 돌면 sys.stdout/stderr가 None이라 print·오류 출력이 사라진다.
+# → 로그 파일로 돌리고, ffmpeg 같은 자식 콘솔 프로그램이 새 검은 창을 띄우지 않게 한다. (python.exe 실행은 그대로)
+HEADLESS = sys.stdout is None or sys.stderr is None
+if HEADLESS:
+    _log_dir = os.path.join(ROOT, "outputs", "scheduler")
+    os.makedirs(_log_dir, exist_ok=True)
+    _console = open(os.path.join(_log_dir, "runner.log"), "a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = _console
+    if sys.stderr is None:
+        sys.stderr = _console
+    if os.name == "nt":
+        _popen_init = subprocess.Popen.__init__
+
+        def _popen_no_window(self, *a, **kw):
+            kw["creationflags"] = kw.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+            _popen_init(self, *a, **kw)
+
+        subprocess.Popen.__init__ = _popen_no_window
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
@@ -44,8 +65,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     os.makedirs(scheduler.STATE_DIR, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
-                        handlers=[logging.FileHandler(os.path.join(scheduler.STATE_DIR, "runner.log"), encoding="utf-8"),
-                                  logging.StreamHandler()])
+                        handlers=[logging.FileHandler(os.path.join(scheduler.STATE_DIR, "runner.log"), encoding="utf-8")]
+                        + ([] if HEADLESS else [logging.StreamHandler()]))   # 창 없는 실행은 stderr도 같은 로그라 중복 방지
     for n in ("httpx", "google_genai", "googleapiclient.discovery_cache", "streamlit"):
         logging.getLogger(n).setLevel(logging.WARNING)
     now = dt.datetime.now(dt.timezone.utc)
