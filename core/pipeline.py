@@ -29,7 +29,7 @@ UPLOAD_TAGS = {
 
 @dataclass
 class JobSpec:
-    mode: str                                    # owner / commerce / book / travel
+    mode: str                                    # owner / commerce / book / travel  (모임·행사·추억 쇼츠는 mode="owner" + memory=True: 렌더 엔진은 매장 1컷 1카피 랩형을 그대로 씀)
     name: str = ""                               # 사장님 상호명 · 쇼핑 상품명 · 시골책방 책방 이름 · 숙소명
     usp: str = ""                                # 특장점·책 소개 (사실만)
     media_paths: List[str] = field(default_factory=list)
@@ -78,6 +78,9 @@ class JobSpec:
     photo_tags: Dict[str, str] = field(default_factory=dict)
     photo_buckets: Dict[str, int] = field(default_factory=dict)          # 사진 5단계 시각 정렬 버킷 {경로: 1~5}
     keep_photo_order: bool = False                                       # True면 올린 순서 그대로 (AI 자동 정렬·비전 분류 호출 생략)
+    # 🎉 모임·행사·추억 쇼츠: name = 모임·행사 이름(선택), 사진·영상 N개(최대 10) = 컷 N개 = 카피 N줄 (core/planners/memory.py)
+    memory: bool = False
+    memory_tone: str = "lively"                                          # lively(유쾌) / warm(따뜻) / formal(기록·기념)
 
     @property
     def is_bundle(self) -> bool:
@@ -222,6 +225,8 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     if spec.mode not in PIPELINE_MODES:
         raise ValueError(f"'{spec.mode}' 모드 기획은 화면에서만 할 수 있어요 (지원: {', '.join(PIPELINE_MODES)}).")
     apply_style_env(spec)
+    if spec.memory:
+        return plan_memory(spec, job)
     if spec.mode == "owner" and len(spec.media_paths) == 1:
         from core.media import is_video_file
         if is_video_file(spec.media_paths[0]):
@@ -283,6 +288,17 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     assign_scene_media(spec, job, scenes)
     if spec.mode == "owner":
         fit_video_cuts(scenes)
+    return scenes
+
+
+def plan_memory(spec: JobSpec, job) -> List[Dict[str, Any]]:
+    """🎉 모임·행사·추억: 올린 사진·영상 개수(최대 10) 그대로 컷 N개 = 카피 N줄 (영상 1개도 1컷). 영상 컷은 실제 길이(최대 10초) 동안 재생"""
+    from core.planners.memory import MAX_CUTS, plan_memory_storyboard
+    media = list(spec.media_paths)[:MAX_CUTS]
+    scenes = plan_memory_storyboard(title=spec.name, tone=spec.memory_tone, media_paths=media, api_key=spec.api_key, mock=spec.mock,
+                                    thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
+    assign_uploads_to_scenes(job, scenes, media)
+    fit_video_cuts(scenes)
     return scenes
 
 
@@ -478,6 +494,15 @@ def upload_texts(spec: JobSpec, copy: Optional[Dict[str, Any]], hook: str = "") 
             "tags": list(ts.get("pool") or [])}
 
 
+def memory_upload_texts(spec: JobSpec, scenes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, str]:
+    """🎉 모임·행사·추억 유튜브 제목·설명·카카오톡 단톡방 멘트 (위치·검색 유도·판촉 문구 없음)"""
+    from core.memory_pack import kakao_message, memory_copy, seo_metadata
+    from core.youtube_upload import TITLE_MAX
+    c = memory_copy(spec.name, spec.memory_tone, scenes)
+    meta = seo_metadata(spec.name, spec.memory_tone, scenes)
+    return {"title": c["title"][:TITLE_MAX], "desc": meta["description"], "comment": kakao_message(spec.name), "tags": list(c["hashtags"])}
+
+
 # ---------------------------------------------------------------- 렌더
 def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[Callable[[int, str], None]] = None,
            force: bool = False) -> RenderResult:
@@ -507,7 +532,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     apply_style_env(spec)
     gen = AssetGenerator(gemini_api_key=spec.api_key, voice_actor=spec.voice_actor, audio_mode=spec.audio_mode,
                          mock=spec.mock, mode=spec.mode, cache_dir=job.assets_dir,
-                         readings=owner_readings(spec.name, spec.reading) if spec.mode == "owner" else None)
+                         readings=owner_readings(spec.name, spec.reading) if spec.mode == "owner" and not spec.memory else None)
     pending, images = [], []
     for idx, scene in enumerate(scenes):
         s_num = int(scene.get("scene_index") or scene.get("scene_number") or (idx + 1))
@@ -566,14 +591,18 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         elif spec.business_type and spec.business_type.strip() and spec.business_type.strip() not in ("기타", "가게", "매장"):
             badge_sig = spec.business_type.strip()
 
-        copy = make_shorts_copy(
-            spec.mode, hook=hook, usp=spec.usp, product_name=bundle_title or spec.name, api_key=spec.api_key, mock=spec.mock,
-            trend=digest_for(spec.mode, spec.business_type),
-            signature=badge_sig,
-            hidden_terms=[spec.book_title, spec.book_author] if fable else None,
-            region=region_of(spec.address) if spec.mode == "owner" else "",
-            core_concept=concept_clean,
-            business_type=spec.business_type or "")
+        if spec.memory:
+            from core.memory_pack import memory_copy
+            copy = memory_copy(spec.name, spec.memory_tone, scenes)          # 매장용 가게추천 카피 대신 추억 영상 전용 카피
+        else:
+            copy = make_shorts_copy(
+                spec.mode, hook=hook, usp=spec.usp, product_name=bundle_title or spec.name, api_key=spec.api_key, mock=spec.mock,
+                trend=digest_for(spec.mode, spec.business_type),
+                signature=badge_sig,
+                hidden_terms=[spec.book_title, spec.book_author] if fable else None,
+                region=region_of(spec.address) if spec.mode == "owner" else "",
+                core_concept=concept_clean,
+                business_type=spec.business_type or "")
         thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
                                       sub_text=copy["thumb_sub"], accent=copy["accent"])
     except Exception as e:
@@ -583,7 +612,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         comp.caption_font = spec.caption_font
     final = comp.assemble_ad(
         asset_manifest=manifest, output_filename="final.mp4", fps=24, audio_mode=spec.audio_mode, mode=spec.mode,
-        brand=spec.brand if spec.mode == "owner" else None,
+        brand=spec.brand if spec.mode == "owner" and not spec.memory else None,
         label=book.get("label") if spec.mode == "book" else None,
         disclosure=disclosure_short(spec) or None,
         bars=((scenes[0].get("bundle_title") or "", spec.bundle_bottom or DEFAULT_BOTTOM_BAR) if spec.is_bundle and scenes else None),
@@ -592,23 +621,27 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     logger.info(f"BGM 상태: {'켜짐' if spec.bgm_path else '꺼짐'} → {comp.last_bgm_info or comp.last_bgm_error or '적용 안 함'}")
     job.save_plan(scenes)
 
-    # 쇼츠 최적화 SEO 메타데이터 자동 생성 및 metadata.json 저장
+    # 쇼츠 최적화 SEO 메타데이터 자동 생성 및 metadata.json 저장 (추억 쇼츠는 매장용 생성기 대신 전용 메타데이터)
     seo_meta = None
     try:
-        from core.seo_generator import generate_seo_metadata
-        seo_meta = generate_seo_metadata(
-            scenes=scenes,
-            mode=spec.mode,
-            product_name=(scenes[0].get("bundle_title") or spec.name) if spec.is_bundle and scenes else spec.name,
-            usp=spec.usp,
-            search_keyword=spec.search_keyword,
-            address=spec.address,
-            api_key=spec.api_key,
-            mock=spec.mock,
-            business_type=spec.business_type or "",
-            core_concept=getattr(spec, "core_concept", "") or "",
-            tag_set=(copy or {}).get("tag_set"),          # 설명란·첫 댓글·검색 태그가 같은 태그 풀을 쓴다
-        )
+        if spec.memory:
+            from core.memory_pack import seo_metadata as _memory_seo
+            seo_meta = _memory_seo(spec.name, spec.memory_tone, scenes)
+        else:
+            from core.seo_generator import generate_seo_metadata
+            seo_meta = generate_seo_metadata(
+                scenes=scenes,
+                mode=spec.mode,
+                product_name=(scenes[0].get("bundle_title") or spec.name) if spec.is_bundle and scenes else spec.name,
+                usp=spec.usp,
+                search_keyword=spec.search_keyword,
+                address=spec.address,
+                api_key=spec.api_key,
+                mock=spec.mock,
+                business_type=spec.business_type or "",
+                core_concept=getattr(spec, "core_concept", "") or "",
+                tag_set=(copy or {}).get("tag_set"),          # 설명란·첫 댓글·검색 태그가 같은 태그 풀을 쓴다
+            )
         job.save_metadata(seo_meta)
         logger.info(f"[SEO 메타데이터 저장 완료] {job.metadata_path}")
     except Exception as me:

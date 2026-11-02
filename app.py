@@ -365,18 +365,19 @@ def render_media_manager():
     if paths != st.session_state.uploaded_paths:
         st.session_state.uploaded_paths = paths
     with st.container(border=True, key="media_manager"):
-        if st.session_state.get("production_mode", "owner") == "owner":
+        if st.session_state.get("production_mode", "owner") == "owner" and not is_memory:
             st.checkbox("📌 내가 올린 사진 순서 그대로 유지 (AI 자동 정렬 끄기)", key="keep_photo_order",
                         on_change=lambda: st.session_state.__setitem__("media_stale", True),
                         help="끄면(기본): 사진을 어떤 순서로 올려도 AI가 먹음직한 하이라이트를 첫 컷에, 가게 외관을 마지막 컷에 자동으로 정렬해요. "
                              "켜면: 올린 순서(1번~N번) 그대로 컷을 만들고, 첫 번째 사진이 첫 컷과 썸네일이 돼요. 사진 분류 호출도 생략해 더 빨라요.")
-        if st.session_state.get("production_mode", "owner") == "owner" and st.session_state.get("selected_core_concept", "").strip():
+        if st.session_state.get("production_mode", "owner") == "owner" and not is_memory and st.session_state.get("selected_core_concept", "").strip():
             from core.shoot_guide import shoot_guide
             _g = shoot_guide(st.session_state.get("selected_core_concept", ""), st.session_state.get("owner_type", ""),
                              st.session_state.get("owner_name", ""), st.session_state.get("owner_usp", ""))
             if _g:
                 st.info(_g["text"])
-        st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {MAX_MEDIA}개)")
+        st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {MAX_MEDIA}개)"
+                    + (f" · 🎞️ 컷 {len(paths)}개 = 카피 {len(paths)}줄" if is_memory and paths else ""))
         if st.session_state.pop("media_stale", False):
             st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
         for i, p in enumerate(paths):
@@ -458,7 +459,8 @@ if DEMO_MODE:
     st.session_state.production_mode = "owner"
     st.session_state.mode_switch = next(iter(MODES))
 MODE_LABELS = {v: k for k, v in MODES.items()}
-SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
+from core.planners.memory import ROLE_LABELS_KO as MEMORY_ROLE_LABELS  # noqa: E402
+SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, **MEMORY_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
                      "room": "🛏 객실", "cta": "📍 CTA", "hero": "🛒 첫인상", "usage": "🙌 사용 장면", "body": "💡 본문"}
 
 
@@ -466,6 +468,7 @@ SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨
 # 사용자가 직접 바꾸면 그 모드의 선택으로 기억해 두고, 다음에 그 모드로 돌아오면 프리셋 대신 기억한 값을 쓴다
 MODE_PRESETS = {
     "owner": {"audio": "voice_and_sub", "font": "impact", "pos": "mid"},        # 🏪 AI 나레이션 + 임팩트 고딕 + 중단 55%
+    "memory": {"audio": "voice_and_sub", "font": "pop", "pos": "mid"},          # 🎉 AI 나레이션 + 분위기 톤에 맞는 폰트(기본 팝체) + 중단 55%
     "travel": {"audio": "bgm_only", "font": "serif", "pos": "top"},             # 🏨 BGM + 감성 명조 + 상단 24%
     "commerce": {"audio": "voice_and_sub", "font": "pop", "pos": "mid"},        # 🛍️ AI 나레이션 + 둥근 팝체 + 중단 55%
     "book": {"audio": "bgm_only", "font": "serif", "pos": "mid"},               # 📚 BGM + 감성 명조 + 중단 55%
@@ -481,7 +484,8 @@ def _style_now() -> dict:
 def _remember_style():
     """사용자가 오디오·폰트·자막 위치를 직접 바꿨을 때 (on_change): 지금 모드의 선택으로 저장"""
     ss = st.session_state
-    ss.setdefault("style_by_mode", {})[ss.get("production_mode", "owner")] = _style_now()
+    key = "memory" if (STORE_APP and ss.get("store_kind") == "memory") else ss.get("production_mode", "owner")      # 추억 쇼츠 선택이 매장 홍보 선택을 덮어쓰지 않게
+    ss.setdefault("style_by_mode", {})[key] = _style_now()
 
 
 def _apply_mode_style(mode: str):
@@ -553,7 +557,7 @@ def reset_mode_session_state(prev_mode: str, new_mode: str):
         st.session_state.pop(k, None)
     for k in ("product_name_input", "product_usp_input", "owner_name", "owner_search_kw", "owner_usp", "owner_address", "place_query",
               "video_overlay_name", "video_overlay_usp", "book_store", "book_title", "book_author", "book_quote", "book_link", "shop_query", "shop_connect_link",
-              "stay_manual_name", "stay_manual_link"):
+              "stay_manual_name", "stay_manual_link", "mem_title"):
         st.session_state[k] = ""                              # 이전 모드에서 입력한 상호·상품명이 다른 모드 입력칸에 남지 않게 (브라우저 위젯 값까지)
     for k in ("shop_item", "shop_cards", "shop_results", "shop_msg", "shop_link_pending", "stay_ctx", "stay_top5", "store_photo_candidates", "web_photo_paths"):
         st.session_state.pop(k, None)
@@ -602,7 +606,7 @@ for _k, _default in (("owner_type", DEFAULT_BUSINESS_TYPE), ("brand_watermark", 
                      ("page_switch", "make")):
     st.session_state.setdefault(_k, _default)   # 위젯 인자 대신 세션에서 기본값 설정 (세션 재할당과 함께 써도 경고 없음)
 init_radar_state()
-for _k in ("owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
+for _k in ("store_kind", "mem_title", "mem_tone", "owner_name", "owner_type", "owner_search_kw", "owner_usp", "owner_address", "owner_reading", "place_query", "bgm_on", "bgm_choice",
            "owner_menu_text", "owner_review_text", "engine_info", "official_menu_text", "official_menu_meta", "photo_tags", "photo_buckets", "store_research", "use_unconfirmed_facts", "keep_photo_order", "owner_tempo", "store_photo_candidates", "web_photo_paths", "official_only", "demo_mode", "caption_font_choice", "caption_font_book_init", "api_key_input", "mock_mode", "force_render", "brand_logo_path", "duration_choice",
            "voice_tone", "voice_actor_select_box", "audio_choice", "script_style_radio", "travel_template", "show_home", "stay_aff_template", "stay_partner_id", "stay_ctx", "stay_top5", "stay_mode", "stay_preset", "stay_aff_template", "stay_partner_id",
            "stay_watermark", "stay_alias_input", "stay_price_input", "stay_people_input", "stay_manual_url", "caption_pos",
@@ -620,6 +624,10 @@ is_commerce_mode = pipeline_mode == "commerce"
 is_book_mode = pipeline_mode == "book"
 is_video_overlay_mode = pipeline_mode == "video_overlay"
 uses_scene_media = pipeline_mode in ("owner", "travel", "commerce", "book")   # 씬별 실사 사진/영상 배정 UI를 쓰는 모드 (전 모드 실물만)
+# 🎉 모임·행사·추억 쇼츠: 단독 앱 1단계 맨 위 토글로만 켠다 (엔진은 매장 1컷 1카피 랩형을 쓰고, 입력·대본·공유 문구만 따로)
+st.session_state.setdefault("store_kind", "shop")
+st.session_state.setdefault("mem_tone", "lively")
+is_memory = bool(STORE_APP and is_owner_mode and st.session_state.get("store_kind") == "memory")
 
 # ==============================================================================
 # 주메뉴 (💻 PC: 좌측 바 / 📱 스마트폰: 화면 최하단 고정 바) + 홈 + ⚙️ 설정 팝업
@@ -671,18 +679,40 @@ def _nav_active() -> str:
     return page if page in ("radar", "longform") else ss.get("production_mode", "owner")
 
 
+def _apply_memory_tone():
+    """🎉 분위기 톤 → 자막 폰트·말투·BGM 분위기 자동 매칭 (4단계에서 바꿀 수 있음). AI 나레이션 + 자막 + 감성 BGM이 기본"""
+    from core.planners.memory import TONES, tone_of
+    ss = st.session_state
+    t = TONES[tone_of(ss.get("mem_tone"))]
+    ss["audio_choice"], ss["caption_font_choice"], ss["caption_pos"], ss["voice_tone"] = "voice_and_sub", t["font"], "mid", t["voice_tone"]
+    if bgm_mod.ordered_tracks():
+        ss["bgm_on"], ss["bgm_choice"] = True, bgm_mod.mood_choice(t["bgm_mood"])
+    _remember_style()
+
+
+def _store_reset():
+    """단독 매장 앱 새 작업: 입력·사진·결과를 모두 비움 (🏪/🎉 토글은 그대로 두고 그 종류의 기본 스타일로)"""
+    ss = st.session_state
+    start_new_job()
+    ss.show_home = False
+    reset_mode_session_state("owner", "owner")
+    for _k in ("official_menu_text", "official_menu_meta", "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "engine_info",
+               "store_photo_candidates", "web_photo_paths", "place_results", "keep_photo_order", "use_unconfirmed_facts"):
+        ss.pop(_k, None)
+    if ss.get("store_kind") == "memory":
+        _apply_memory_tone()
+    else:
+        _apply_mode_style("owner")
+
+
 def _nav_go(view: str):
     """주메뉴 클릭: 홈 = 새 작업 + 첫 화면 / 제작 모드 = 모드 전환(이전 모드 입력 정리) / 롱폼·레이더 = 해당 화면"""
     ss = st.session_state
     if view == "home":
-        start_new_job()
         if STORE_APP:
-            ss.show_home = False                         # 단독 매장 앱에는 모드 선택 홈이 없다: 처음으로 = 입력·사진·결과를 모두 비운 새 작업
-            reset_mode_session_state("owner", "owner")
-            for _k in ("official_menu_text", "official_menu_meta", "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "engine_info",
-                       "store_photo_candidates", "web_photo_paths", "place_results", "keep_photo_order", "use_unconfirmed_facts"):
-                ss.pop(_k, None)
+            _store_reset()                               # 단독 매장 앱에는 모드 선택 홈이 없다: 처음으로 = 입력·사진·결과를 모두 비운 새 작업
             return
+        start_new_job()
         ss.show_home = True
         ss.page_switch = "make"
         return
@@ -787,7 +817,10 @@ if STORE_APP:
         with _hc3:
             if st.button("⚙️ 설정", key="nav_settings", use_container_width=True):
                 _settings_dialog()
-    st.caption("가게 이름만 넣으면 메뉴판을 가져와, 사진·영상 한 컷마다 한 줄 카피를 붙인 쇼츠를 만들어요.")
+    if is_memory:
+        st.caption("모임·행사 사진·영상을 올린 개수 그대로, 컷마다 한 줄 카피를 붙인 추억 쇼츠를 만들어요.")
+    else:
+        st.caption("가게 이름만 넣으면 메뉴판을 가져와, 사진·영상 한 컷마다 한 줄 카피를 붙인 쇼츠를 만들어요.")
 else:
     st.markdown(NAV_CSS, unsafe_allow_html=True)
     with st.sidebar:
@@ -974,6 +1007,25 @@ def _owner_duration_notice():
     st.info(f"⏱️ 자동 계산: 선택된 {len(paths)}개 에셋에 맞춰 약 {int(round(total))}초 쇼츠로 제작됩니다.")
 
 
+def _memory_duration_notice():
+    """🎉 3단계: 컷 수와 길이는 고르는 값이 아니라 올린 파일에서 정해진다 (사진 1장 ≈ 2~2.5초, 영상은 실제 길이 최대 10초)"""
+    from core.media import is_video_file, probe_media
+    from core.pipeline import MIXED_VIDEO_CAP_SEC
+    paths = list(st.session_state.get("uploaded_paths") or [])[:MAX_MEDIA]
+    if not paths:
+        st.caption("⏱️ 사진·영상을 올리면 컷 수와 길이가 자동으로 계산돼요 (파일 1개 = 컷 1개 = 카피 1줄).")
+        return
+
+    def _len(p):
+        try:
+            return min(float(probe_media(p).duration), MIXED_VIDEO_CAP_SEC)
+        except (ValueError, OSError):
+            return 3.0
+    lo = sum(_len(p) if is_video_file(p) else 2.0 for p in paths)
+    hi = sum(_len(p) if is_video_file(p) else 2.5 for p in paths)
+    st.info(f"⏱️ 올린 {len(paths)}개 = {len(paths)}컷 · {len(paths)}줄 카피 · 약 {int(round(lo))}~{int(round(hi))}초 쇼츠로 제작됩니다.")
+
+
 def _w_travel_template():
     st.selectbox("숙소 제휴 씬 템플릿", travel_keys, key="travel_template", format_func=lambda k: str(TRAVEL_TEMPLATES.get(k, {}).get("name", k or "")),
                  help="7씬 황금 비율: 01~03 수영장·자쿠지 후킹 → 04~05 객실·창밖 뷰 → 06~07 바베큐·카페·불멍 + 댓글 CTA")
@@ -982,6 +1034,8 @@ def _w_travel_template():
 def _w_audio_block():
     """4단계: 🔊 오디오 & 성우 · 🔤 자막 디자인 (폰트 3종 + 자막 위치)"""
     st.markdown("**🔊 오디오 & 성우**")
+    if is_memory:
+        st.caption("🎙️ AI 나레이션 + 감성 BGM + 자막이 기본이에요. 1단계에서 고른 분위기 톤에 맞춰 폰트·말투·BGM 분위기를 미리 맞춰 뒀어요.")
     st.selectbox("오디오 모드", audio_mode_keys, key="audio_choice", format_func=lambda x: str(audio_mode_options.get(x, x or "")), on_change=_remember_style)
     if is_travel_mode and selected_audio_choice == "voice_and_sub":
         st.caption("💡 숙소·카페 영상은 나레이션 없이 **🎵 감성 BGM + 자막만** 쓰면 더 고급스러워요 (TTS 비용·시간 절약).")
@@ -1816,7 +1870,20 @@ if single_v_detected and not is_video_overlay_mode and not STORE_APP:
             st.button("📹 직가공 모드로 전환", key="btn_switch_overlay_banner", type="primary",
                       use_container_width=True, on_click=_switch_to_overlay)
 
-if is_owner_mode:
+def _on_store_kind_change():
+    """🏪 매장 홍보 ↔ 🎉 모임·행사·추억 전환: 서로 다른 입력·사진·대본이 섞이지 않게 새 작업으로"""
+    _store_reset()
+
+
+STORE_KINDS = {"shop": "🏪 매장 홍보", "memory": "🎉 모임·행사·추억"}
+if STORE_APP and is_owner_mode:
+    st.radio("무엇을 만들까요?", list(STORE_KINDS), key="store_kind", horizontal=True, format_func=STORE_KINDS.get,
+             on_change=_on_store_kind_change, label_visibility="collapsed",
+             help="🏪 매장 홍보: 가게 이름·메뉴판 기준 홍보 쇼츠 / 🎉 모임·행사·추억: 마을 행사·가족 모임·친구 모임 사진으로 만드는 추억 쇼츠")
+
+if is_memory:
+    st.markdown("### [1단계] 🎉 모임·행사 정보 & 사진·영상 준비")
+elif is_owner_mode:
     _oh1, _oh2 = st.columns([5, 1.6], vertical_alignment="center")
     with _oh1:
         st.markdown("### [1단계] 🏢 매장 정보 & 사진·영상 준비")
@@ -1837,7 +1904,7 @@ if is_travel_mode:
     _render_stay_pipeline()
 
 # 사장님: 네이버 플레이스 링크·상호명 → 공식 지역 검색 API로 상호명·업종·주소·소개글 자동 주입
-if is_owner_mode:
+if is_owner_mode and not is_memory:
     naver = NaverLocalSearch()
     with st.container(border=True, key="place_box"):
         st.markdown("**🔗 네이버 플레이스·지도 링크 또는 상호명으로 가게 정보 가져오기**")
@@ -1904,7 +1971,19 @@ edit_box = st.container()
 
 
 with edit_box:
-    if is_owner_mode:
+    if is_memory:
+        # 복잡한 네이버 검색창·메뉴판 없이 입력 3개: 모임 이름(선택) · 분위기 톤 · 사진·영상 (아래 업로더)
+        from core.planners.memory import TONES
+        product_name = st.text_input("🎈 모임·행사 이름 (선택)", key="mem_title",
+                                     placeholder="예: 가평 조종면 상인회 가을 단합대회 / 우리 가족 1박2일 힐링 여행 / 친구들과 7080 동창회",
+                                     help="적으면 영상 첫 화면·제목·카카오톡 멘트에 쓰여요. 비워 두어도 괜찮아요. 이름에 적은 호칭(예: 부모님)만 대본에 쓸 수 있어요.")
+        product_name = (product_name or "").strip()
+        st.radio("분위기 톤", list(TONES), key="mem_tone", on_change=_apply_memory_tone,
+                 format_func=lambda k: f"{TONES[k]['label']} — {TONES[k]['use']}",
+                 help="톤에 맞춰 대본 말투, 자막 폰트, BGM 분위기가 자동으로 정해져요. 4단계에서 바꿀 수 있어요.")
+        usp_desc = ""
+        owner_search_kw = ""
+    elif is_owner_mode:
         o1, o2 = st.columns([1.2, 1])
         with o1:
             product_name = st.text_input("🏢 상호명 (영상에 그대로 노출)", key="owner_name", placeholder="예: 성수 불판 성수점")
@@ -2139,7 +2218,7 @@ with edit_box:
         _alias = (st.session_state.get("stay_alias_input") or "").strip()
         brand_cfg = BrandOverlay(business_name=_alias or "숙소", show_label=(st.session_state.get("stay_watermark", "alias") == "alias" and bool(_alias)),
                                  end_card=EndCard(search_keyword="", headline=_alias, cta_text=STAY_END_CARD_TEXT.replace(" [고정", chr(10) + "[고정"), show_search_bar=False))
-    if is_owner_mode and brand_opts and product_name.strip():
+    if is_owner_mode and not is_memory and brand_opts and product_name.strip():
         brand_cfg = BrandOverlay(
             business_name=product_name.strip(),
             logo_path=brand_opts["logo_path"],
@@ -2159,6 +2238,9 @@ with edit_box:
                 f"ℹ️ **이미지 메타데이터 풀:** 총 {len(img_pool)}개의 고유 사진 후보가 대기 중입니다. "
                 f"아래 **[🚀 스토리보드 자동 기획]**을 실행하면 씬별로 필요한 컷만 핀포인트 다운로드됩니다."
             )
+        elif is_memory:
+            st.caption("💡 모임에서 폰으로 찍은 사진과 3~5초 짧은 영상을 순서대로 올려 주세요 (최대 10개). "
+                       "올린 개수 그대로 컷이 만들어지고, 파일 하나마다 카피 한 줄이 1:1로 붙어요. 순서는 아래에서 바꿀 수 있어요.")
         elif is_owner_mode:
             st.caption("💡 가게 외관, 대표 메뉴·상품, 내부 분위기를 찍은 사진·영상을 순서대로 2~8개 올려 주세요. 올린 순서대로 씬이 만들어집니다.")
         elif is_book_mode:
@@ -2169,7 +2251,7 @@ with edit_box:
                        "사진이 씬보다 적으면 앵글을 바꿔 돌려 씁니다. AI로 상품 이미지를 만들지 않습니다.")
         else:
             st.caption("💡 숙소 URL을 크롤링하거나, 아래에서 사진·영상을 직접 올릴 수 있습니다.")
-        if is_owner_mode or is_travel_mode or (is_commerce_mode and not is_bundle):
+        if (is_owner_mode and not is_memory) or is_travel_mode or (is_commerce_mode and not is_bundle):
             _render_photo_gallery()                 # 자동 수집 후보 사진 12장 (체크로 고르고 영상 소스에 넣기)
             st.markdown("**📤 내 폰·PC 사진 및 직접 찍은 영상(JPG/PNG/MP4/MOV) 추가 업로드** — 자동 사진과 섞어 쓰거나 내 사진·영상만으로도 만들 수 있어요")
         render_media_manager()
@@ -2178,130 +2260,140 @@ with edit_box:
 # [광고의 핵심] 메인 화면: 시각 팩트 기반 전 업종 AI 떡상 1컨셉 제안 & 선택 엔진
 # ==============================================================================
 with edit_box:
-    st.markdown("### [2단계] 🎯 컨셉 잡기")
-    _w_pov()
-    st.caption("💡 광고는 1컨셉 1메시지: 영상 전체가 입증할 단 하나의 핵심 이유를 고르세요 (기본안이 자동 선택돼 있어요).")
+    if is_memory:
+        st.markdown("### [2단계] 🎞️ 이야기 흐름")
+        _mn = len(st.session_state.get("uploaded_paths") or [])
+        st.caption("💡 올린 사진·영상을 순서대로 보고 도입 → 즐거운 순간들 → 마무리 흐름으로 한 컷에 한 줄씩 써요. "
+                   "컨셉을 따로 고를 필요는 없어요. 톤은 1단계에서 바꿀 수 있어요.")
+        st.info(f"🎞️ 지금 올린 파일 {_mn}개 → 컷 {_mn}개, 카피 {_mn}줄이 만들어져요 (최대 10개)." if _mn
+                else "🎞️ 사진·영상을 올리면 올린 개수 그대로 컷과 카피 줄 수가 정해져요 (최대 10개).")
+    else:
+        st.markdown("### [2단계] 🎯 컨셉 잡기")
+        _w_pov()
+        st.caption("💡 광고는 1컨셉 1메시지: 영상 전체가 입증할 단 하나의 핵심 이유를 고르세요 (기본안이 자동 선택돼 있어요).")
 
-    st.session_state.setdefault("suggested_concepts", [])
-    st.session_state.setdefault("selected_concept_idx", 0)
-    st.session_state.setdefault("custom_core_concept", "")
-    st.session_state.setdefault("selected_core_concept", "")
+        st.session_state.setdefault("suggested_concepts", [])
+        st.session_state.setdefault("selected_concept_idx", 0)
+        st.session_state.setdefault("custom_core_concept", "")
+        st.session_state.setdefault("selected_core_concept", "")
 
-    analyze_concept_btn = st.button(
-        "🔍 사진 팩트 기반 3대 떡상 컨셉 도출하기",
-        type="primary",
-        use_container_width=True,
-        help="사진 속 보이는 사실과 입력 정보를 교차 분석해 3가지 결핍 앵글 1컨셉을 제안받아요."
-    )
+        analyze_concept_btn = st.button(
+            "🔍 사진 팩트 기반 3대 떡상 컨셉 도출하기",
+            type="primary",
+            use_container_width=True,
+            help="사진 속 보이는 사실과 입력 정보를 교차 분석해 3가지 결핍 앵글 1컨셉을 제안받아요."
+        )
 
-    if analyze_concept_btn:
-        with st.spinner("👁️ 시각 팩트와 매장 정보를 분석하여 3대 결핍 앵글 1컨셉을 도출하는 중..."):
-            single_v_path = st.session_state.uploaded_paths[0] if (st.session_state.uploaded_paths and is_video_file(st.session_state.uploaded_paths[0])) else None
-            if is_video_overlay_mode and single_v_path:
-                v_analysis = analyze_video_for_overlay(single_v_path, api_key=api_key, mock=mock_mode)
-                c_list = []
-                icons = ["🔥", "👑", "💡"]
-                for i, sc in enumerate(v_analysis.get("suggested_concepts", [])):
-                    c_list.append({
-                        "title": sc.get("title", f"컨셉 {i+1}"),
-                        "badge": f"{icons[i % len(icons)]} {sc.get('title', '')}",
-                        "core_concept": sc.get("core_concept", ""),
-                        "headline": sc.get("hook_headline", ""),
-                        "description": sc.get("target_reason", "")
-                    })
-                st.session_state.suggested_concepts = c_list
-                if c_list:
-                    curr_sel = min(st.session_state.get("selected_concept_idx", 0), len(c_list) - 1)
-                    st.session_state.selected_core_concept = c_list[curr_sel]["core_concept"]
-                    st.toast("동영상 시각 분석 기반 1컨셉 3종이 도출되었습니다!", icon="🎯")
-            else:
-                c_list = suggest_ad_concepts(
+        if analyze_concept_btn:
+            with st.spinner("👁️ 시각 팩트와 매장 정보를 분석하여 3대 결핍 앵글 1컨셉을 도출하는 중..."):
+                single_v_path = st.session_state.uploaded_paths[0] if (st.session_state.uploaded_paths and is_video_file(st.session_state.uploaded_paths[0])) else None
+                if is_video_overlay_mode and single_v_path:
+                    v_analysis = analyze_video_for_overlay(single_v_path, api_key=api_key, mock=mock_mode)
+                    c_list = []
+                    icons = ["🔥", "👑", "💡"]
+                    for i, sc in enumerate(v_analysis.get("suggested_concepts", [])):
+                        c_list.append({
+                            "title": sc.get("title", f"컨셉 {i+1}"),
+                            "badge": f"{icons[i % len(icons)]} {sc.get('title', '')}",
+                            "core_concept": sc.get("core_concept", ""),
+                            "headline": sc.get("hook_headline", ""),
+                            "description": sc.get("target_reason", "")
+                        })
+                    st.session_state.suggested_concepts = c_list
+                    if c_list:
+                        curr_sel = min(st.session_state.get("selected_concept_idx", 0), len(c_list) - 1)
+                        st.session_state.selected_core_concept = c_list[curr_sel]["core_concept"]
+                        st.toast("동영상 시각 분석 기반 1컨셉 3종이 도출되었습니다!", icon="🎯")
+                else:
+                    c_list = suggest_ad_concepts(
+                        business_name=product_name,
+                        business_type=business_type,
+                        media_paths=list(st.session_state.uploaded_paths),
+                        usp=usp_desc,
+                        api_key=api_key,
+                        thumb_dir=current_job().assets_dir,
+                        mock=mock_mode,
+                        photo_tags=dict(st.session_state.get("photo_tags") or {}) or None,
+                        cache_path=current_job().asset_path("photo_tags.json"),       # 확정된 사진 전체를 보고 업종 맥락에 맞게 제안 (대본 기획과 같은 분석 캐시)
+                        official_menus=_merged_store_facts().get("official_menus"),    # 사진에 없는 공식 메뉴는 컨셉에서 제외
+                    )
+                    st.session_state.suggested_concepts = c_list
+                    if c_list:
+                        curr_sel = min(st.session_state.get("selected_concept_idx", 0), len(c_list) - 1)
+                        st.session_state.selected_core_concept = c_list[curr_sel]["core_concept"]
+                        st.toast("사진 시각 팩트 기반 1컨셉 3종이 도출되었습니다!", icon="🎯")
+
+        # 제안 목록이 비어 있으면 모드별 기본 3종 자동 생성 (매장 문구('우리 매장에서 …')가 쇼핑·숙소 탭에 뜨지 않게 모드 전용)
+        if not st.session_state.suggested_concepts:
+            if is_owner_mode:
+                st.session_state.suggested_concepts = suggest_ad_concepts(
                     business_name=product_name,
                     business_type=business_type,
                     media_paths=list(st.session_state.uploaded_paths),
                     usp=usp_desc,
-                    api_key=api_key,
-                    thumb_dir=current_job().assets_dir,
-                    mock=mock_mode,
-                    photo_tags=dict(st.session_state.get("photo_tags") or {}) or None,
-                    cache_path=current_job().asset_path("photo_tags.json"),       # 확정된 사진 전체를 보고 업종 맥락에 맞게 제안 (대본 기획과 같은 분석 캐시)
-                    official_menus=_merged_store_facts().get("official_menus"),    # 사진에 없는 공식 메뉴는 컨셉에서 제외
+                    api_key=None,
+                    thumb_dir=None,
+                    mock=True,
                 )
-                st.session_state.suggested_concepts = c_list
-                if c_list:
-                    curr_sel = min(st.session_state.get("selected_concept_idx", 0), len(c_list) - 1)
-                    st.session_state.selected_core_concept = c_list[curr_sel]["core_concept"]
-                    st.toast("사진 시각 팩트 기반 1컨셉 3종이 도출되었습니다!", icon="🎯")
+            else:
+                from core.concepts import default_concepts
+                st.session_state.suggested_concepts = default_concepts(pipeline_mode, product_name)
+            if st.session_state.suggested_concepts and not st.session_state.selected_core_concept:
+                st.session_state.selected_core_concept = st.session_state.suggested_concepts[0]["core_concept"]
 
-    # 제안 목록이 비어 있으면 모드별 기본 3종 자동 생성 (매장 문구('우리 매장에서 …')가 쇼핑·숙소 탭에 뜨지 않게 모드 전용)
-    if not st.session_state.suggested_concepts:
-        if is_owner_mode:
-            st.session_state.suggested_concepts = suggest_ad_concepts(
-                business_name=product_name,
-                business_type=business_type,
-                media_paths=list(st.session_state.uploaded_paths),
-                usp=usp_desc,
-                api_key=None,
-                thumb_dir=None,
-                mock=True,
-            )
-        else:
-            from core.concepts import default_concepts
-            st.session_state.suggested_concepts = default_concepts(pipeline_mode, product_name)
-        if st.session_state.suggested_concepts and not st.session_state.selected_core_concept:
-            st.session_state.selected_core_concept = st.session_state.suggested_concepts[0]["core_concept"]
+        concepts = st.session_state.suggested_concepts or []
+        raw_concept_labels = []
+        for c in concepts:
+            c_badge = str(c.get('badge') or '🎯')
+            c_headline = str(c.get('headline') or '')
+            c_core = str(c.get('core_concept') or '')
+            raw_concept_labels.append(f"{c_badge} | **{c_headline}** ➔ {c_core}")
+        raw_concept_labels.append("✍️ 직접 입력 (점주 맞춤형 한 줄 카피)")
 
-    concepts = st.session_state.suggested_concepts or []
-    raw_concept_labels = []
-    for c in concepts:
-        c_badge = str(c.get('badge') or '🎯')
-        c_headline = str(c.get('headline') or '')
-        c_core = str(c.get('core_concept') or '')
-        raw_concept_labels.append(f"{c_badge} | **{c_headline}** ➔ {c_core}")
-    raw_concept_labels.append("✍️ 직접 입력 (점주 맞춤형 한 줄 카피)")
+        concept_options = [str(opt) for opt in raw_concept_labels if opt]
 
-    concept_options = [str(opt) for opt in raw_concept_labels if opt]
+        cur_concept_val = st.session_state.get("concept_radio_picker")
+        if not cur_concept_val or cur_concept_val not in concept_options:
+            cur_idx = min(max(0, st.session_state.get("selected_concept_idx", 0) or 0), max(0, len(concept_options) - 1))
+            cur_concept_val = concept_options[cur_idx] if concept_options else ""
+            st.session_state.concept_radio_picker = cur_concept_val
 
-    cur_concept_val = st.session_state.get("concept_radio_picker")
-    if not cur_concept_val or cur_concept_val not in concept_options:
-        cur_idx = min(max(0, st.session_state.get("selected_concept_idx", 0) or 0), max(0, len(concept_options) - 1))
-        cur_concept_val = concept_options[cur_idx] if concept_options else ""
-        st.session_state.concept_radio_picker = cur_concept_val
-
-    chosen_concept = st.radio(
-        str("이번 숏폼 광고에서 손님의 뇌리에 꽂을 1컨셉 선택" or ""),
-        options=concept_options,
-        key="concept_radio_picker",   # 값은 위에서 session_state로 이미 지정 (index 병행 시 Streamlit 경고)
-    )
-
-    if chosen_concept == "✍️ 직접 입력 (점주 맞춤형 한 줄 카피)":
-        st.session_state.selected_concept_idx = len(concepts)
-        custom_label = str("직접 입력할 1컨셉 한 줄 카피" or "")
-        custom_val = str(st.session_state.get("custom_core_concept") or "")
-        custom_input = st.text_input(
-            custom_label,
-            value=custom_val,
-            placeholder="예: 24시간 언제든 편하게 이용하는 우리동네 안심 매장",
-            help="30초 전체를 관통할 단 하나의 핵심 가치를 15~25자 내외로 입력해 주세요."
+        chosen_concept = st.radio(
+            str("이번 숏폼 광고에서 손님의 뇌리에 꽂을 1컨셉 선택" or ""),
+            options=concept_options,
+            key="concept_radio_picker",   # 값은 위에서 session_state로 이미 지정 (index 병행 시 Streamlit 경고)
         )
-        st.session_state.custom_core_concept = str(custom_input or "").strip()
-        st.session_state.selected_core_concept = str(custom_input or "").strip()
-        if custom_input and custom_input.strip():
-            st.info(f"🎯 **직접 입력 1컨셉:** {custom_input.strip()}")
-    else:
-        chosen_idx = concept_options.index(chosen_concept) if chosen_concept in concept_options else 0
-        st.session_state.selected_concept_idx = chosen_idx
-        if chosen_idx < len(concepts):
-            active_c = concepts[chosen_idx]
-            st.session_state.selected_core_concept = str(active_c.get("core_concept") or "")
-            st.info(f"🎯 **선택된 코어 컨셉:** {st.session_state.selected_core_concept}\n\n💡 *전략 방향:* {str(active_c.get('description') or '')}")
+
+        if chosen_concept == "✍️ 직접 입력 (점주 맞춤형 한 줄 카피)":
+            st.session_state.selected_concept_idx = len(concepts)
+            custom_label = str("직접 입력할 1컨셉 한 줄 카피" or "")
+            custom_val = str(st.session_state.get("custom_core_concept") or "")
+            custom_input = st.text_input(
+                custom_label,
+                value=custom_val,
+                placeholder="예: 24시간 언제든 편하게 이용하는 우리동네 안심 매장",
+                help="30초 전체를 관통할 단 하나의 핵심 가치를 15~25자 내외로 입력해 주세요."
+            )
+            st.session_state.custom_core_concept = str(custom_input or "").strip()
+            st.session_state.selected_core_concept = str(custom_input or "").strip()
+            if custom_input and custom_input.strip():
+                st.info(f"🎯 **직접 입력 1컨셉:** {custom_input.strip()}")
+        else:
+            chosen_idx = concept_options.index(chosen_concept) if chosen_concept in concept_options else 0
+            st.session_state.selected_concept_idx = chosen_idx
+            if chosen_idx < len(concepts):
+                active_c = concepts[chosen_idx]
+                st.session_state.selected_core_concept = str(active_c.get("core_concept") or "")
+                st.info(f"🎯 **선택된 코어 컨셉:** {st.session_state.selected_core_concept}\n\n💡 *전략 방향:* {str(active_c.get('description') or '')}")
 
 # ==============================================================================
 # 2단계: AI 대본 기획 및 실시간 편집 (st.data_editor)
 # ==============================================================================
 with edit_box:
     st.markdown("### [3단계] 📝 대본 만들기")
-    if is_owner_mode:
+    if is_memory:
+        _memory_duration_notice()
+    elif is_owner_mode:
         _owner_duration_notice()
     else:
         _w_duration()
@@ -2309,7 +2401,14 @@ with edit_box:
         _w_travel_template()
 
     generate_rap_btn = False
-    if is_owner_mode:
+    if is_memory:
+        st.caption("올린 사진·영상 한 개마다 짧은 한 줄 카피가 1:1로 붙어요. 그 컷에 실제로 보이는 장면만 말하고, 이름·나이·숫자는 지어내지 않아요.")
+        _mn_btn = len(st.session_state.get("uploaded_paths") or [])
+        generate_plan_btn = st.button(f"🚀 추억 대본 만들기 ({_mn_btn}컷 · {_mn_btn}줄)" if _mn_btn else "🚀 추억 대본 만들기", use_container_width=True,
+                                      type="primary", key="generate_plan_btn", help="사진·영상을 순서대로 보고 컷마다 한 줄씩 써요.")
+        st.session_state.owner_tempo = "rap"
+        col_plan_desc = st.container()
+    elif is_owner_mode:
         st.caption("올린 사진 한 장마다 짧은 한 줄 카피가 1:1로 붙어요 (사진 N장 = 2초 카피 N줄).")
         generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary", key="generate_plan_btn",
                                       help="사진 1장 = 문장 1개. 문장마다 그 사진에 찍힌 메뉴·장면만 말해요.")
@@ -2320,7 +2419,7 @@ with edit_box:
         with col_plan_btn:
             generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary")
     # 레이더 후킹 패턴 → 씬 1 후킹 힌트 (숙소 제휴 / 사장님 숙소·음식점)
-    hook_vertical = vertical_for(pipeline_mode, business_type)
+    hook_vertical = None if is_memory else vertical_for(pipeline_mode, business_type)
     hook_hints = load_hook_hints(hook_vertical, allow_dryrun=allow_dryrun_hints()) if (hints_enabled() and hook_vertical) else None
     with col_plan_desc:
         if hook_hints:
@@ -2330,7 +2429,11 @@ with edit_box:
         elif hook_vertical and hints_enabled():
             st.caption("🔥 레이더 패턴 없음 → 기본 후킹 규칙으로 기획 (🔥 실시간 떡상 레이더 화면에서 수집)")
         concept_badge = f" | 🎯 1컨셉: **{st.session_state.get('selected_core_concept', '')}**" if st.session_state.get('selected_core_concept') else ""
-        st.caption(f"모드: **{production_mode}** | 화자: **{script_style_options.get(selected_script_style, '')}** | 말투: **{selected_tone_label}**{concept_badge}")
+        if is_memory:
+            from core.planners.memory import TONES as _MT, tone_of as _mtone
+            st.caption(f"모드: **🎉 모임·행사·추억** | 분위기: **{_MT[_mtone(st.session_state.get('mem_tone'))]['label']}** | 성우 말투: **{selected_tone_label}**")
+        else:
+            st.caption(f"모드: **{production_mode}** | 화자: **{script_style_options.get(selected_script_style, '')}** | 말투: **{selected_tone_label}**{concept_badge}")
 
 def _owner_store_facts() -> dict:
     """붙여 넣은 메뉴판·리뷰 글과 주소에서 뽑은 매장 고유 팩트 (글을 고치면 바로 반영되도록 매번 다시 뽑음)"""
@@ -2356,13 +2459,15 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         affiliate_program=ss.get("affiliate_program", ""),
         shop_item=({**ss.shop_item, "cut_roles": _shop_roles_for(list(ss.uploaded_paths))} if (is_commerce_mode and not is_bundle and ss.get("shop_item")) else {}),
         core_concept=core_concept_val,
-        store_facts=_owner_store_facts() if is_owner_mode else {}, photo_tags=dict(ss.get("photo_tags") or {}) if is_owner_mode else {},
-        photo_buckets=dict(ss.get("photo_buckets") or {}) if is_owner_mode else {},
-        keep_photo_order=bool(ss.get("keep_photo_order")) if is_owner_mode else False,
+        store_facts=_owner_store_facts() if (is_owner_mode and not is_memory) else {},
+        photo_tags=dict(ss.get("photo_tags") or {}) if (is_owner_mode and not is_memory) else {},
+        photo_buckets=dict(ss.get("photo_buckets") or {}) if (is_owner_mode and not is_memory) else {},
+        keep_photo_order=bool(ss.get("keep_photo_order")) if (is_owner_mode and not is_memory) else False,
+        memory=is_memory, memory_tone=ss.get("mem_tone", "lively"),
         tempo="rap",
         tone_instruction=selected_tone_instruction,
         voice_actor=ss.get("selected_actor", selected_actor), audio_mode=selected_audio_mode, bgm_path=bgm_path,
-        api_key=api_key, mock=mock_mode, hook_hints=hook_hints if (is_owner_mode or is_travel_mode) else None)
+        api_key=api_key, mock=mock_mode, hook_hints=hook_hints if ((is_owner_mode and not is_memory) or is_travel_mode) else None)
 
 
 # 원클릭(쇼핑): 콘티 없이 '영상 만들기'를 누르면 기획부터 자동으로 하고 이어서 렌더
@@ -2376,6 +2481,8 @@ if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
         "book": "🧠 책 한 권을 차분하게 소개하는 대본을 쓰고 있습니다...",
         "video_overlay": "🧠 촬영 영상의 타임라인과 움직임에 맞춘 1컨셉 대본을 기획하고 있습니다...",
     }[pipeline_mode]
+    if is_memory:
+        plan_spinner_msg = "🧠 올린 사진·영상을 순서대로 보고 추억 대본을 쓰고 있습니다..."
     with st.spinner(plan_spinner_msg):
         try:
             if is_travel_mode and not product_name.strip():
@@ -2451,6 +2558,8 @@ if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
                 _ei["script"] = _last["_script"]
             if _last.get("사진 피사체 태깅"):
                 _ei["vision"] = _last["사진 피사체 태깅"]
+            if is_memory and _last.get("모임 추억 대본"):
+                _ei["script"] = _ei["vision"] = _last["모임 추억 대본"]
             st.session_state.engine_info = _ei
             st.session_state.storyboard = scenes
             st.session_state.storyboard_mode = pipeline_mode
@@ -2476,18 +2585,22 @@ if generate_plan_btn or generate_rap_btn or auto_flow or auto_plan_only:
             # 쇼츠 최적화 SEO 메타데이터 자동 생성
             try:
                 _sp = current_spec()
-                _seo = generate_seo_metadata(
-                    scenes=scenes,
-                    mode=_sp.mode,
-                    product_name=_sp.name,
-                    usp=_sp.usp,
-                    search_keyword=_sp.search_keyword,
-                    address=_sp.address,
-                    api_key=_sp.api_key,
-                    mock=_sp.mock,
-                    business_type=_sp.business_type or "",
-                    core_concept=getattr(_sp, "core_concept", "") or ""
-                )
+                if is_memory:
+                    from core.memory_pack import seo_metadata as _memory_seo
+                    _seo = _memory_seo(_sp.name, _sp.memory_tone, scenes)
+                else:
+                    _seo = generate_seo_metadata(
+                        scenes=scenes,
+                        mode=_sp.mode,
+                        product_name=_sp.name,
+                        usp=_sp.usp,
+                        search_keyword=_sp.search_keyword,
+                        address=_sp.address,
+                        api_key=_sp.api_key,
+                        mock=_sp.mock,
+                        business_type=_sp.business_type or "",
+                        core_concept=getattr(_sp, "core_concept", "") or ""
+                    )
                 current_job().save_metadata(_seo)
                 st.session_state.seo_metadata = _seo
             except Exception as se:
@@ -2511,6 +2624,9 @@ with edit_box:
         _ENGINE_LABEL = {"claude": "Claude", "openai": "GPT(OpenAI)", "gemini": "Gemini"}
         if _eng in _ENGINE_LABEL:
             st.caption(f"✍️ 이 대본은 **{_ENGINE_LABEL[_eng]}**가 작성했어요. (직접 고친 문장은 이 표시와 무관해요)")
+        elif _eng in ("template", "mock") and is_memory:
+            st.warning("⚠️ AI가 사진을 보지 못해 **기본 분위기 문구**로 채웠어요 (Mock 모드가 켜져 있거나 AI 호출이 실패했을 수 있어요). "
+                       "사진에 맞게 아래 문장을 직접 고치거나, 설정에서 Mock 모드를 끄고 다시 만들어 주세요.")
         elif _eng in ("template", "mock"):
             st.warning("⚠️ 이 대본은 AI가 아니라 **업종 기본 문구(템플릿)**로 만들어졌어요. Mock 모드가 켜져 있거나 AI 호출이 실패했을 수 있어요. "
                        "사이드바 'Mock 모드'를 끄고 다시 기획해 보세요.")
@@ -2527,14 +2643,16 @@ with edit_box:
         _ei = st.session_state.get("engine_info") or {}
         _lab = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini"}
         _fmt = lambda v: f"{_lab.get(v.get('engine'), v.get('engine'))} ({v.get('model')})" if v else "—"          # noqa: E731
-        if (st.session_state.storyboard[0] or {}).get("script_engine") == "template":
+        if is_memory and _ei.get("script"):
+            st.caption(f"🤖 사진을 보고 쓴 AI: **{_fmt(_ei.get('script'))}** · 문장은 컷에 보이는 장면 기준이에요. 틀린 부분은 직접 고쳐 주세요.")
+        elif (st.session_state.storyboard[0] or {}).get("script_engine") == "template":
             st.caption("🤖 대본: AI 미사용 (업종 기본 문구 — 키가 없거나 Mock 모드이거나 AI 호출이 모두 실패했어요)")
         elif _ei:
             st.caption(f"🤖 대본: **{_fmt(_ei.get('script'))}** · 사진 판독: **{_fmt(_ei.get('vision'))}**"
                        + ("" if _ei.get("vision") else " (이전 분석 결과 재사용)"))
         from core.script_guard import find_unphotographed_menu, photographed_menus
-        _official_now = _merged_store_facts().get("official_menus") or [] if is_owner_mode else []
-        _photo_text_now = " ".join(((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).values()) if is_owner_mode else ""
+        _official_now = _merged_store_facts().get("official_menus") or [] if (is_owner_mode and not is_memory) else []
+        _photo_text_now = " ".join(((st.session_state.storyboard[0] or {}).get("photo_tags") or {}).values()) if (is_owner_mode and not is_memory) else ""
         _official_now = [m for m in _official_now if m not in photographed_menus(_official_now, _photo_text_now)]
         merged_records = []
         for _i, _sc in enumerate(st.session_state.storyboard):
@@ -2761,8 +2879,12 @@ if render_btn:
             st.error(f"현재 콘티는 '{BUNDLE_LAYOUTS.get(st.session_state.get('storyboard_layout'), '다른 구성')}'으로 기획되었습니다. "
                      "스토리보드를 다시 기획해 주세요.")
             st.stop()
-        if is_owner_mode and not product_name.strip():
+        if is_owner_mode and not is_memory and not product_name.strip():
             st.error("상호명을 입력해 주세요. 워터마크와 네이버 검색 엔딩 카드에 사용됩니다.")
+            st.stop()
+        if is_memory and len(scenes) != len(st.session_state.get("uploaded_paths") or []):
+            st.error(f"사진·영상 개수({len(st.session_state.get('uploaded_paths') or [])}개)와 대본 줄 수({len(scenes)}줄)가 달라요. "
+                     "[🚀 추억 대본 만들기]를 다시 눌러 컷과 카피를 1:1로 맞춰 주세요.")
             st.stop()
         if missing_scenes:
             st.error(f"씬 {', '.join(map(str, missing_scenes))}에 사진이 없습니다. 위 갤러리에서 사진을 교체하거나 업로드한 뒤 다시 시도해 주세요.")
@@ -2899,25 +3021,51 @@ def _render_social_tabs():
                 st.caption("유튜브 자동 업로드 버튼은 오른쪽(스마트폰은 아래) 업로드 패널에 그대로 있어요.")
 
 
+def _render_memory_tabs():
+    """🎉 5단계: 카카오톡 단톡방 공유 멘트(첫 탭) + 유튜브·인스타·네이버 클립·틱톡 복사 탭 (위치·검색 유도·판촉 문구 없음)"""
+    from core.memory_pack import LABELS, PLATFORMS, build_memory_packages
+    pk = build_memory_packages(product_name, st.session_state.get("mem_tone", "lively"), st.session_state.get("storyboard") or [])
+    st.markdown("#### 💬 공유 문구")
+    st.caption("영상을 저장한 뒤 단톡방·SNS에 올리면서 아래 문구를 [복사]해 붙여 넣으세요.")
+    tabs = st.tabs([LABELS[k] for k in PLATFORMS])
+    for tab, k in zip(tabs, PLATFORMS):
+        d = pk[k]
+        with tab:
+            if d["title"]:
+                st.markdown("**제목**")
+                st.code(d["title"], language=None)
+                copy_button(d["title"], "📋 제목 복사", key=f"copy_mem_{k}_title")
+            st.markdown("**멘트**" if k == "kakao" else "**본문 · 해시태그**")
+            st.code(d["body"], language=None)
+            copy_button(d["body"], "📋 단톡방 멘트 복사" if k == "kakao" else "📋 이 내용 원클릭 복사", key=f"copy_mem_{k}_body")
+            if d["tip"]:
+                st.info(d["tip"])
+
+
 # 결과물 표출
 if st.session_state.final_video_path and os.path.exists(st.session_state.final_video_path):
     st.markdown("### [5단계] 📤 만들어진 영상 확인 및 채널 업로드")
     col_vid, col_meta = st.columns([1, 1])
     with col_vid:
+        def _download_button():
+            with open(st.session_state.final_video_path, "rb") as f:
+                st.download_button(
+                    label=("⬇️ 스마트폰 갤러리에 저장하기 (카카오톡 단톡방 공유용)" if is_memory
+                           else "⬇️ 스마트폰 갤러리 / PC에 MP4 영상 저장하기" if is_owner_mode else "⬇️ 인스타 릴스 / 유튜브 쇼츠용 고화질 MP4 저장"),
+                    data=f,
+                    file_name=f"{product_name or '추억쇼츠'}_shortform_video.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    type="primary",
+                    key="download_cta"
+                )
+        if is_memory:
+            _download_button()                      # 추억 쇼츠는 저장 → 단톡방 공유가 기본 동선이라 영상 위에 크게
         st.markdown("#### 📱 9:16 쇼츠 완성본 (스마트폰 뷰어)")
         with st.container(key="phone_frame"):
             st.video(st.session_state.final_video_path)
-
-        with open(st.session_state.final_video_path, "rb") as f:
-            st.download_button(
-                label=("⬇️ 스마트폰 갤러리 / PC에 MP4 영상 저장하기" if is_owner_mode else "⬇️ 인스타 릴스 / 유튜브 쇼츠용 고화질 MP4 저장"),
-                data=f,
-                file_name=f"{product_name}_shortform_video.mp4",
-                mime="video/mp4",
-                use_container_width=True,
-                type="primary",
-                key="download_cta"
-            )
+        if not is_memory:
+            _download_button()
         _bs = st.session_state.get("bgm_status") or {}
         if _bs.get("info"):
             _bi = _bs["info"]
@@ -2955,6 +3103,8 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             st.markdown("**📝 첫 댓글 패키지 — 네이버 쇼핑커넥트 링크 + 공정위 대가성 문구 + 사진 출처 문구**")
             st.code(_tx["comment"], language=None)
             copy_button(_tx["comment"], "📋 첫 댓글 패키지 원클릭 복사", key="copy_shop_comment")
+        elif is_memory:
+            _render_memory_tabs()
         elif is_owner_mode:
             _render_social_tabs()
         elif is_commerce_mode:
@@ -2994,7 +3144,11 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         _seo = st.session_state.get("seo_metadata")
         if not _seo:
             _seo = current_job().load_metadata()
-            if not _seo and st.session_state.get("storyboard"):
+            if not _seo and st.session_state.get("storyboard") and is_memory:
+                from core.memory_pack import seo_metadata as _memory_seo
+                _seo = _memory_seo(product_name, st.session_state.get("mem_tone", "lively"), st.session_state.storyboard)
+                current_job().save_metadata(_seo)
+            elif not _seo and st.session_state.get("storyboard"):
                 _sp = current_spec()
                 _seo = generate_seo_metadata(
                     scenes=st.session_state.storyboard,
@@ -3026,6 +3180,9 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         _sb = st.session_state.get("storyboard") or []
         if is_book_mode:
             st.info("📚 시골책방 채널 업로드는 아직 연결 전이에요. 영상은 로컬에 저장됐고, 첫 댓글은 왼쪽에서 대기열로 저장돼요.")
+        elif is_memory:
+            st.info("🎉 추억 영상은 가족·친구와 나누는 영상이라 유튜브 자동 업로드는 켜 두지 않았어요. 영상을 갤러리에 저장해 단톡방에 공유하거나, "
+                    "유튜브·인스타에 올릴 땐 왼쪽 복사 탭의 문구를 쓰세요. (사진에 나온 분들께 먼저 알려 주세요)")
         else:
             if set(st.session_state.get("web_photo_paths", [])) & set(st.session_state.get("uploaded_paths", [])):
                 st.warning("⚠️ 이 영상에는 웹에서 찾은 사진이 들어 있어요. 사진은 크롭·색감 보정·비네팅으로 편집했고 사람·워터마크·글씨 사진은 걸러냈지만, "
@@ -3073,7 +3230,7 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
         st.markdown("#### 📊 제작 사양")
         concept_disp = st.session_state.get('selected_core_concept') or '미지정'
         st.markdown(f"""
-        - **제작 모드**: {production_mode}
+        - **제작 모드**: {"🎉 모임·행사·추억 쇼츠" if is_memory else production_mode}
         - **해상도**: 1080 x 1920 (9:16 Vertical Video)
         - **비디오 렌더링**: 로컬 2D Ken Burns 모션 + 직접 촬영 영상 (24 FPS, H.264 / AAC, 비용 0원)
         - **작업 ID**: `{current_job().job_id}`

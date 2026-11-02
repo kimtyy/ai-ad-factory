@@ -79,6 +79,7 @@ SUITES = [
     ("suite_app_owner_flow.py", "Streamlit 모드 분기 + 사장님 기획→렌더", True),
     ("suite_commerce_bundle.py", "쇼핑 3단 묶음 큐레이션: 훅 3초→상품 3×7초→CTA·어미 리듬·상품별 근거·고정 바·구매 좌표 첫 댓글·렌더", True),
     ("suite_book_mode.py", "시골책방: 한 권 호흡·원문 인용·근거 없는 주장 차단·명조체·종이 인용 카드·2:3 표지·성우 -5%·디졸브 0.6초·알라딘 첫 댓글 대기열", True),
+    ("suite_memory_mode.py", "모임·행사·추억 쇼츠: 파일 N개=컷 N개=카피 N줄 1:1(컷수 고정 금지)·사실 가드(이름·관계·숫자·판촉)·톤 매칭·카카오톡 멘트·공용 엔진 기획→렌더·1단계 토글 화면 흐름", True),
     ("suite_pipeline.py", "공용 제작 엔진(화면 없이 기획→렌더→업로드 문구·첫 댓글) + 구글 캘린더 연동 기초(제목 해석·전용 캘린더)", True),
     ("suite_book_info.py", "시골책방 책 정보 자동 수집: 카카오·국립중앙도서관·쿠팡 표지/링크·알라딘 우선·캘린더 연결 (가짜 응답)", False),
     ("suite_book_reflect.py", "시골책방 사유 스토리텔링(책소개 기반·인용 아님 카드)·씬별 이미지 매칭(라이브러리·AI 배정·흐린 표지)·템플릿 자동 선택", True),
@@ -94,6 +95,7 @@ MODE_SUITES = {
     "stay": ["suite_ux_flow.py", "suite_stay_pipeline.py", "suite_audio_fonts.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
     "commerce": ["suite_ux_flow.py", "suite_commerce.py", "suite_coupang.py", "suite_naver_shop.py"],
     "book": ["suite_book_info.py", "suite_book_reflect.py"],
+    "memory": ["suite_memory_mode.py", "suite_store_app.py", "suite_app_owner_hybrid.py"],
     "overlay": ["suite_ugc_normalize.py", "suite_video_overlay.py"],
     "longform": ["suite_highlight_selector.py", "suite_visual_scorer.py", "suite_audio_stt.py"],
 }
