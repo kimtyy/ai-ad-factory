@@ -1,24 +1,47 @@
 """
 core/planners/memory.py - 🎉 모임·행사·추억 쇼츠 대본 (사진·영상 N개 = 컷 N개 = 카피 N줄, 1:1)
 
-- 컷 수를 고정하지 않는다: 올린 파일 개수(최대 10) 그대로 한 파일에 한 줄 (4개 → 4줄, 7개 → 7줄, 10개 → 10줄)
-- 사진·영상 속 장면(건배·식사·웃음·풍경·단체 사진)을 순서대로 보고, 도입 → 즐거운 순간들 → 마무리 흐름으로 줄을 쓴다
+- 컷 수를 고정하지 않는다 (하한 없음, 상한 23): 올린 파일 개수 그대로 한 파일에 한 줄 (3개 → 3줄, 12개 → 12줄, 23개 → 23줄)
+- 컷당 2.5초: 23컷 × 2.5초 = 57.5초로 유튜브 쇼츠·릴스 59초 한도 안에 들어온다 (영상 클립은 실제 길이, 합계가 넘으면 줄임)
+- 사진·영상 속 장면(건배·식사·웃음·풍경·단체 사진)을 순서대로 보고, 도입 → 하이라이트 → 마무리 3단 흐름으로 줄을 쓴다
 - 사실 가드: 이름·나이·관계·인원수·가격 같은 건 모임 이름에 적힌 것만 허용 (사진만 보고 단정하지 않음)
 - 상호명·네이버 검색·메뉴판 대조는 쓰지 않는다 (매장 홍보 엔진과 완전히 분리)
 렌더는 매장 '1컷 1카피 랩형' 정책(컷당 약 2초)을 그대로 쓴다 (core/pipeline.py가 spec.memory로 연결).
 """
 import json
 import logging
+import math
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.mode_policy import RAP_POLICY, clamp_line_to_policy
 
 logger = logging.getLogger("ad_factory.memory")
 
-MAX_CUTS = 10
-LINE_MIN, LINE_MAX = 6, 24            # 한 줄 길이 (공백 포함). 컷당 약 2초에 읽히는 길이
+MAX_CUTS = 23                         # 23컷 × 2.5초 = 57.5초 (쇼츠 59초 한도 안)
+CUT_SEC = 2.5                         # 컷당 체류 시간
+MAX_TOTAL_SEC = MAX_CUTS * CUT_SEC    # 57.5초 (공식 계산: 23컷 × 2.5초)
+
+# 실제 렌더 길이(실측으로 맞춤) = 컷 진행 시간의 합 + 마지막 컷의 길이 − 진행 1컷분 + 맨 앞 커버 0.5초
+#   · 컷 진행 시간 = 컷 길이 − 전환 겹침(XFADE_OVERLAP_SEC), 마지막 컷은 낭독 끝 + 1.0초 여운(무음이면 약 1.0초 더 김)
+# 쇼츠·릴스 59초 한도 안에 들어오도록 컷이 가장 많을 때(23컷)만 컷당 시간을 2.5초에서 2.47초로 아주 조금 줄인다 (22컷 이하는 2.5초 그대로)
+TARGET_MAX_SEC = 58.4
+FIXED_OVERHEAD_SEC = 0.5 + 1.05       # 커버 0.5초 + 마지막 컷 여운(최대)
+XFADE_OVERLAP_SEC = 0.12              # 컷 전환 디졸브 (모드 정책 MEMORY_POLICY.xfade_sec): 한 컷이 차지하는 진행 시간 = 컷 길이 − 겹침
+
+
+def advance_budget(count: int) -> float:
+    """컷 진행 시간의 합이 넘으면 안 되는 한도 (초)"""
+    return TARGET_MAX_SEC - FIXED_OVERHEAD_SEC
+
+
+def cut_sec(count: int) -> float:
+    """사진 컷 1개의 진행 시간: 보통 2.5초, 22~23컷이면 한도에 맞춰 2.45초 안팎"""
+    if count <= 0:
+        return CUT_SEC
+    return min(CUT_SEC, math.floor(advance_budget(count) / count * 100) / 100)
+LINE_MIN, LINE_MAX = 6, 20            # 한 줄 길이 (공백 포함). 실측 낭독 약 0.11초/자 → 20자 ≈ 2.2초라 컷 2.5초 안에 끝남
 
 TONES: Dict[str, Dict[str, Any]] = {
     "lively": {
@@ -39,28 +62,48 @@ TONES: Dict[str, Dict[str, Any]] = {
 }
 DEFAULT_TONE = "lively"
 
-ROLE_BY_POS = {"first": "intro", "mid": "moment", "last": "ending"}
-ROLE_LABELS_KO = {"intro": "🎬 도입", "moment": "🎉 즐거운 순간", "ending": "💝 마무리"}
+ROLE_LABELS_KO = {"intro": "🎬 도입", "moment": "🎉 하이라이트", "ending": "💝 마무리"}
 
-# 사진을 못 볼 때(Mock·엔진 실패)의 안전 문구: 사실 주장 없이 분위기만. 위치별 풀에서 순서대로 쓰고 같은 줄을 되풀이하지 않는다
+
+def stage_counts(count: int):
+    """3단 감정 흐름의 컷 수 → (도입, 마무리). 23컷이면 도입 1~3컷(약 7초) · 하이라이트 4~19컷 · 마무리 20~23컷(약 10초), 적을수록 비율을 줄임"""
+    if count <= 1:
+        return 0, 1
+    if count <= 3:
+        return 1, 1
+    intro = 3 if count >= 15 else 2 if count >= 8 else 1
+    end = 4 if count >= 20 else 3 if count >= 12 else 2 if count >= 8 else 1
+    return intro, end
+
+
+# 사진을 못 볼 때(Mock·엔진 실패)의 안전 문구: 사실 주장 없이 분위기만. 단계별 풀에서 순서대로 쓰고 같은 줄을 되풀이하지 않는다 (23컷까지 겹치지 않을 만큼 충분히)
 FALLBACK_LINES: Dict[str, Dict[str, List[str]]] = {
     "lively": {
         "first": ["드디어 다 모였어요!", "오늘, 제대로 놀아볼까요?", "모이니까 벌써 신나요!"],
         "mid": ["웃음이 끊기질 않아요!", "이 분위기, 최고예요!", "함께라서 더 즐거워요!", "한 컷 한 컷이 다 웃겨요!",
-                "시간 가는 줄 몰랐어요!", "이 순간을 놓칠 순 없죠!", "분위기가 점점 올라가요!", "다들 표정이 말해줘요!"],
-        "last": ["오늘도 최고였어요, 다음에 또 봐요!", "벌써 다음 모임이 기다려져요!"],
+                "시간 가는 줄 몰랐어요!", "이 순간을 놓칠 순 없죠!", "분위기가 점점 올라가요!", "다들 표정이 말해줘요!",
+                "건배 소리가 울려 퍼져요!", "먹다 보니 또 웃음이에요!", "사진 찍는 손도 바빠요!", "아무도 지루할 틈이 없어요!",
+                "텐션이 하늘을 찔러요!", "웃느라 배가 아플 지경이에요!", "이런 날은 또 안 올지도 몰라요!", "다 같이 외쳐 봐요!",
+                "한 잔 더, 한 컷 더!", "수다가 끝나지 않아요!", "신나는 에너지가 번져요!", "역시 우리가 모이면 달라요!"],
+        "last": ["다 같이 한 컷, 찰칵!", "오늘도 최고였어요!", "벌써 다음 모임이 기다려져요!", "다음에 또 모여요, 약속!"],
     },
     "warm": {
         "first": ["오랜만에 모두 모였어요.", "마음이 먼저 달려왔어요.", "그리운 얼굴들이 모였어요."],
         "mid": ["함께라서 따뜻한 시간이에요.", "웃음 속에 정이 가득해요.", "평범한 하루가 특별해졌어요.", "이 순간이 오래 남을 거예요.",
-                "곁에 있어 고마운 사람들이에요.", "서로의 웃음이 닮아 있어요.", "그저 같이 있는 것만으로 좋아요.", "이런 날이 참 소중해요."],
-        "last": ["오늘 하루, 오래 기억할게요.", "고마운 마음 가득 담아 둡니다."],
+                "곁에 있어 고마운 사람들이에요.", "서로의 웃음이 닮아 있어요.", "그저 같이 있는 것만으로 좋아요.", "이런 날이 참 소중해요.",
+                "도란도란 이야기가 이어져요.", "눈빛마다 반가움이 가득해요.", "따뜻한 한 끼가 마음을 채워요.", "말없이 웃어도 다 통해요.",
+                "시간이 천천히 흘러가요.", "이 온기를 오래 간직하고 싶어요.", "함께한 자리가 선물 같아요.", "웃는 얼굴들이 참 고와요.",
+                "마음 한켠이 따뜻해져요.", "늘 이렇게 모였으면 좋겠어요.", "소소한 행복이 모여 있어요.", "추억 한 장이 또 쌓여요."],
+        "last": ["다 함께 모인 이 순간을 남겨요.", "오늘 하루, 오래 기억할게요.", "고마운 마음 가득 담아 둡니다.", "다음에도 이렇게 만나요."],
     },
     "formal": {
         "first": ["올해도 이렇게 모였어요.", "뜻깊은 하루가 시작됐어요.", "함께하는 자리가 열렸어요."],
         "mid": ["한자리에 모여 마음을 나눴어요.", "현장의 활기가 가득했어요.", "서로 손을 모은 시간이에요.", "참여한 모두가 주인공이에요.",
-                "정성이 모여 행사가 완성돼요.", "웃음과 박수가 이어졌어요.", "이 장면을 기록으로 남겨요.", "함께한 하루가 쌓여 가요."],
-        "last": ["오늘의 기록을 이렇게 남깁니다.", "함께해 주셔서 고맙습니다."],
+                "정성이 모여 행사가 완성돼요.", "웃음과 박수가 이어졌어요.", "이 장면을 기록으로 남겨요.", "함께한 하루가 쌓여 가요.",
+                "준비한 마음이 빛을 냈어요.", "서로를 격려하는 자리예요.", "활동 현장이 분주하게 돌아가요.", "동네가 하나로 모인 순간이에요.",
+                "수고한 손길이 곳곳에 보여요.", "화기애애한 분위기가 이어져요.", "함께 나눈 식사도 든든해요.", "참석자들의 표정이 밝아요.",
+                "하나둘 정성이 더해져요.", "소중한 순간을 기록해요.", "이웃의 정이 느껴져요.", "행사의 열기가 끝까지 이어져요."],
+        "last": ["다 함께 모여 기념으로 남깁니다.", "오늘의 기록을 이렇게 남깁니다.", "함께해 주셔서 고맙습니다.", "내년에도 힘차게 만나요."],
     },
 }
 
@@ -78,22 +121,24 @@ def tone_of(key: Optional[str]) -> str:
 
 
 def role_for(index: int, count: int) -> str:
-    if index == count - 1:
-        return ROLE_BY_POS["last"]
-    return ROLE_BY_POS["first"] if index == 0 else ROLE_BY_POS["mid"]
+    intro, end = stage_counts(count)
+    if index >= count - end:
+        return "ending"
+    return "intro" if index < intro else "moment"
 
 
 def fallback_line(tone: str, index: int, count: int) -> str:
-    """사진 없이도 안전한 문구: 위치(도입/중간/마무리)별 풀에서 순서대로"""
+    """사진 없이도 안전한 문구: 단계(도입/하이라이트/마무리)별 풀에서 순서대로"""
     pool = FALLBACK_LINES[tone_of(tone)]
-    if count == 1:
-        return pool["last"][0]
-    if index == 0:
-        return pool["first"][0]
-    if index == count - 1:
-        return pool["last"][0]
-    mids = pool["mid"]
-    return mids[(index - 1) % len(mids)]
+    intro, end = stage_counts(count)
+    role = role_for(index, count)
+    if role == "ending":
+        if count == 1:
+            return pool["last"][1]
+        return pool["last"][min(index - (count - end), len(pool["last"]) - 1)]
+    if role == "intro":
+        return pool["first"][min(index, len(pool["first"]) - 1)]
+    return pool["mid"][(index - intro) % len(pool["mid"])]
 
 
 def clean_line(text: str) -> str:
@@ -131,7 +176,7 @@ def _scene(i: int, count: int, text: str) -> Dict[str, Any]:
     return {
         "scene_index": i + 1, "scene_number": i + 1, "role": role,
         "target_visual_role": role, "visual_keywords": [ROLE_LABELS_KO[role]],
-        "duration_sec": RAP_POLICY.default_scene_sec, "hook_title": "", "voiceover": text, "subtitle": text, "caption": text,
+        "duration_sec": CUT_SEC, "hook_title": "", "voiceover": text, "subtitle": text, "caption": text,
         "visual_description": ROLE_LABELS_KO[role], "image_prompt_en": "",
         "video_motion_prompt_en": motions[i % len(motions)], "focus_bottom": False,
     }
@@ -144,9 +189,24 @@ MEMORY_SYSTEM = (
 )
 
 
+def _flow_guide(n: int, tone: str) -> str:
+    intro, end = stage_counts(n)
+    end_mood = {"warm": "훈훈한 여운과 감동", "lively": "유쾌한 여운", "formal": "기록과 감사"}[tone_of(tone)]
+    if n == 1:
+        return "컷이 1개라 도입이면서 마무리입니다."
+    hi_a, hi_b = intro + 1, n - end
+    mid = (f"컷 {hi_a}~{hi_b} = 하이라이트 (행사 활동, 맛있는 식사, 건배, 웃는 표정, 노래·게임 같은 즐거운 에피소드를 컷마다 서로 다른 장면으로 리드미컬하게 묘사)"
+           if hi_b > hi_a else f"컷 {hi_a} = 하이라이트 (가장 즐거운 장면)" if hi_b == hi_a else "")
+    parts = [f"컷 1{'~' + str(intro) if intro > 1 else ''} = 도입 (모임 장소에 도착하고 설레게 만나는 시작)", mid,
+             f"컷 {n - end + 1}{'~' + str(n) if end > 1 else ''} = 마무리 (다 함께 모인 단체 사진이 있으면 그 컷, {end_mood}과 다음 모임을 기약하는 끝맺음)"]
+    return " → ".join(p for p in parts if p)
+
+
 def _prompt(title: str, tone: str, n: int) -> str:
     t = TONES[tone_of(tone)]
     name = (title or "").strip()
+    many = ("\n- 컷이 많으니(15개 이상) 지루하거나 반복되지 않게, 같은 낱말·같은 어미·같은 구조를 3줄 이상 이어 쓰지 말고 컷마다 보이는 장면을 구체적으로 달리 쓰세요."
+            if n >= 15 else "")
     return f"""
 [모임·행사 정보]
 - 모임·행사 이름: {name or '(적지 않음)'}
@@ -155,8 +215,8 @@ def _prompt(title: str, tone: str, n: int) -> str:
 [규칙: 컷 {n}개 = 줄 {n}개, 1:1]
 - 위 사진·영상은 '컷 1'부터 '컷 {n}'까지 올라온 순서입니다. 정확히 {n}줄을 쓰세요 (더도 덜도 안 됩니다). 줄 i는 컷 i 한 장만 말합니다.
 - 줄 i는 그 컷에 실제로 보이는 장면(건배, 식사, 웃는 표정, 풍경, 단체 사진, 노래, 게임, 걷는 모습 등)을 구체적으로 짚으세요. 다른 컷 이야기는 금지입니다.
-- 이야기 흐름: 컷 1 = 도입(모인 순간·시작) → 중간 컷들 = 즐거운 순간들을 서로 다른 장면으로 → 컷 {n} = {'감동' if tone_of(tone) == 'warm' else '유쾌' if tone_of(tone) == 'lively' else '기록·감사'}의 마무리. 컷이 1개면 도입이면서 마무리입니다.
-- 한 줄은 공백 포함 {LINE_MIN + 4}~20자(최대 {LINE_MAX}자), 2초 안에 읽히는 짧은 숏카피. 늘어지는 서술은 빼고 핵심 장면 + 짧은 느낌으로.
+- [3단 감정 흐름] {_flow_guide(n, tone)}{many}
+- 한 줄은 공백 포함 {LINE_MIN + 4}~{LINE_MAX - 4}자(최대 {LINE_MAX}자), 컷당 2.5초 안에 읽히는 짧은 숏카피. 늘어지는 서술은 빼고 핵심 장면 + 짧은 느낌으로.
 - 사진에서 확인되지 않는 사실은 쓰지 마세요: 사람 이름, 나이, 가족 관계 호칭(엄마·아빠·할머니 등)은 모임 이름에 적혀 있을 때만 쓸 수 있고, 인원수·날짜·숫자·가격·순위도 쓰지 마세요.
 - 얼굴·외모 평가('예쁜', '잘생긴')와 특정인을 가리키는 말은 쓰지 마세요. 장소·음식 이름도 사진이나 모임 이름에 분명히 있을 때만 쓰세요.
 - 같은 말이나 같은 어미를 되풀이하지 마세요. 이모티콘, 웃음 표기(^^, ㅎㅎ, ㅋㅋ), 따옴표는 쓰지 마세요.
@@ -197,7 +257,7 @@ def _plan_with_llm(title: str, tone: str, media: List[str], api_key: Optional[st
     return lines, story, engine
 
 
-def finalize_lines(raw_lines: List[str], count: int, title: str, tone: str) -> (List[str], List[str]):
+def finalize_lines(raw_lines: List[str], count: int, title: str, tone: str) -> Tuple[List[str], List[str]]:
     """엔진이 준 줄 → 정확히 count줄. 규칙 위반·빈 줄·중복·부족분은 안전 문구로 바꾸고 바꾼 이유를 돌려준다"""
     notes: List[str] = []
     if len(raw_lines) != count:

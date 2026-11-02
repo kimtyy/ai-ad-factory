@@ -376,7 +376,8 @@ def render_media_manager():
                              st.session_state.get("owner_name", ""), st.session_state.get("owner_usp", ""))
             if _g:
                 st.info(_g["text"])
-        st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {MAX_MEDIA}개)"
+        max_media = MEMORY_MAX if is_memory else MAX_MEDIA
+        st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {max_media}개)"
                     + (f" · 🎞️ 컷 {len(paths)}개 = 카피 {len(paths)}줄" if is_memory and paths else ""))
         if st.session_state.pop("media_stale", False):
             st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
@@ -406,13 +407,17 @@ def render_media_manager():
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
         new_files = st.file_uploader(
-            "➕ 내 폰 사진·영상 추가 (JPG/PNG/HEIC/MP4/MOV)", accept_multiple_files=True, type=UPLOAD_TYPES,
-            key=f"file_uploader_{curr_mode}_{nonce}", disabled=len(paths) >= MAX_MEDIA,
+            (f"📸 모임 사진·영상 최대 {MEMORY_MAX}개까지 추가 (올린 개수 × {MEMORY_CUT_SEC:g}초로 최대 {int(MEMORY_MAX_SEC)}초 쇼츠 완성)" if is_memory
+             else "➕ 내 폰 사진·영상 추가 (JPG/PNG/HEIC/MP4/MOV)"),
+            accept_multiple_files=True, type=UPLOAD_TYPES,
+            key=f"file_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", disabled=len(paths) >= max_media,
             help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
         )
         if new_files:
             saved = [save_uploaded_file(f) for f in new_files]
-            added = add_media(paths, saved)
+            added = add_media(paths, saved, limit=max_media)
+            if len(paths) + len(saved) > max_media:
+                st.toast(f"최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)", icon="⚠️")
             st.session_state.media_uploader_nonce = nonce + 1      # 업로더 비우기 (다음 실행에서 같은 파일을 다시 넣지 않게)
             if added != paths:
                 _media_changed(added)
@@ -459,6 +464,7 @@ if DEMO_MODE:
     st.session_state.production_mode = "owner"
     st.session_state.mode_switch = next(iter(MODES))
 MODE_LABELS = {v: k for k, v in MODES.items()}
+from core.planners.memory import CUT_SEC as MEMORY_CUT_SEC, MAX_CUTS as MEMORY_MAX, MAX_TOTAL_SEC as MEMORY_MAX_SEC  # noqa: E402
 from core.planners.memory import ROLE_LABELS_KO as MEMORY_ROLE_LABELS  # noqa: E402
 SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, **MEMORY_ROLE_LABELS, "hook": "🔥 후킹", "feature": "✨ 특장점", "facility": "☕ 부대시설",
                      "room": "🛏 객실", "cta": "📍 CTA", "hero": "🛒 첫인상", "usage": "🙌 사용 장면", "body": "💡 본문"}
@@ -1008,22 +1014,25 @@ def _owner_duration_notice():
 
 
 def _memory_duration_notice():
-    """🎉 3단계: 컷 수와 길이는 고르는 값이 아니라 올린 파일에서 정해진다 (사진 1장 ≈ 2~2.5초, 영상은 실제 길이 최대 10초)"""
+    """🎉 3단계: 컷 수와 길이는 고르는 값이 아니라 올린 파일에서 정해진다 (사진 1장 = 2.5초, 영상은 실제 길이 최대 10초, 합계 57.5초 이내)"""
     from core.media import is_video_file, probe_media
     from core.pipeline import MIXED_VIDEO_CAP_SEC
-    paths = list(st.session_state.get("uploaded_paths") or [])[:MAX_MEDIA]
+    paths = list(st.session_state.get("uploaded_paths") or [])[:MEMORY_MAX]
     if not paths:
-        st.caption("⏱️ 사진·영상을 올리면 컷 수와 길이가 자동으로 계산돼요 (파일 1개 = 컷 1개 = 카피 1줄).")
+        st.caption(f"⏱️ 사진·영상을 올리면 컷 수와 길이가 자동으로 계산돼요 (파일 1개 = 컷 1개 = 카피 1줄 = 약 {MEMORY_CUT_SEC:g}초).")
         return
 
     def _len(p):
         try:
-            return min(float(probe_media(p).duration), MIXED_VIDEO_CAP_SEC)
+            return max(MEMORY_CUT_SEC, min(float(probe_media(p).duration), MIXED_VIDEO_CAP_SEC))
         except (ValueError, OSError):
             return 3.0
-    lo = sum(_len(p) if is_video_file(p) else 2.0 for p in paths)
-    hi = sum(_len(p) if is_video_file(p) else 2.5 for p in paths)
-    st.info(f"⏱️ 올린 {len(paths)}개 = {len(paths)}컷 · {len(paths)}줄 카피 · 약 {int(round(lo))}~{int(round(hi))}초 쇼츠로 제작됩니다.")
+    from core.planners.memory import advance_budget, cut_sec
+    cut = cut_sec(len(paths))
+    total = sum(max(cut, _len(p) - 0.35) if is_video_file(p) else cut for p in paths)
+    shrunk = total > advance_budget(len(paths))
+    st.info(f"⏱️ 올린 {len(paths)}개 = {len(paths)}컷 · {len(paths)}줄 카피 · 약 {int(round(min(total, advance_budget(len(paths)))))}초 쇼츠로 제작됩니다 "
+            f"(컷당 약 {MEMORY_CUT_SEC:g}초)." + (" 영상 컷이 길어 쇼츠 59초 한도에 맞춰 영상 길이를 조금 줄여요." if shrunk else ""))
 
 
 def _w_travel_template():
@@ -2239,8 +2248,9 @@ with edit_box:
                 f"아래 **[🚀 스토리보드 자동 기획]**을 실행하면 씬별로 필요한 컷만 핀포인트 다운로드됩니다."
             )
         elif is_memory:
-            st.caption("💡 모임에서 폰으로 찍은 사진과 3~5초 짧은 영상을 순서대로 올려 주세요 (최대 10개). "
-                       "올린 개수 그대로 컷이 만들어지고, 파일 하나마다 카피 한 줄이 1:1로 붙어요. 순서는 아래에서 바꿀 수 있어요.")
+            st.caption(f"💡 모임에서 폰으로 찍은 사진과 3~5초 짧은 영상을 순서대로 올려 주세요 (3장이든 20장이든, 최대 {MEMORY_MAX}개). "
+                       f"올린 개수 그대로 컷이 만들어지고, 파일 하나마다 카피 한 줄이 1:1로 붙어요. 컷당 약 {MEMORY_CUT_SEC:g}초라 {MEMORY_MAX}개면 약 {int(MEMORY_MAX_SEC)}초 쇼츠가 돼요. "
+                       "순서는 아래에서 바꿀 수 있어요.")
         elif is_owner_mode:
             st.caption("💡 가게 외관, 대표 메뉴·상품, 내부 분위기를 찍은 사진·영상을 순서대로 2~8개 올려 주세요. 올린 순서대로 씬이 만들어집니다.")
         elif is_book_mode:
@@ -2265,8 +2275,8 @@ with edit_box:
         _mn = len(st.session_state.get("uploaded_paths") or [])
         st.caption("💡 올린 사진·영상을 순서대로 보고 도입 → 즐거운 순간들 → 마무리 흐름으로 한 컷에 한 줄씩 써요. "
                    "컨셉을 따로 고를 필요는 없어요. 톤은 1단계에서 바꿀 수 있어요.")
-        st.info(f"🎞️ 지금 올린 파일 {_mn}개 → 컷 {_mn}개, 카피 {_mn}줄이 만들어져요 (최대 10개)." if _mn
-                else "🎞️ 사진·영상을 올리면 올린 개수 그대로 컷과 카피 줄 수가 정해져요 (최대 10개).")
+        st.info(f"🎞️ 지금 올린 파일 {_mn}개 → 컷 {_mn}개, 카피 {_mn}줄이 만들어져요 (개수 제한 없이 최대 {MEMORY_MAX}개)." if _mn
+                else f"🎞️ 사진·영상을 올리면 올린 개수 그대로 컷과 카피 줄 수가 정해져요 (하한 없음, 최대 {MEMORY_MAX}개).")
     else:
         st.markdown("### [2단계] 🎯 컨셉 잡기")
         _w_pov()

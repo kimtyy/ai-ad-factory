@@ -1,4 +1,4 @@
-"""🎉 모임·행사·추억 쇼츠 (단독 앱 1단계 토글): N컷 N카피 1:1(컷수 고정 금지)·사실 가드·톤 매칭·렌더·카카오 멘트·화면 흐름"""
+"""🎉 모임·행사·추억 쇼츠 (단독 앱 1단계 토글): 하한 없음·최대 23컷 N컷 N카피 1:1·컷당 2.5초·59초 이내 렌더·3단 흐름·사실 가드·톤 매칭·카카오 멘트·화면 흐름"""
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _support import ROOT, fixture, tmp, finish  # noqa: E402  (레포 루트로 chdir + sys.path 설정)
@@ -26,27 +26,36 @@ def check(c, m):
 
 work = tmp("memory_mode_")
 P1, P2 = fixture("photo_room.jpg"), fixture("photo_pool.jpg")
-photos = [shutil.copy(P1 if i % 2 else P2, os.path.join(work, f"p{i}.jpg")) for i in range(10)]
+photos = [shutil.copy(P1 if i % 2 else P2, os.path.join(work, f"p{i}.jpg")) for i in range(23)]
 for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     os.environ.pop(k, None)
 
 # ---------------------------------------------------------------- 1. 컷수 고정 금지: 올린 개수 그대로 N컷 N줄 (1~10)
-for n in (1, 2, 4, 7, 10):
+for n in (1, 2, 3, 5, 8, 12, 17, 23):
     sc = mem.plan_memory_storyboard("가평 상인회 가을 단합대회", "lively", photos[:n], mock=True)
     lines = [s["voiceover"] for s in sc]
     check(len(sc) == n and len(set(l.replace(" ", "") for l in lines)) == n and all(s["subtitle"] == s["voiceover"] == s["caption"] for s in sc),
           f"{n}개 → {n}컷 {n}줄 (중복 없음, 자막=음성)")
-sc = mem.plan_memory_storyboard("", "warm", photos * 2, mock=True)
-check(len(sc) == 10, "11개 이상 올려도 최대 10컷")
+sc = mem.plan_memory_storyboard("", "warm", photos + photos, mock=True)
+check(len(sc) == 23 and mem.MAX_CUTS == 23 and mem.CUT_SEC == 2.5 and mem.MAX_TOTAL_SEC == 57.5, "24개 이상 올려도 최대 23컷 (23 × 2.5초 = 57.5초)")
 check([s["role"] for s in mem.plan_memory_storyboard("", "warm", photos[:4], mock=True)] == ["intro", "moment", "moment", "ending"],
-      "역할: 도입 → 즐거운 순간들 → 마무리")
+      "역할: 도입 → 하이라이트 → 마무리")
+r23 = [s["role"] for s in mem.plan_memory_storyboard("", "lively", photos, mock=True)]
+check(r23[:3] == ["intro"] * 3 and set(r23[3:19]) == {"moment"} and r23[19:] == ["ending"] * 4 and mem.stage_counts(23) == (3, 4),
+      "23컷 3단 흐름: 도입 1~3컷 · 하이라이트 4~19컷 · 마무리 20~23컷")
+check(mem.stage_counts(1) == (0, 1) and mem.stage_counts(3) == (1, 1) and mem.stage_counts(5) == (1, 1) and mem.stage_counts(12) == (2, 3),
+      f"컷이 적으면 도입·마무리 비율을 줄임: 5컷 {mem.stage_counts(5)}, 12컷 {mem.stage_counts(12)}")
+for tn in ("lively", "warm", "formal"):
+    l23 = [s["voiceover"] for s in mem.plan_memory_storyboard("", tn, photos, mock=True)]
+    check(len(set(l.replace(" ", "") for l in l23)) == 23 and all(len(l) <= mem.LINE_MAX for l in l23),
+          f"[{tn}] 안전 문구도 23줄이 모두 다르고 {mem.LINE_MAX}자 이내")
 try:
     mem.plan_memory_storyboard("행사", "warm", [], mock=True)
     check(False, "사진 없으면 ValueError")
 except ValueError as e:
     check("1개 이상" in str(e), f"사진 없으면 지어내지 않고 안내: {e}")
-check(all(not s["hook_title"] and s["duration_sec"] == 2.0 for s in mem.plan_memory_storyboard("행사", "formal", photos[:4], mock=True)),
-      "후킹 헤드라인 없음(줄 수=컷 수 유지)·컷당 2초")
+check(all(not s["hook_title"] and s["duration_sec"] == 2.5 for s in mem.plan_memory_storyboard("행사", "formal", photos[:4], mock=True)),
+      "후킹 헤드라인 없음(줄 수=컷 수 유지)·컷당 2.5초")
 
 # ---------------------------------------------------------------- 2. 사실 가드: 이름·관계·숫자·판촉은 안전 문구로
 check(mem.find_violation("엄마가 환하게 웃어요!", "가을 단합대회") and not mem.find_violation("엄마 생신 축하해요!", "엄마 생신 파티"),
@@ -77,7 +86,7 @@ def fake_claude(contents, system, temperature, max_tokens):
     n = int([t for t in seen["texts"] if "정확히" in t][0].split("정확히 ")[1].split("줄")[0])
     pool = ["상 위에 음식이 가득해요!", "다 같이 잔을 들었어요!", "환하게 웃는 얼굴들이에요.", "단체 사진 한 장 남겨요!", "창밖 풍경도 한몫해요.",
             "노래 소리가 번져요!", "손뼉 치는 소리가 커져요.", "이 순간이 오래 남아요.", "작별 인사도 웃으며 해요.", "다음에 또 모여요!"]
-    return json.dumps({"story": "웃음 가득한 하루", "scenes": [{"scene_index": i + 1, "voiceover": pool[i]} for i in range(n)]}, ensure_ascii=False)
+    return json.dumps({"story": "웃음 가득한 하루", "scenes": [{"scene_index": i + 1, "voiceover": pool[i]} for i in range(min(n, len(pool)))]}, ensure_ascii=False)
 
 
 os.environ["ANTHROPIC_API_KEY"] = "test-key"
@@ -91,6 +100,12 @@ try:
           f"LLM 대본 4줄 + 엔진 표시: {[s['voiceover'] for s in sc]}")
     check(router.LAST_ENGINE.get("모임 추억 대본", {}).get("engine") == "claude", "목적 '모임 추억 대본'으로 엔진 기록")
 
+    sc23 = mem.plan_memory_storyboard("가평 동창회", "lively", photos[:23], mock=False, thumb_dir=work)      # 엔진은 10줄만 돌려줌 → 23줄로 보정
+    p23 = "\n".join(seen["texts"])
+    want = ["정확히 23줄", "컷 1~3 = 도입", "컷 4~19 = 하이라이트", "컷 20~23 = 마무리", "단체 사진", "다음 모임", "3줄 이상 이어"]
+    miss = [w for w in want if w not in p23]
+    check(seen["images"] == 23 and not miss, f"23컷 프롬프트: 도입 1~3 · 하이라이트 4~19 · 마무리 20~23 3단 흐름 명시 (이미지 {seen['images']}장, 빠진 문구 {miss})")
+    check(len(sc23) == 23 and all(len(s["voiceover"]) <= mem.LINE_MAX for s in sc23) and sc23[0]["memory"]["fixes"], "엔진이 줄을 덜 줘도 정확히 23줄 + 보정 기록")
     def broken_claude(contents, system, temperature, max_tokens):
         raise RuntimeError("boom")
     router._overrides["claude"] = broken_claude
@@ -123,7 +138,7 @@ job = JobContext.create(app="test")
 scenes = pipeline.plan(spec, job)
 check(len(scenes) == 4 and not pipeline.missing_media(scenes) and scenes[0]["image_path"] == photos[0] and (scenes[1].get("media") or {}).get("path") == vid
       and scenes[2]["image_path"] == photos[1], "엔진 기획: 파일 4개 → 4씬, i번째 파일 = i번째 씬 (영상 포함)")
-check(scenes[1]["duration_sec"] >= 3.5 and scenes[0]["duration_sec"] == 2.0, f"영상 컷은 실제 길이 재생({scenes[1]['duration_sec']}초), 사진 컷은 2초")
+check(scenes[1]["duration_sec"] >= 3.5 and scenes[0]["duration_sec"] == 2.5, f"영상 컷은 실제 길이 재생({scenes[1]['duration_sec']}초), 사진 컷은 2.5초")
 tx = pipeline.memory_upload_texts(spec, scenes)
 check(tx["comment"].startswith("우리 우리 동창회 영상") and tx["title"].endswith("#Shorts") and "#추억" in tx["desc"], "업로드 문구: 카카오 멘트 + 추억 해시태그")
 res = pipeline.render(spec, job, scenes)
@@ -131,8 +146,70 @@ from core.media import probe_media  # noqa: E402
 dur = probe_media(res.final_path).duration
 check(os.path.exists(res.final_path) and res.shorts_copy["source"] == "memory" and res.metadata and "동창회" in res.metadata["description"],
       "엔진 렌더: 영상·추억 전용 카피·추억 메타데이터")
-check(8.0 <= dur <= 14.0, f"렌더 길이 ≈ 컷 합계 ({dur:.1f}초; 사진 3×2초 + 영상 4초)")
+check(10.0 <= dur <= 15.0, f"렌더 길이 ≈ 컷 합계 ({dur:.1f}초; 사진 3×2.5초 + 영상 4초)")
 shutil.rmtree(job.workdir, ignore_errors=True)
+
+# ---------------------------------------------------------------- 5-1. 컷당 2.5초 정책 + 59초 예산
+import dataclasses  # noqa: E402
+from core.mode_policy import get_mode_policy  # noqa: E402
+os.environ["MEMORY_TEMPO"] = "1"
+pol = get_mode_policy("owner")
+os.environ["MEMORY_CUT_SEC"] = "2.47"
+pol245 = get_mode_policy("owner")
+os.environ.pop("MEMORY_TEMPO", None)
+os.environ.pop("MEMORY_CUT_SEC", None)
+check(pol.min_scene_sec == 2.62 and pol.silent_scene_sec == 2.47 and pol245.min_scene_sec == 2.59 and get_mode_policy("owner").min_scene_sec < 2.5,
+      "MEMORY_POLICY: 컷 진행 2.5초 = 컷 길이 2.62초(디졸브 겹침 0.12 포함), 23컷은 2.47초 (매장 홍보 정책은 그대로)")
+check([mem.cut_sec(n) for n in (1, 5, 12, 21, 22, 23)] == [2.5, 2.5, 2.5, 2.5, 2.5, 2.47],
+      f"컷당 시간: 22컷 이하 2.5초, 23컷만 59초 한도에 맞춰 2.47초 ({[mem.cut_sec(n) for n in (1, 5, 12, 21, 22, 23)]})")
+pipeline.apply_style_env(pipeline.JobSpec(mode="owner", memory=True, media_paths=photos[:23]))
+on, cut_env = os.environ.get("MEMORY_TEMPO"), os.environ.get("MEMORY_CUT_SEC")
+pipeline.apply_style_env(pipeline.JobSpec(mode="owner"))
+check(on == "1" and cut_env == "2.47" and "MEMORY_TEMPO" not in os.environ and "MEMORY_CUT_SEC" not in os.environ,
+      "추억 작업에서만 2.5초 템포가 켜지고(23장이면 2.47초) 매장 작업이면 꺼짐")
+vscenes = [{"scene_index": i + 1, "duration_sec": 10.0, "min_sec": 10.0, "media": {"type": "video", "path": "x.mp4"}} for i in range(23)]
+tot = pipeline.fit_total_budget(vscenes)
+check(tot <= mem.advance_budget(23) + 0.05 and all(s["min_sec"] >= 2.59 for s in vscenes), f"영상 23개(각 10초)도 진행 합계 한도 {mem.advance_budget(23):.1f}초 이내로 보정 ({tot}초)")
+mixed = [{"scene_index": i + 1, "duration_sec": 2.47} for i in range(20)] + [{"scene_index": 21 + i, "duration_sec": 10.0, "min_sec": 10.0, "media": {"type": "video", "path": "x.mp4"}} for i in range(3)]
+t2 = pipeline.fit_total_budget(mixed)
+check(t2 <= mem.advance_budget(23) + 0.05 and all(s["duration_sec"] == 2.47 for s in mixed[:20]) and all(s["min_sec"] > 2.59 for s in mixed[20:]),
+      f"사진 20 + 영상 3(각 10초): 사진 컷은 그대로, 영상 초과분만 줄임 ({t2}초)")
+short_clip = [{"scene_index": 1, "duration_sec": 4.0, "min_sec": 4.0, "media": {"type": "video", "path": "x.mp4"}}]
+check(pipeline.fit_total_budget(short_clip) == 3.88 and short_clip[0]["min_sec"] == 4.0, "한도 안이면 영상 길이를 건드리지 않음")
+
+
+def render_n(n, audio_mode, real_voice=False, media=None):
+    paths = media or photos[:n]
+    sp = pipeline.JobSpec(mode="owner", name="가평 동창회", media_paths=paths, memory=True, memory_tone="lively", mock=True, audio_mode=audio_mode)
+    jb = JobContext.create(app="test")
+    sc = pipeline.plan(sp, jb)
+    # Mock 플래그는 TTS까지 더미 오디오로 바꾸므로, 실제 나레이션 길이를 재려면 렌더만 mock=False (대본은 이미 Mock으로 확정)
+    r = pipeline.render(dataclasses.replace(sp, mock=False) if real_voice else sp, jb, sc)
+    d = probe_media(r.final_path).duration
+    shutil.rmtree(jb.workdir, ignore_errors=True)
+    return sc, d
+
+
+for n, lo, hi in ((5, 11.0, 14.5), (12, 28.0, 34.0), (23, 54.0, 58.9)):
+    sc_n, d_n = render_n(n, "silent")
+    check(len(sc_n) == n and not pipeline.missing_media(sc_n) and d_n < 59.0 and lo <= d_n <= hi,
+          f"사진 {n}장(무음) → {n}컷 {n}줄, 렌더 {d_n:.1f}초 (기대 {lo:g}~{hi:g}초, 59초 이내)")
+try:
+    for n, lo, hi in ((5, 9.0, 15.0), (12, 22.0, 34.0), (23, 46.0, 58.9)):
+        sc_v, d_v = render_n(n, "voice_and_sub", real_voice=True)
+        check(len(sc_v) == n and lo <= d_v <= hi and d_v < 59.0, f"사진 {n}장 + 실제 AI 나레이션: 렌더 {d_v:.1f}초 (기대 {lo:g}~{hi:g}초, 59초 이내)")
+except Exception as e:  # 음성 합성(Edge-TTS/gTTS)은 네트워크가 필요: 오프라인이면 건너뜀
+    print(f"SKIP 실제 AI 나레이션 렌더 (음성 합성 불가: {type(e).__name__}: {str(e)[:80]})")
+# 사진 12 + 10초 영상 3개 = 15컷: 합계가 한도를 넘으니 영상 컷만 줄어 59초 이내
+clips = []
+for k in range(3):
+    cp = os.path.join(work, f"long{k}.mp4")
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=360x640:rate=24:duration=10",
+                    "-pix_fmt", "yuv420p", cp], check=True)
+    clips.append(cp)
+mix_media = photos[:6] + [clips[0]] + photos[6:9] + [clips[1]] + photos[9:12] + [clips[2]]
+sc_m, d_m = render_n(15, "silent", media=mix_media)
+check(len(sc_m) == 15 and d_m < 59.0 and all(s["min_sec"] < 10.0 for s in sc_m if s.get("media")), f"사진 12 + 10초 영상 3(15컷): 영상 컷만 줄여 렌더 {d_m:.1f}초 (59초 이내)")
 
 # ---------------------------------------------------------------- 6. 화면: 1단계 토글 → 모임·행사·추억 폼 → 기획 → 편집 카드 1:1
 from streamlit.testing.v1 import AppTest  # noqa: E402
@@ -165,7 +242,11 @@ at.session_state["uploaded_paths"] = photos[:4]
 at.text_input(key="mem_title").set_value("가평 상인회 가을 단합대회")
 at.session_state["mock_mode"] = True
 at.run()
-check(any("4컷" in i.value and "4줄" in i.value for i in at.info), f"안내: 올린 4개 = 4컷 4줄 {[i.value[:50] for i in at.info if '컷' in i.value]}")
+check(any("4컷" in i.value and "4줄" in i.value and "약 10초" in i.value and "컷당 약 2.5초" in i.value for i in at.info),
+      f"안내: 올린 4개 = 4컷 4줄 · 약 10초 {[i.value[:60] for i in at.info if '컷' in i.value]}")
+up = [u for u in at.get("file_uploader")]
+check(up and "📸 모임 사진·영상 최대 23개까지 추가 (올린 개수 × 2.5초로 최대 57초 쇼츠 완성)" in up[0].proto.label, f"업로더 안내문: {up[0].proto.label if up else None}")
+check(any("최대 23개" in c.value for c in at.caption), "1단계 안내: 하한 없음·최대 23개")
 at.button(key="generate_plan_btn").click().run()
 check(not at.exception, f"기획 오류 없음 {[e.value[:120] for e in at.exception]}")
 sb = at.session_state["storyboard"]

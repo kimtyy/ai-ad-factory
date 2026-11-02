@@ -153,6 +153,13 @@ def apply_style_env(spec: "JobSpec") -> None:
         os.environ["OWNER_TEMPO"] = "rap"
     else:
         os.environ.pop("OWNER_TEMPO", None)
+    if spec.mode == "owner" and getattr(spec, "memory", False):
+        from core.planners.memory import MAX_CUTS, cut_sec
+        os.environ["MEMORY_TEMPO"] = "1"             # 🎉 모임·행사·추억: 컷당 2.5초 정책 (core/mode_policy.MEMORY_POLICY)
+        os.environ["MEMORY_CUT_SEC"] = str(cut_sec(min(len(spec.media_paths), MAX_CUTS)))        # 22~23컷만 쇼츠 59초 한도에 맞춰 2.45초 안팎
+    else:
+        os.environ.pop("MEMORY_TEMPO", None)
+        os.environ.pop("MEMORY_CUT_SEC", None)
 
 
 def _scene_num(scene: dict, default: int) -> int:
@@ -297,9 +304,39 @@ def plan_memory(spec: JobSpec, job) -> List[Dict[str, Any]]:
     media = list(spec.media_paths)[:MAX_CUTS]
     scenes = plan_memory_storyboard(title=spec.name, tone=spec.memory_tone, media_paths=media, api_key=spec.api_key, mock=spec.mock,
                                     thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
+    from core.planners.memory import cut_sec
+    for sc in scenes:
+        sc["duration_sec"] = cut_sec(len(scenes))
     assign_uploads_to_scenes(job, scenes, media)
     fit_video_cuts(scenes)
+    fit_total_budget(scenes)
     return scenes
+
+
+def fit_total_budget(scenes: List[Dict[str, Any]]) -> float:
+    """
+    🎉 추억 쇼츠 러닝타임 한도(쇼츠·릴스 59초): 사진 컷은 컷당 2.5초(22~23컷은 2.45초 안팎), 영상 컷은 실제 길이(최대 10초).
+    컷 진행 시간(영상은 길이 − 전환 겹침)의 합이 한도(core.planners.memory.advance_budget)를 넘으면 영상 컷의 '사진 컷 초과분'만
+    같은 비율로 줄인다 (사진·짧은 영상은 그대로). 줄인 뒤 컷 진행 시간의 합계를 돌려준다
+    """
+    from core.planners.memory import XFADE_OVERLAP_SEC as XF, advance_budget, cut_sec
+    n = len(scenes)
+    cut = cut_sec(n)
+
+    def adv(sc):
+        if (sc.get("media") or {}).get("type") == "video":
+            return max(cut, float(sc.get("min_sec") or 0) - XF, float(sc.get("duration_sec") or 0) - XF)
+        return cut
+    total = sum(adv(sc) for sc in scenes)
+    budget = advance_budget(n)
+    extras = [(sc, adv(sc) - cut) for sc in scenes if adv(sc) > cut]
+    spare = sum(e for _, e in extras)
+    if total > budget and spare > 0:
+        keep = max(0.0, 1.0 - (total - budget) / spare)
+        for sc, e in extras:
+            sc["min_sec"] = sc["duration_sec"] = round(cut + e * keep + XF, 2)
+        total = sum(adv(sc) for sc in scenes)
+    return round(total, 2)
 
 
 MIXED_VIDEO_CAP_SEC = 10.0        # 사진과 섞어 올린 영상 컷 한 개의 최대 재생 시간

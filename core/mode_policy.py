@@ -194,6 +194,12 @@ RAP_POLICY = replace(
 )
 RAP_TOP_POLICY = replace(RAP_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
 
+# 🎉 모임·행사·추억: 컷당 2.5초 고정 템포 (최대 23컷 × 2.5초 = 57.5초, 쇼츠 59초 한도 안). 컷 길이 = 진행 2.5초 + 전환 겹침 0.12초, 낭독이 길어져도 상한 3.4초
+MEMORY_POLICY = replace(
+    RAP_POLICY, name_ko="모임·행사·추억 컷당 2.5초", max_chars=20, min_scene_sec=2.62, max_scene_sec=3.4, default_scene_sec=2.5, silent_scene_sec=2.47,
+)
+MEMORY_TOP_POLICY = replace(MEMORY_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+
 
 def owner_tempo() -> str:
     """매장 대본 호흡: 'beat'(비트 리듬형 5문장·안주 컷 고속 전환, 기본) / 'rap'(1컷 1카피 랩형). core.pipeline이 JobSpec에 따라 켜고 끔"""
@@ -357,6 +363,14 @@ def get_mode_policy(mode: Optional[str]) -> ModePolicy:
     """모드별 격리 정책 객체 반환 (미지정 시 owner 기본)"""
     m = (mode or "owner").strip().lower()
     top = os.getenv("OWNER_CAPTION_POS", "").strip().lower() == "top"      # 자막 위치 선택(중단 55% / 상단 24%): 중앙 자막 모드가 공유하는 단일 스위치
+    if m == "owner" and os.getenv("MEMORY_TEMPO", "").strip() == "1":
+        try:
+            cut = max(1.5, min(2.5, float(os.getenv("MEMORY_CUT_SEC", "2.5"))))
+        except ValueError:
+            cut = 2.5
+        # 컷 진행 시간 = cut초: 컷 길이는 디졸브 겹침(xfade_sec 0.12초)을 더해 cut + 0.12초. 무음 오디오는 mp3 여백(약 0.03초)만큼 덜어 같은 진행 시간이 되게
+        base = MEMORY_TOP_POLICY if top else MEMORY_POLICY
+        return replace(base, min_scene_sec=round(cut + base.xfade_sec, 2), default_scene_sec=cut, silent_scene_sec=round(cut - 0.03, 2))
     if m == "owner" and owner_tempo() == "rap":
         return RAP_TOP_POLICY if top else RAP_POLICY
     if m == "owner" and top:
