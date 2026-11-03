@@ -3078,6 +3078,18 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
             st.video(st.session_state.final_video_path)
         if not is_memory:
             _download_button()
+        else:
+            # 🎉 썸네일(영상 맨 앞 커버와 같은 이미지): 미리 보고 저장. 업로드용 JPG(thumbnail.jpg)가 있으면 그것을, 없으면 PNG를 준다
+            _tp = st.session_state.get("thumb_path")
+            if _tp and os.path.exists(_tp):
+                _jpg = os.path.join(os.path.dirname(_tp), "thumbnail.jpg")
+                _tfile, _tmime, _text = (_jpg, "image/jpeg", ".jpg") if os.path.exists(_jpg) else (_tp, "image/png", ".png")
+                st.markdown("#### 🖼️ 썸네일")
+                st.image(_tp, width=220)
+                with open(_tfile, "rb") as _tf:
+                    st.download_button("⬇️ 썸네일 저장 (유튜브·인스타 커버용)", data=_tf, file_name=f"{product_name or '추억쇼츠'}_thumbnail{_text}",
+                                       mime=_tmime, use_container_width=True, key="download_thumb")
+                st.caption("영상 맨 앞 0.5초에도 같은 커버가 들어가 있어요.")
         _bs = st.session_state.get("bgm_status") or {}
         if _bs.get("info"):
             _bi = _bs["info"]

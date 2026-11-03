@@ -9,7 +9,9 @@ import re
 from typing import Any, Dict, List, Optional
 
 from core.planners.memory import DEFAULT_TONE, TONES, tone_of
-from core.shorts_meta import fit_copy, THUMB_MAIN_MAX, THUMB_SUB_MAX, TITLE_BODY_MAX
+from core.shorts_meta import fit_copy, THUMB_SUB_MAX, TITLE_BODY_MAX
+
+THUMB_MAIN_MAX = 18               # 모임 이름은 두 줄(줄당 약 9자)로 들어가 뜻이 잘리지 않게 (매장 썸네일은 14자). 넘으면 단어 경계에서 자름
 
 KAKAO_TEMPLATE = "우리 {name} 영상 하나 만들어봤어! 다들 너무 반가웠고 다음 모임 때 또 보자~ 🎬✨"
 KAKAO_NAMELESS = "우리 모임 영상 하나 만들어봤어! 다들 너무 반가웠고 다음 모임 때 또 보자~ 🎬✨"

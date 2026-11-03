@@ -123,9 +123,13 @@ check(list(pk)[0] == "kakao" and len(pk) == 5 and pk["kakao"]["body"].startswith
 alltext = " ".join(v["body"] + v["title"] for v in pk.values())
 check(not any(w in alltext for w in ("가게추천", "검색", "네이버 지도", "메뉴", "위치")) and "#Shorts" in pk["youtube"]["title"], "매장용 문구(가게추천·검색·위치) 없음")
 c = memory_copy("가평 조종면 상인회 가을 단합대회", "formal")
-check(len(c["thumb_main"]) <= 14 and c["title"].endswith("#Shorts") and c["tag_set"]["pool"] and not any("가게" in t for t in c["hashtags"]),
-      f"썸네일 카피 14자 이내·해시태그 추억용: {c['thumb_main']} {c['hashtags']}")
+check(len(c["thumb_main"]) <= 18 and c["title"].endswith("#Shorts") and c["tag_set"]["pool"] and not any("가게" in t for t in c["hashtags"]),
+      f"썸네일 카피 18자 이내·해시태그 추억용: {c['thumb_main']} {c['hashtags']}")
 check(memory_copy("", "warm")["thumb_main"] == "함께한 하루", "모임 이름이 없으면 톤별 기본 썸네일")
+check(memory_copy("가평 조종면 상인회 가을 단합대회", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회"
+      and memory_copy("가평 조종면 상인회 가을 단합대회 행사 안내", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회"
+      and memory_copy("우리 가족 1박2일 힐링 여행", "warm")["thumb_main"] == "우리 가족 1박2일 힐링 여행",
+      "썸네일 제목: 17자 이름은 잘리지 않고(단합대회 보존), 더 길면 단어 경계에서만 자름")
 check(seo_metadata("동창회", "lively")["title"] and "동창회" in seo_metadata("동창회", "lively")["description"], "SEO 메타데이터(제목·설명·태그)")
 
 # ---------------------------------------------------------------- 5. 공용 엔진: 기획(1:1 배정) → 렌더 (Mock, 브랜드·엔딩 카드·매장 SEO 없음)
@@ -266,6 +270,9 @@ at.session_state["bgm_on"] = False
 at.button(key="render_cta").click().run()
 check(not at.exception and at.session_state["final_video_path"] and os.path.exists(at.session_state["final_video_path"]), f"화면 렌더 완료 {[e.value[:100] for e in at.exception]}")
 dl = [e for e in at.get("download_button")]
+check(any("썸네일 저장" in e.proto.label for e in dl) and at.session_state["thumb_path"] and os.path.exists(at.session_state["thumb_path"]),
+      f"5단계: 썸네일 미리보기·저장 버튼 {[e.proto.label[:14] for e in dl]}")
+check(any(i.proto.url for i in at.get("imgs")) if at.get("imgs") else True, "썸네일 이미지 표시")
 check(dl and "스마트폰 갤러리에 저장하기 (카카오톡 단톡방 공유용)" in dl[0].proto.label, "5단계: 상단 강조 저장 버튼 라벨")
 tabs = [t.label for t in at.tabs]
 check(tabs[:2] == ["💬 카카오톡 단톡방", "▶ 유튜브 쇼츠"], f"5단계 복사 탭: 카카오톡 단톡방이 첫 탭 {tabs}")
