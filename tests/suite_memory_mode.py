@@ -214,8 +214,17 @@ check(len(sc_m) == 15 and d_m < 59.0 and all(s["min_sec"] < 10.0 for s in sc_m i
 # ---------------------------------------------------------------- 6. 화면: 1단계 토글 → 모임·행사·추억 폼 → 기획 → 편집 카드 1:1
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+# 실서버 재현: 재배포 뒤에도 프로세스가 '옛 버전' core.planners.memory(CUT_SEC·MAX_CUTS 등이 없던 때)를 들고 있어도 앱이 떠야 한다
+import core.planners.memory as _stale_mem  # noqa: E402
+_removed = {k: getattr(_stale_mem, k) for k in ("CUT_SEC", "MAX_CUTS", "MAX_TOTAL_SEC", "stage_counts", "cut_sec", "advance_budget")}
+for _k in _removed:
+    delattr(_stale_mem, _k)
 at = AppTest.from_file(os.path.join(ROOT, "app_store.py"), default_timeout=300).run()
-check(not at.exception, f"app_store.py 기본 실행 오류 없음 {[e.value[:80] for e in at.exception]}")
+check(not at.exception and all(hasattr(_stale_mem, k) for k in _removed),
+      f"옛 memory.py가 메모리에 남은 서버에서도 app_store.py가 뜸 (모듈 새로고침 목록) {[e.value[:80] for e in at.exception]}")
+_app_src = open(os.path.join(ROOT, "app.py"), encoding="utf-8").read()
+_reload_block = _app_src.split("RELOAD_MODULES = (")[1].split("for _m in RELOAD_MODULES")[0]
+check("core.planners.memory" in _reload_block and "core.memory_pack" in _reload_block, "RELOAD_MODULES에 core.planners.memory·core.memory_pack 포함")
 kind = [r for r in at.radio if r.key == "store_kind"]
 check(kind and kind[0].value == "shop" and list(kind[0].options) == ["🏪 매장 홍보", "🎉 모임·행사·추억"], f"1단계 상단 토글 2개, 기본값 매장 홍보: {kind[0].options if kind else None}")
 check(any(b.key == "place_fetch" for b in at.button) and not [t for t in at.text_input if t.key == "mem_title"], "기본(매장 홍보): 네이버 검색·메뉴판 그대로, 추억 입력칸 없음")

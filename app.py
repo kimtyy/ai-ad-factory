@@ -49,7 +49,9 @@ RELOAD_MODULES = (
     "core.script_guard", "core.store_facts", "core.naver_place_menu", "core.store_research", "core.photo_safety", "core.store_photos", "core.stay_curation", "core.stay_match", "core.stay_photos", "core.planners.stay", "core.concepts", "core.naver_shop", "core.planners.shop", "core.tts", "core.mode_policy", "core.hashtags", "core.shorts_meta", "core.seo_generator",
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
-    "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book", "core.planners",
+    "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book",
+    "core.planners.memory", "core.memory_pack",          # 🎉 모임·행사·추억: 서버가 옛 memory.py를 들고 있으면 새 app.py의 import(CUT_SEC 등)가 ImportError로 앱이 뜨지 않음
+    "core.planners",
     "core.pipeline", "core.renderers.video_overlay_renderer", "core.renderers.highlight_renderer", "core.renderers",
     "ui.youtube_panel", "ui.longform_page",
 )
