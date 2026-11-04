@@ -55,12 +55,30 @@ RELOAD_MODULES = (
     "core.pipeline", "core.renderers.video_overlay_renderer", "core.renderers.highlight_renderer", "core.renderers",
     "ui.youtube_panel", "ui.longform_page",
 )
-for _m in RELOAD_MODULES:
-    try:
-        importlib.reload(importlib.import_module(_m))
-    except Exception as _e:          # 한 모듈의 import 오류가 앱 전체를 막지 않게 (원래 import 단계에서 다시 드러남)
-        import logging as _lg
-        _lg.getLogger("ad_factory.app").warning(f"[모듈 새로고침 실패] {_m}: {_e}")
+def _reload_signature():
+    """로직 모듈 소스 파일들의 수정 시각 (파일이 바뀌었는지만 보면 되므로 읽기만 한다)"""
+    sig = []
+    for _m in RELOAD_MODULES:
+        _mod = sys.modules.get(_m)
+        _f = getattr(_mod, "__file__", None)
+        try:
+            sig.append((_m, os.stat(_f).st_mtime_ns if _f else 0))
+        except OSError:
+            sig.append((_m, 0))
+    return tuple(sig)
+
+
+# 매 실행(접속·클릭)마다 70여 개 모듈을 다시 읽으면 접속자가 겹칠 때 다른 세션이 쓰는 모듈을 갈아끼우게 된다 → 소스 파일이 바뀐 경우(재배포·개발 중 수정)에만 다시 읽는다.
+# 서버 프로세스에 옛 모듈이 남아 있는 첫 실행(기록 없음)에는 한 번 읽어 옛 코드를 걷어낸다.
+_sig_now = _reload_signature()
+if getattr(sys, "_adf_reload_sig", None) != _sig_now:
+    for _m in RELOAD_MODULES:
+        try:
+            importlib.reload(importlib.import_module(_m))
+        except Exception as _e:          # 한 모듈의 import 오류가 앱 전체를 막지 않게 (원래 import 단계에서 다시 드러남)
+            import logging as _lg
+            _lg.getLogger("ad_factory.app").warning(f"[모듈 새로고침 실패] {_m}: {_e}")
+    sys._adf_reload_sig = _reload_signature()
 
 from core.analyzer import (plan_storyboard, TONE_PRESETS, DURATION_PRESETS, TRAVEL_TEMPLATES, DEFAULT_TRAVEL_TEMPLATE,
                            plan_video_overlay_storyboard, analyze_video_for_overlay, split_video_timeline)
