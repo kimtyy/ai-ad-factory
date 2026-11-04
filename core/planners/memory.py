@@ -283,14 +283,14 @@ def finalize_lines(raw_lines: List[str], count: int, title: str, tone: str) -> T
 
 def plan_memory_storyboard(title: str = "", tone: str = DEFAULT_TONE, media_paths: Optional[List[str]] = None,
                            api_key: Optional[str] = None, mock: bool = False, thumb_dir: Optional[str] = None,
-                           output_plan_path: Optional[str] = None) -> List[Dict[str, Any]]:
+                           output_plan_path: Optional[str] = None, max_cuts: int = MAX_CUTS) -> List[Dict[str, Any]]:
     """
     올린 사진·영상 순서 그대로 N컷 N줄 (최대 10). 사진을 볼 수 없으면(Mock·모든 엔진 실패) 위치별 안전 문구로 같은 N줄을 만든다.
     media_paths가 비어 있으면 ValueError (지어낼 근거가 없다).
     """
     tone = tone_of(tone)
     title = (title or "").strip()
-    media = [p for p in (media_paths or []) if p][:MAX_CUTS]
+    media = [p for p in (media_paths or []) if p][:max_cuts]
     if not media:
         raise ValueError("사진·영상을 1개 이상 올려 주세요. 올린 개수 그대로 컷이 만들어져요.")
     n = len(media)

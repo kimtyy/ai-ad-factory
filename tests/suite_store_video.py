@@ -48,8 +48,8 @@ def spec_for(paths, **kw):
 mp.INTRO_COVER_FORCE = False
 
 # ---------------------------------------------------------------- 문장 수: 영상 길이에 맞춘 가변 (15초로 못박지 않음)
-check([pl.single_video_sentences(x) for x in (10, 12.5, 15, 17, 18, 23, 24, 30, 45, 80)] == [4, 4, 4, 4, 5, 5, 5, 7, 8, 8],
-      f"영상 길이별 문장 수: {[pl.single_video_sentences(x) for x in (10, 12.5, 15, 17, 18, 23, 24, 30, 45, 80)]}")
+check([pl.single_video_sentences(x) for x in (10, 12.5, 15, 17, 18, 23, 24, 30, 45, 80)] == [4, 4, 4, 5, 5, 7, 7, 9, 13, 23],
+      f"영상 길이별 구간(문장) 수 = 약 3.5초마다 1구간, 최소 4: {[pl.single_video_sentences(x) for x in (10, 12.5, 15, 17, 18, 23, 24, 30, 45, 80)]}")
 
 # ---------------------------------------------------------------- A. 단일 영상: 실제 길이 100% 보존
 job = new_job("sv_a_")
@@ -87,6 +87,63 @@ check(mins[1] == 4.0 and mins[3] == 3.0 and mins[0] is None and all(scm[i]["medi
 resm = pl.render(spec_for(order), job, scm)
 tm = duration(resm.final_path)
 check(8.0 <= tm <= 19.0 and tm >= 4 + 3 + 2 * 3 - 2.5, f"렌더 길이: 사진 3컷(약 2~3초) + 영상 4초·3초 ≈ {tm:.1f}초")
+
+# ---------------------------------------------------------------- C. 10초 상한 폐지: 25초 단독 영상은 끝까지, 구간마다 카피
+job = new_job("sv_d_")
+v25 = make_video(_os.path.join(job.uploads_dir, "v25.mp4"), 25)
+sc25 = pl.plan(spec_for([v25]), job)
+t25 = [s["media"]["trim_start"] for s in sc25]
+check(len(sc25) == 7 and all(s["media"]["path"] == v25 for s in sc25), f"25초 영상 1개 → 약 3.5초 7구간 (10초에서 잘리지 않음): {len(sc25)}씬")
+check(abs(t25[-1] + sc25[-1]["duration_sec"] - 25.0) < 0.1 and t25 == sorted(t25) and t25[-1] > 20, f"구간이 0초부터 25초까지 이어짐: 시작 {t25}")
+check(all(3.0 <= s["duration_sec"] <= 4.0 for s in sc25) and all(s["voiceover"] for s in sc25), "구간마다 3~4초 + 카피 한 줄")
+r25 = pl.render(spec_for([v25]), job, sc25)
+d25 = duration(r25.final_path)
+check(25.0 <= d25 <= 29.0, f"렌더 25초 영상: {d25:.1f}초 (10초 컷 없음, 끝 카드·여운 포함)")
+
+# ---------------------------------------------------------------- D. 영상 2개(15초 + 20초): 둘 다 자르지 않고 35초 그대로
+job = new_job("sv_e_")
+v15 = make_video(_os.path.join(job.uploads_dir, "v15.mp4"), 15)
+v20 = make_video(_os.path.join(job.uploads_dir, "v20.mp4"), 20)
+sc35 = pl.plan(spec_for([v15, v20]), job)
+a_sc = [s for s in sc35 if s["media"]["path"] == v15]
+b_sc = [s for s in sc35 if s["media"]["path"] == v20]
+check(len(a_sc) >= 4 and len(b_sc) >= 5 and abs(a_sc[-1]["media"]["trim_start"] + a_sc[-1]["duration_sec"] - 15.0) < 0.1
+      and abs(b_sc[-1]["media"]["trim_start"] + b_sc[-1]["duration_sec"] - 20.0) < 0.1, f"15초·20초 영상 모두 끝까지: {len(a_sc)}구간 + {len(b_sc)}구간")
+r35 = pl.render(spec_for([v15, v20]), job, sc35)
+d35 = duration(r35.final_path)
+check(35.0 <= d35 <= 39.5, f"렌더 35초 (15 + 20): {d35:.1f}초 (둘 다 10초로 잘리지 않음)")
+
+# ---------------------------------------------------------------- E. 합계가 59초를 넘을 때만 비율대로 줄임
+job = new_job("sv_f_")
+v80 = make_video(_os.path.join(job.uploads_dir, "v80.mp4"), 80)
+sc80 = pl.plan(spec_for([v80]), job)
+tot80 = sum(s["duration_sec"] for s in sc80)
+check(55.0 <= tot80 <= 58.3 and len(sc80) >= 15 and sc80[0]["media_segments"]["trimmed"], f"80초 영상은 59초 한도에 맞춰 앞 {tot80:.1f}초만 ({len(sc80)}구간)")
+info58 = pl.media_items([v80], lengths={v80: 58.0})
+check(not info58["trimmed"] and abs(info58["seconds"] - 58.0) < 0.05, "58초 영상은 한 프레임도 줄이지 않음 (59초 안)")
+mixed_info = pl.media_items([ph[0], v4a, ph[1]], lengths={v4a: 4.0})
+check(not mixed_info["expanded"] and mixed_info["cuts"] == 3, "8초 미만 짧은 영상은 구간으로 나누지 않고 1컷 1카피")
+
+# ---------------------------------------------------------------- F. 사진 12 + 10초 영상 3개 (매장 홍보, 실제 AI 나레이션): 영상을 10초에서 자르지 않되 합계가 59초 이내
+import dataclasses  # noqa: E402
+job = new_job("sv_g_")
+phs = []
+for _i in range(12):
+    _p = _os.path.join(job.uploads_dir, f"q{_i}.jpg")
+    shutil.copy(fixture("photo_pool.jpg" if _i % 2 == 0 else "photo_room.jpg"), _p)
+    phs.append(_p)
+clips = [make_video(_os.path.join(job.uploads_dir, f"k{_i}.mp4"), 10) for _i in range(3)]
+order_g = phs[:6] + [clips[0]] + phs[6:9] + [clips[1]] + phs[9:12] + [clips[2]]
+scg = pl.plan(spec_for(order_g), job)
+info_g = pl.media_items(order_g)
+check(len(scg) == info_g["cuts"] and info_g["expanded"] and all(s.get("media") is None or s["media"]["trim_start"] >= 0 for s in scg),
+      f"사진 12 + 10초 영상 3: 영상은 3~4초 구간으로 나눠 {len(scg)}컷 (합계 {info_g['seconds']:.1f}초)")
+try:
+    rg = pl.render(dataclasses.replace(spec_for(order_g), mock=False), job, scg)
+    dg = duration(rg.final_path)
+    check(dg < 59.0, f"사진 12 + 10초 영상 3 렌더(실제 AI 나레이션) {dg:.1f}초 — 쇼츠 59초 이내")
+except Exception as e:  # 음성 합성은 네트워크 필요: 오프라인이면 건너뜀
+    print(f"SKIP 사진 12 + 영상 3 실제 나레이션 렌더 ({type(e).__name__}: {str(e)[:100]})")
 
 mp.INTRO_COVER_FORCE = None
 finish(fails)

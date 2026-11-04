@@ -50,7 +50,7 @@ RELOAD_MODULES = (
     "core.scraper", "core.render.bgm", "core.render.cover_clip", "core.compositor", "core.render.ffmpeg_assemble", "core.analyzer", "core.asset_generator", "core.audio",
     "core.planners.owner", "core.planners.travel", "core.planners.commerce", "core.planners.commerce_bundle",
     "core.planners.book_fable", "core.planners.book_reflect", "core.planners.book",
-    "core.planners.memory", "core.memory_pack",          # 🎉 모임·행사·추억: 서버가 옛 memory.py를 들고 있으면 새 app.py의 import(CUT_SEC 등)가 ImportError로 앱이 뜨지 않음
+    "core.planners.memory", "core.memory_pack", "core.render.thumbnail",          # 🎉 모임·행사·추억: 서버가 옛 memory.py를 들고 있으면 새 app.py의 import(CUT_SEC 등)가 ImportError로 앱이 뜨지 않음
     "core.planners",
     "core.pipeline", "core.renderers.video_overlay_renderer", "core.renderers.highlight_renderer", "core.renderers",
     "ui.youtube_panel", "ui.longform_page",
@@ -380,7 +380,7 @@ def render_media_manager():
                 st.info(_g["text"])
         max_media = MEMORY_MAX if is_memory else MAX_MEDIA
         st.markdown(f"**📸 영상 소스 {len(paths)}개** · 위에서부터 씬 순서 (최대 {max_media}개)"
-                    + (f" · 🎞️ 컷 {len(paths)}개 = 카피 {len(paths)}줄" if is_memory and paths else ""))
+                    + (f" · 🎞️ 컷 {_memory_cuts()}개 = 카피 {_memory_cuts()}줄" if is_memory and paths else ""))
         if st.session_state.pop("media_stale", False):
             st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
         for i, p in enumerate(paths):
@@ -995,46 +995,45 @@ def _w_duration():
 
 
 def _owner_duration_notice():
-    """매장 3단계: 길이는 고르는 값이 아니라 올린 사진·영상에서 자동으로 정해진다 (사진 1장 = 약 2초 카피, 영상 컷 = 실제 시간)"""
-    from core.media import is_video_file, probe_media
-    from core.pipeline import MIXED_VIDEO_CAP_SEC
+    """매장 3단계: 길이는 고르는 값이 아니라 올린 사진·영상에서 자동으로 정해진다 (사진 1장 = 약 2초 카피, 영상 = 원본 길이 그대로, 합계 59초 초과 때만 줄임)"""
+    from core.media import is_video_file
     paths = list(st.session_state.get("uploaded_paths") or [])
     if not paths:
         st.caption("⏱️ 사진·영상을 올리면 길이가 자동으로 계산돼요 (사진 1장 = 약 2초 카피 한 줄).")
         return
-
-    def _len(p):
-        try:
-            return float(probe_media(p).duration)
-        except (ValueError, OSError):
-            return 3.0
+    info = pipeline.media_items(paths)
+    lens = info["lengths"]
     if len(paths) == 1 and is_video_file(paths[0]):
-        st.info(f"⏱️ 영상 맞춤: 업로드된 영상({_len(paths[0]):.1f}초) 길이에 맞춰 대본이 자동 배분됩니다.")
+        full = pipeline._video_len(paths[0])
+        if info["trimmed"]:
+            st.info(f"⏱️ 영상 맞춤: 업로드된 영상({full:.1f}초)이 쇼츠 59초 한도를 넘어 앞 {lens[paths[0]]:.1f}초를 {info['cuts']}구간으로 나눠 씁니다.")
+        else:
+            st.info(f"⏱️ 영상 맞춤: 업로드된 영상({full:.1f}초) 길이에 맞춰 대본이 자동 배분됩니다.")
         return
-    total = sum(min(_len(p), MIXED_VIDEO_CAP_SEC) if is_video_file(p) else 2.0 for p in paths)
-    st.info(f"⏱️ 자동 계산: 선택된 {len(paths)}개 에셋에 맞춰 약 {int(round(total))}초 쇼츠로 제작됩니다.")
+    total = sum((lens[p] if is_video_file(p) else 2.0) for p in paths)
+    st.info(f"⏱️ 자동 계산: 선택된 {len(paths)}개 에셋에 맞춰 약 {int(round(total))}초 쇼츠로 제작됩니다."
+            + (f" 긴 영상은 3~4초 구간으로 나눠 구간마다 카피가 붙어요 (총 {info['cuts']}컷)." if info["expanded"] else "")
+            + (" 합계가 59초를 넘어 영상 길이를 비율대로 줄여요." if info["trimmed"] else ""))
+
+
+def _memory_cuts() -> int:
+    """🎉 올린 파일이 몇 컷(= 카피 몇 줄)이 되는지: 사진·짧은 영상은 파일 1개 = 1컷, 긴 영상은 3~4초 구간마다 1컷"""
+    paths = list(st.session_state.get("uploaded_paths") or [])
+    return pipeline.media_items(paths, memory=True)["cuts"] if paths else 0
 
 
 def _memory_duration_notice():
-    """🎉 3단계: 컷 수와 길이는 고르는 값이 아니라 올린 파일에서 정해진다 (사진 1장 = 2.5초, 영상은 실제 길이 최대 10초, 합계 57.5초 이내)"""
-    from core.media import is_video_file, probe_media
-    from core.pipeline import MIXED_VIDEO_CAP_SEC
+    """🎉 3단계: 컷 수와 길이는 고르는 값이 아니라 올린 파일에서 정해진다 (사진 1장 = 2.5초, 영상은 원본 길이 그대로, 합계 59초 안)"""
     paths = list(st.session_state.get("uploaded_paths") or [])[:MEMORY_MAX]
     if not paths:
-        st.caption(f"⏱️ 사진·영상을 올리면 컷 수와 길이가 자동으로 계산돼요 (파일 1개 = 컷 1개 = 카피 1줄 = 약 {MEMORY_CUT_SEC:g}초).")
+        st.caption(f"⏱️ 사진·영상을 올리면 컷 수와 길이가 자동으로 계산돼요 (사진 1개 = 컷 1개 = 카피 1줄 = 약 {MEMORY_CUT_SEC:g}초, 영상은 원본 길이 그대로).")
         return
-
-    def _len(p):
-        try:
-            return max(MEMORY_CUT_SEC, min(float(probe_media(p).duration), MIXED_VIDEO_CAP_SEC))
-        except (ValueError, OSError):
-            return 3.0
-    from core.planners.memory import advance_budget, cut_sec
-    cut = cut_sec(len(paths))
-    total = sum(max(cut, _len(p) - 0.35) if is_video_file(p) else cut for p in paths)
-    shrunk = total > advance_budget(len(paths))
-    st.info(f"⏱️ 올린 {len(paths)}개 = {len(paths)}컷 · {len(paths)}줄 카피 · 약 {int(round(min(total, advance_budget(len(paths)))))}초 쇼츠로 제작됩니다 "
-            f"(컷당 약 {MEMORY_CUT_SEC:g}초)." + (" 영상 컷이 길어 쇼츠 59초 한도에 맞춰 영상 길이를 조금 줄여요." if shrunk else ""))
+    info = pipeline.media_items(paths, memory=True)
+    cuts = info["cuts"]
+    head = f"올린 {len(paths)}개 = {cuts}컷" if cuts == len(paths) else f"올린 {len(paths)}개 → {cuts}컷"
+    st.info(f"⏱️ {head} · {cuts}줄 카피 · 약 {int(round(info['seconds']))}초 쇼츠로 제작됩니다 (사진 컷당 약 {MEMORY_CUT_SEC:g}초)."
+            + (" 긴 영상은 3~4초 구간으로 나눠 구간마다 카피가 붙어요." if info["expanded"] else "")
+            + (" 합계가 59초를 넘어 영상 길이를 비율대로 줄여요." if info["trimmed"] else ""))
 
 
 def _w_travel_template():
@@ -2275,9 +2274,10 @@ with edit_box:
     if is_memory:
         st.markdown("### [2단계] 🎞️ 이야기 흐름")
         _mn = len(st.session_state.get("uploaded_paths") or [])
+        _mc = _memory_cuts()
         st.caption("💡 올린 사진·영상을 순서대로 보고 도입 → 즐거운 순간들 → 마무리 흐름으로 한 컷에 한 줄씩 써요. "
                    "컨셉을 따로 고를 필요는 없어요. 톤은 1단계에서 바꿀 수 있어요.")
-        st.info(f"🎞️ 지금 올린 파일 {_mn}개 → 컷 {_mn}개, 카피 {_mn}줄이 만들어져요 (개수 제한 없이 최대 {MEMORY_MAX}개)." if _mn
+        st.info(f"🎞️ 지금 올린 파일 {_mn}개 → 컷 {_mc}개, 카피 {_mc}줄이 만들어져요 (개수 제한 없이 최대 {MEMORY_MAX}개)." if _mn
                 else f"🎞️ 사진·영상을 올리면 올린 개수 그대로 컷과 카피 줄 수가 정해져요 (하한 없음, 최대 {MEMORY_MAX}개).")
     else:
         st.markdown("### [2단계] 🎯 컨셉 잡기")
@@ -2415,7 +2415,7 @@ with edit_box:
     generate_rap_btn = False
     if is_memory:
         st.caption("올린 사진·영상 한 개마다 짧은 한 줄 카피가 1:1로 붙어요. 그 컷에 실제로 보이는 장면만 말하고, 이름·나이·숫자는 지어내지 않아요.")
-        _mn_btn = len(st.session_state.get("uploaded_paths") or [])
+        _mn_btn = _memory_cuts()
         generate_plan_btn = st.button(f"🚀 추억 대본 만들기 ({_mn_btn}컷 · {_mn_btn}줄)" if _mn_btn else "🚀 추억 대본 만들기", use_container_width=True,
                                       type="primary", key="generate_plan_btn", help="사진·영상을 순서대로 보고 컷마다 한 줄씩 써요.")
         st.session_state.owner_tempo = "rap"
@@ -2894,8 +2894,8 @@ if render_btn:
         if is_owner_mode and not is_memory and not product_name.strip():
             st.error("상호명을 입력해 주세요. 워터마크와 네이버 검색 엔딩 카드에 사용됩니다.")
             st.stop()
-        if is_memory and len(scenes) != len(st.session_state.get("uploaded_paths") or []):
-            st.error(f"사진·영상 개수({len(st.session_state.get('uploaded_paths') or [])}개)와 대본 줄 수({len(scenes)}줄)가 달라요. "
+        if is_memory and len(scenes) != _memory_cuts():
+            st.error(f"올린 사진·영상으로 만들어질 컷 수({_memory_cuts()}개)와 대본 줄 수({len(scenes)}줄)가 달라요. "
                      "[🚀 추억 대본 만들기]를 다시 눌러 컷과 카피를 1:1로 맞춰 주세요.")
             st.stop()
         if missing_scenes:
@@ -3072,24 +3072,25 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                     key="download_cta"
                 )
         if is_memory:
-            _download_button()                      # 추억 쇼츠는 저장 → 단톡방 공유가 기본 동선이라 영상 위에 크게
+            # 🎉 MP4 저장과 썸네일 커버 이미지 저장을 나란히 (단톡방 공유·릴스/쇼츠 커버용). 업로드용 JPG(thumbnail.jpg)가 있으면 그것을, 없으면 PNG를 준다
+            _tp = st.session_state.get("thumb_path")
+            _has_thumb = bool(_tp and os.path.exists(_tp))
+            _bc1, _bc2 = st.columns(2) if _has_thumb else (st.container(), None)
+            with _bc1:
+                _download_button()
+            if _has_thumb:
+                _jpg = os.path.join(os.path.dirname(_tp), "thumbnail.jpg")
+                _tfile, _tmime, _text = (_jpg, "image/jpeg", ".jpg") if os.path.exists(_jpg) else (_tp, "image/png", ".png")
+                with _bc2:
+                    with open(_tfile, "rb") as _tf:
+                        st.download_button("🖼️ 썸네일 커버 이미지 저장", data=_tf, file_name=f"{product_name or '추억쇼츠'}_thumbnail{_text}",
+                                           mime=_tmime, use_container_width=True, key="download_thumb")
+                st.image(_tp, width=200, caption="썸네일 미리보기 · 영상 맨 앞 0.5초에도 같은 커버가 들어가 있어요")
         st.markdown("#### 📱 9:16 쇼츠 완성본 (스마트폰 뷰어)")
         with st.container(key="phone_frame"):
             st.video(st.session_state.final_video_path)
         if not is_memory:
             _download_button()
-        else:
-            # 🎉 썸네일(영상 맨 앞 커버와 같은 이미지): 미리 보고 저장. 업로드용 JPG(thumbnail.jpg)가 있으면 그것을, 없으면 PNG를 준다
-            _tp = st.session_state.get("thumb_path")
-            if _tp and os.path.exists(_tp):
-                _jpg = os.path.join(os.path.dirname(_tp), "thumbnail.jpg")
-                _tfile, _tmime, _text = (_jpg, "image/jpeg", ".jpg") if os.path.exists(_jpg) else (_tp, "image/png", ".png")
-                st.markdown("#### 🖼️ 썸네일")
-                st.image(_tp, width=220)
-                with open(_tfile, "rb") as _tf:
-                    st.download_button("⬇️ 썸네일 저장 (유튜브·인스타 커버용)", data=_tf, file_name=f"{product_name or '추억쇼츠'}_thumbnail{_text}",
-                                       mime=_tmime, use_container_width=True, key="download_thumb")
-                st.caption("영상 맨 앞 0.5초에도 같은 커버가 들어가 있어요.")
         _bs = st.session_state.get("bgm_status") or {}
         if _bs.get("info"):
             _bi = _bs["info"]

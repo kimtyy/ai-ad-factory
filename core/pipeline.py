@@ -143,7 +143,7 @@ def _extra_cut_videos(gen, scene: dict, s_num: int, real_media: bool, force: boo
     return out
 
 
-def apply_style_env(spec: "JobSpec") -> None:
+def apply_style_env(spec: "JobSpec", count: Optional[int] = None) -> None:
     """모드 정책이 읽는 스타일 스위치를 이 작업에 맞게 맞춤 (화면·캘린더 스케줄러 공통): 네이버 쇼핑 18초 5문장 스타일"""
     if spec.mode == "commerce" and spec.is_shop:
         os.environ["COMMERCE_SHOP_STYLE"] = "1"
@@ -156,7 +156,8 @@ def apply_style_env(spec: "JobSpec") -> None:
     if spec.mode == "owner" and getattr(spec, "memory", False):
         from core.planners.memory import MAX_CUTS, cut_sec
         os.environ["MEMORY_TEMPO"] = "1"             # 🎉 모임·행사·추억: 컷당 2.5초 정책 (core/mode_policy.MEMORY_POLICY)
-        os.environ["MEMORY_CUT_SEC"] = str(cut_sec(min(len(spec.media_paths), MAX_CUTS)))        # 22~23컷만 쇼츠 59초 한도에 맞춰 2.45초 안팎
+        n_cuts = count if count is not None else len(spec.media_paths)
+        os.environ["MEMORY_CUT_SEC"] = str(cut_sec(min(n_cuts, MAX_PLAN_ITEMS)))        # 컷이 가장 많을 때만 쇼츠 59초 한도에 맞춰 조금 줄임
     else:
         os.environ.pop("MEMORY_TEMPO", None)
         os.environ.pop("MEMORY_CUT_SEC", None)
@@ -232,12 +233,14 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     if spec.mode not in PIPELINE_MODES:
         raise ValueError(f"'{spec.mode}' 모드 기획은 화면에서만 할 수 있어요 (지원: {', '.join(PIPELINE_MODES)}).")
     apply_style_env(spec)
+    if spec.mode == "owner":
+        # 매장 홍보·모임·행사·추억 공통: 영상을 10초에서 자르지 않는다. 단독 영상·8초 이상 긴 영상은 3~4초 구간으로 나눠 구간마다 카피를 붙이고,
+        # 전체가 59초를 넘을 때만 영상 길이를 비율대로 줄인다
+        items = media_items(spec.media_paths, memory=spec.memory)
+        if items["expanded"]:
+            return plan_segmented(spec, job, items)
     if spec.memory:
         return plan_memory(spec, job)
-    if spec.mode == "owner" and len(spec.media_paths) == 1:
-        from core.media import is_video_file
-        if is_video_file(spec.media_paths[0]):
-            return plan_single_video(spec, job)
     common = dict(api_key=spec.api_key, mock=spec.mock, thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
     if spec.mode == "owner":
         if not spec.name.strip():
@@ -295,16 +298,16 @@ def plan(spec: JobSpec, job) -> List[Dict[str, Any]]:
     assign_scene_media(spec, job, scenes)
     if spec.mode == "owner":
         fit_video_cuts(scenes)
+        fit_total_budget(scenes, budget=None, cut=OWNER_PHOTO_SEC, owner=True)
     return scenes
 
 
 def plan_memory(spec: JobSpec, job) -> List[Dict[str, Any]]:
-    """🎉 모임·행사·추억: 올린 사진·영상 개수(최대 10) 그대로 컷 N개 = 카피 N줄 (영상 1개도 1컷). 영상 컷은 실제 길이(최대 10초) 동안 재생"""
-    from core.planners.memory import MAX_CUTS, plan_memory_storyboard
-    media = list(spec.media_paths)[:MAX_CUTS]
+    """🎉 모임·행사·추억 (짧은 영상·사진만): 올린 파일 개수 그대로 컷 N개 = 카피 N줄. 영상은 원본 길이 그대로 재생 (긴 영상은 plan_segmented)"""
+    from core.planners.memory import cut_sec, plan_memory_storyboard
+    media = list(spec.media_paths)[:MAX_PLAN_ITEMS]
     scenes = plan_memory_storyboard(title=spec.name, tone=spec.memory_tone, media_paths=media, api_key=spec.api_key, mock=spec.mock,
-                                    thumb_dir=job.assets_dir, output_plan_path=job.plan_path)
-    from core.planners.memory import cut_sec
+                                    thumb_dir=job.assets_dir, output_plan_path=job.plan_path, max_cuts=MAX_PLAN_ITEMS)
     for sc in scenes:
         sc["duration_sec"] = cut_sec(len(scenes))
     assign_uploads_to_scenes(job, scenes, media)
@@ -313,46 +316,161 @@ def plan_memory(spec: JobSpec, job) -> List[Dict[str, Any]]:
     return scenes
 
 
-def fit_total_budget(scenes: List[Dict[str, Any]]) -> float:
-    """
-    🎉 추억 쇼츠 러닝타임 한도(쇼츠·릴스 59초): 사진 컷은 컷당 2.5초(22~23컷은 2.45초 안팎), 영상 컷은 실제 길이(최대 10초).
-    컷 진행 시간(영상은 길이 − 전환 겹침)의 합이 한도(core.planners.memory.advance_budget)를 넘으면 영상 컷의 '사진 컷 초과분'만
-    같은 비율로 줄인다 (사진·짧은 영상은 그대로). 줄인 뒤 컷 진행 시간의 합계를 돌려준다
-    """
-    from core.planners.memory import XFADE_OVERLAP_SEC as XF, advance_budget, cut_sec
-    n = len(scenes)
-    cut = cut_sec(n)
-
-    def adv(sc):
-        if (sc.get("media") or {}).get("type") == "video":
-            return max(cut, float(sc.get("min_sec") or 0) - XF, float(sc.get("duration_sec") or 0) - XF)
-        return cut
-    total = sum(adv(sc) for sc in scenes)
-    budget = advance_budget(n)
-    extras = [(sc, adv(sc) - cut) for sc in scenes if adv(sc) > cut]
-    spare = sum(e for _, e in extras)
-    if total > budget and spare > 0:
-        keep = max(0.0, 1.0 - (total - budget) / spare)
-        for sc, e in extras:
-            sc["min_sec"] = sc["duration_sec"] = round(cut + e * keep + XF, 2)
-        total = sum(adv(sc) for sc in scenes)
-    return round(total, 2)
+# ---------------------------------------------------------------- 영상 길이 보존: 10초 상한 없음, 59초를 넘을 때만 비율대로 줄임
+SEG_TARGET_SEC = 3.5              # 긴 영상을 나누는 구간 길이 (약 3~4초마다 대표 프레임 + 카피 한 줄)
+LONG_CLIP_SEC = 8.0               # 여러 파일을 올렸을 때 이 길이 이상인 영상 클립은 구간으로 나눔 (그보다 짧으면 1컷 1카피)
+SINGLE_MIN_SEGMENTS = 4           # 영상 1개만 올리면 짧아도 최소 4구간 (4문장)
+MAX_PLAN_ITEMS = 26               # 사진 + 영상 구간을 합친 컷 수 상한 (대본 엔진 한 번 호출·59초 한도)
+SEG_XFADE_PAD = 0.12              # 구간 사이 디졸브(0.12초)로 겹치는 만큼 보태 영상이 끊기지 않게 (컷 진행 시간 = 구간 길이)
+OWNER_PHOTO_SEC = 2.3             # 매장 홍보 사진 컷의 진행 시간(낭독 길이에 따라 2~2.7초) — 59초 예산 계산용
+TARGET_VIDEO_LAST_SEC = 58.7      # 마지막이 영상 구간이면 끝 여운이 따로 안 붙어(구간 길이로 끝남) 렌더 길이 ≈ 컷 합 + 커버 0.5초라 한도를 조금 더 씀
+OWNER_MARGIN_SEC = 0.35           # 매장 홍보는 사진 컷 낭독 길이가 2~2.7초로 들쭉날쭉 → 그만큼 더 보수적으로
 
 
-MIXED_VIDEO_CAP_SEC = 10.0        # 사진과 섞어 올린 영상 컷 한 개의 최대 재생 시간
+LAST_SCENE_TAIL_SEC = 3.45        # 마지막 컷은 낭독(최대 약 2.45초, 무음이면 컷 길이) + 여운 1.0초. 마지막 영상 구간이 이보다 짧으면 그만큼 렌더가 길어짐
+
+
+def duration_budget(last_is_video: bool, owner: bool = False, count: int = 0, has_photo: bool = True, last_len: Optional[float] = None) -> float:
+    """컷 진행 시간 합이 넘으면 안 되는 한도(초): 쇼츠·릴스 59초 − 맨 앞 커버 0.5초 − 마지막 컷 여운 (마지막이 충분히 긴 영상 구간이면 여운이 구간 안에 들어가 더 쓸 수 있음)"""
+    from core.planners.memory import advance_budget
+    if last_is_video:
+        extra = 0.45 if last_len is None else max(0.0, LAST_SCENE_TAIL_SEC - last_len)
+        base = TARGET_VIDEO_LAST_SEC - 0.5 - extra
+    else:
+        base = advance_budget(count)
+    return base - (OWNER_MARGIN_SEC if (owner and has_photo) else 0.0)           # 사진 컷이 없으면 낭독 길이 변동이 렌더 길이에 영향을 주지 않음
+MIN_CLIP_SEC = 2.0                # 줄이더라도 영상 하나가 이보다 짧아지지 않게
 
 
 def single_video_sentences(length_sec: float) -> int:
-    """영상 하나의 실제 길이 → 쇼츠 문장(컷) 수: 17초까지 4문장, 24초까지 5문장, 더 길면 약 4.5초마다 한 문장 (최대 8)"""
-    if length_sec <= 17.0:
-        return 4
-    if length_sec <= 24.0:
-        return 5
-    return min(8, max(5, round(length_sec / 4.5)))
+    """영상 1개의 실제 길이 → 구간(문장) 수: 약 3.5초마다 한 구간, 짧아도 최소 4 (예: 15초 4 · 25초 7 · 35초 10)"""
+    return max(SINGLE_MIN_SEGMENTS, round(length_sec / SEG_TARGET_SEC))
+
+
+_LEN_CACHE: Dict[Any, float] = {}
+
+
+def _video_len(path: str) -> float:
+    """영상 길이(초). 화면이 다시 그려질 때마다 ffprobe를 부르지 않게 (경로·수정시각·크기) 기준으로 기억"""
+    from core.media import probe_media
+    try:
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (path, 0, 0)
+    if key not in _LEN_CACHE:
+        try:
+            _LEN_CACHE[key] = float(probe_media(path).duration)
+        except (ValueError, OSError):
+            return 3.0
+    return _LEN_CACHE[key]
+
+
+def media_items(paths: List[str], memory: bool = False, lengths: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    """
+    올린 파일 → 컷 목록 (화면 안내·기획 공통). 영상은 10초에서 자르지 않는다.
+    ① 전체 길이(사진 컷 + 영상 원본 길이)가 59초 한도 안이면 어떤 영상도 줄이지 않는다
+    ② 한도를 넘으면 영상들의 길이를 같은 비율로 줄인다 (사진·한도 밖은 그대로, 영상 하나는 MIN_CLIP_SEC 이상)
+    ③ 영상 1개만 올렸거나 8초 이상인 긴 영상은 약 3.5초 구간으로 나눈다 (구간마다 대표 프레임·카피 한 줄). 컷이 MAX_PLAN_ITEMS를 넘으면 구간을 더 길게
+    반환: {"items": [{src, kind, trim, len, file_index}], "cuts", "seconds", "expanded", "trimmed", "videos"}
+    """
+    from core.media import is_video_file
+    paths = list(paths or [])
+    last_video = bool(paths) and is_video_file(paths[-1])
+    if memory:
+        from core.planners.memory import cut_sec
+        photo_sec = cut_sec(len(paths))
+    else:
+        photo_sec = OWNER_PHOTO_SEC
+    budget = duration_budget(last_video, owner=not memory, count=len(paths), has_photo=any(not is_video_file(p) for p in paths), last_len=None if not last_video else LAST_SCENE_TAIL_SEC)
+    lens0 = {p: float((lengths or {}).get(p) or _video_len(p)) for p in paths if is_video_file(p)}
+    n_photo = sum(1 for p in paths if p not in lens0)
+    has_photo = n_photo > 0
+
+    def build(budget: float) -> Dict[str, Any]:
+        lens, trimmed = dict(lens0), False
+        vid_total = sum(lens.values())
+        if vid_total > 0 and n_photo * photo_sec + vid_total > budget:
+            f = max(0.0, budget - n_photo * photo_sec) / vid_total
+            lens = {p: max(MIN_CLIP_SEC, L * f) for p, L in lens.items()}
+            trimmed = True
+        single = len(paths) == 1 and bool(lens)
+
+        def split(seg_sec: float):
+            out = []
+            for i, p in enumerate(paths):
+                if p not in lens:
+                    out.append({"src": p, "kind": "photo", "trim": 0.0, "len": None, "file_index": i})
+                    continue
+                L = lens[p]
+                if single:
+                    n = single_video_sentences(L) if seg_sec == SEG_TARGET_SEC else max(1, round(L / seg_sec))
+                elif L >= LONG_CLIP_SEC:
+                    n = max(2, round(L / seg_sec))
+                else:
+                    n = 1
+                n = max(1, min(n, int(L // 1.0) or 1))           # 구간이 1초보다 짧아지지 않게
+                for k in range(n):
+                    out.append({"src": p, "kind": "video", "trim": round(L / n * k, 3), "len": round(L / n, 3), "file_index": i})
+            return out
+        seg = SEG_TARGET_SEC
+        items = split(seg)
+        while len(items) > MAX_PLAN_ITEMS and seg < 12:
+            seg += 0.5
+            items = split(seg)
+        seconds = sum(photo_sec if it["kind"] == "photo" else it["len"] for it in items)
+        expanded = single or any(it["kind"] == "video" and sum(1 for x in items if x["file_index"] == it["file_index"]) > 1 for it in items)
+        return {"items": items, "cuts": len(items), "seconds": round(seconds, 2), "expanded": bool(expanded), "trimmed": trimmed,
+                "videos": len(lens), "photo_sec": photo_sec, "lengths": lens}
+
+    out = build(budget)
+    if last_video and out["items"]:
+        # 마지막 컷이 영상 구간이면, 구간이 짧을수록 낭독 여운이 구간 밖으로 나와 렌더가 길어짐 → 실제 구간 길이로 한도를 다시 계산해 한 번 더 맞춤
+        tighter = duration_budget(True, owner=not memory, count=len(paths), has_photo=has_photo, last_len=out["items"][-1]["len"])
+        if tighter < budget - 0.01:
+            out = build(tighter)
+    return out
+
+
+def plan_segmented(spec: JobSpec, job, plan_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    영상을 구간으로 나눠 쓰는 기획 (매장 홍보·모임·행사·추억 공통): 구간마다 대표 프레임을 뽑아 사진처럼 판독·1컷 1카피 대본을 만들고,
+    각 문장은 영상의 해당 구간을 이어서 재생한다. 사진은 올린 순서 그대로 컷 1개 (구간 순서가 뒤섞이지 않게 자동 정렬 끔)
+    """
+    import dataclasses
+    from core.media import extract_thumbnail
+    items = plan_info["items"]
+    apply_style_env(spec, len(items))                       # 모임·행사·추억 컷 시간은 파일 수가 아니라 구간까지 센 컷 수 기준
+    frames = []
+    for i, it in enumerate(items):
+        if it["kind"] == "photo":
+            frames.append(it["src"])
+            continue
+        fp = job.asset_path(f"vframe_{i + 1:02d}.jpg")
+        total = plan_info["lengths"].get(it["src"]) or it["len"]
+        extract_thumbnail(it["src"], fp, at=min(it["trim"] + it["len"] / 2, max(total - 0.2, 0.0)))
+        frames.append(fp)
+    vspec = dataclasses.replace(spec, media_paths=frames, keep_photo_order=True, tempo="rap")
+    scenes = plan_memory(vspec, job) if spec.memory else plan(vspec, job)
+    last = len(scenes) - 1
+    for i, (sc, it) in enumerate(zip(scenes, items)):
+        if it["kind"] != "video":
+            continue
+        assign_media_to_scene(job, sc, it["src"], "uploaded")
+        sc["media"]["trim_start"] = it["trim"]
+        sc["source_path"] = frames[i]                       # 카드 미리보기·사진 설명은 그 구간의 대표 프레임
+        sc["duration_sec"] = round(it["len"], 2)
+        sc["min_sec"] = round(it["len"] + (0.0 if i == last else SEG_XFADE_PAD), 2)
+    if scenes:
+        vids = [p for p in dict.fromkeys(it["src"] for it in items if it["kind"] == "video")]
+        if len(items) and len(vids) == 1 and all(it["kind"] == "video" for it in items):
+            scenes[0]["single_video"] = {"path": vids[0], "length_sec": round(plan_info["lengths"][vids[0]], 2), "segments": len(items)}
+        scenes[0]["media_segments"] = {"cuts": len(items), "seconds": plan_info["seconds"], "trimmed": plan_info["trimmed"]}
+    return scenes
 
 
 def fit_video_cuts(scenes: List[Dict[str, Any]]) -> None:
-    """사진 + 영상 혼합: 영상 컷은 그 영상의 실제 시간(최대 MIXED_VIDEO_CAP_SEC) 동안 처음부터 재생, 사진 컷은 기존대로 약 2초 줌인"""
+    """사진 + 영상 혼합(구간으로 나누지 않는 짧은 영상): 영상 컷은 그 영상의 원본 길이 전체(10초 상한 없음)를 처음부터 재생, 사진 컷은 기존대로 약 2초 줌인"""
     from core.media import probe_media
     for sc in scenes:
         m = sc.get("media")
@@ -362,40 +480,82 @@ def fit_video_cuts(scenes: List[Dict[str, Any]]) -> None:
             length = float(probe_media(m["path"]).duration)
         except (ValueError, OSError):
             continue
-        use = max(1.0, min(length, MIXED_VIDEO_CAP_SEC))
+        use = max(1.0, length)
         m["trim_start"] = 0.0
         sc["min_sec"] = round(use, 2)
         sc["duration_sec"] = round(use, 2)
     return None
 
 
-def plan_single_video(spec: JobSpec, job) -> List[Dict[str, Any]]:
+FINAL_TIMELINE_MAX_SEC = 58.0     # 타임라인 길이 한도 = 쇼츠·릴스 59초 − 맨 앞 커버 0.5초 − 인코딩 오차 여유
+
+
+def fit_after_voice(spec: JobSpec, scenes: List[Dict[str, Any]], audio_paths: List[str], limit: float = FINAL_TIMELINE_MAX_SEC) -> float:
     """
-    직접 촬영한 영상 1개: 15초로 못박지 않고 실제 길이 전체를 배경으로 쓴다.
-    길이에 맞는 4~8개 구간의 대표 프레임을 뽑아 사진처럼 판독·대본(1컷 1카피)을 만들고, 각 문장은 영상의 해당 구간을 이어서 재생한다.
+    음성이 만들어진 뒤 실제 낭독 길이로 렌더 타임라인(조립과 같은 규칙)을 계산해, 한도를 넘으면 '영상 구간'의 길이(min_sec)만 같은 비율로 줄인다.
+    기획 단계의 추정(사진 컷 2.3초 등)은 낭독이 길면 어긋나므로 마지막에 한 번 더 맞춘다. 사진 컷·낭독 길이가 정한 하한 밑으로는 줄이지 않는다.
+    최종 타임라인 길이(초)를 돌려준다
     """
-    import dataclasses
-    from core.media import extract_thumbnail, probe_media
-    video = spec.media_paths[0]
-    info = probe_media(video)
-    length = float(info.duration)
-    n = single_video_sentences(length)
-    seg = length / n
-    frames = []
-    for i in range(n):
-        fp = job.asset_path(f"vframe_{i + 1:02d}.jpg")
-        extract_thumbnail(video, fp, at=min(seg * (i + 0.5), max(length - 0.2, 0.0)))
-        frames.append(fp)
-    scenes = plan(dataclasses.replace(spec, media_paths=frames, keep_photo_order=True, tempo="rap"), job)
-    for i, sc in enumerate(scenes[:n]):
-        assign_media_to_scene(job, sc, video, "uploaded")
-        sc["media"]["trim_start"] = round(seg * i, 3)
-        sc["source_path"] = frames[i]                       # 카드 미리보기·사진 설명은 그 구간의 대표 프레임
-        sc["duration_sec"] = round(seg, 2)
-        sc["min_sec"] = round(seg + (0.0 if i == len(scenes[:n]) - 1 else 0.15), 2)       # 디졸브로 겹치는 만큼 보태 영상이 끊기지 않게
-    if scenes:
-        scenes[0]["single_video"] = {"path": video, "length_sec": round(length, 2), "segments": n}
-    return scenes
+    from core.compositor import _xfade_for
+    from core.mode_policy import get_mode_policy
+    from core.render.ffmpeg_assemble import probe
+    pol = get_mode_policy(spec.mode)
+    xf = _xfade_for(spec.mode)
+    last = len(scenes) - 1
+    floors, cur = [], []
+    for i, (sc, ap) in enumerate(zip(scenes, audio_paths)):
+        a = float(probe(ap)["duration"] or 0.0)
+        floor = max(pol.min_scene_sec, a + (1.0 if i == last else pol.tail_sec + xf) + float(sc.get("hold_sec") or 0))
+        floors.append(floor)
+        cur.append(max(floor, float(sc.get("min_sec") or 0)))
+
+    def timeline(durs):
+        return sum(d - (xf if i < last else 0.0) for i, d in enumerate(durs))
+    total = timeline(cur)
+    if total <= limit:
+        return round(total, 2)
+    spare = [(i, cur[i] - floors[i]) for i, sc in enumerate(scenes) if (sc.get("media") or {}).get("type") == "video" and cur[i] - floors[i] > 0.01]
+    room = sum(e for _, e in spare)
+    if room <= 0:
+        return round(total, 2)
+    keep = max(0.0, 1.0 - (total - limit) / room)
+    for i, e in spare:
+        new = round(floors[i] + e * keep, 2)
+        scenes[i]["min_sec"] = new
+        scenes[i]["duration_sec"] = min(float(scenes[i].get("duration_sec") or new), new)
+        cur[i] = new
+    logger.info(f"[59초 맞춤] 낭독이 길어 타임라인 {total:.1f}초 → 영상 구간 {room:.1f}초분을 {1 - keep:.0%} 줄임")
+    return round(timeline(cur), 2)
+
+
+def fit_total_budget(scenes: List[Dict[str, Any]], budget: Optional[float] = None, cut: Optional[float] = None, owner: bool = False) -> float:
+    """
+    러닝타임 한도(쇼츠·릴스 59초): 사진 컷은 컷당 일정한 시간(추억 2.5초 · 매장 2.3초), 영상 컷은 원본 길이. 컷 진행 시간(영상은 길이 − 전환 겹침)의
+    합이 한도를 넘으면 영상 컷의 '사진 컷 초과분'만 같은 비율로 줄인다 (사진·짧은 영상은 그대로). 한도 안이면 아무것도 줄이지 않는다.
+    budget/cut을 생략하면 모임·행사·추억(core.planners.memory) 값. 줄인 뒤 컷 진행 시간의 합계를 돌려준다
+    """
+    from core.planners.memory import XFADE_OVERLAP_SEC as XF, cut_sec
+    n = len(scenes)
+    cut = cut_sec(n) if cut is None else cut
+    if budget is None:
+        last = scenes[-1] if scenes else {}
+        budget = duration_budget(bool(scenes) and (last.get("media") or {}).get("type") == "video", owner=owner, count=n,
+                                 has_photo=any((sc.get("media") or {}).get("type") != "video" for sc in scenes),
+                                 last_len=float(last.get("min_sec") or last.get("duration_sec") or 0) or None)
+
+    def adv(sc):
+        if (sc.get("media") or {}).get("type") == "video":
+            return max(cut, float(sc.get("min_sec") or 0) - XF, float(sc.get("duration_sec") or 0) - XF)
+        return cut
+    total = sum(adv(sc) for sc in scenes)
+    extras = [(sc, adv(sc) - cut) for sc in scenes if adv(sc) > cut]
+    spare = sum(e for _, e in extras)
+    if total > budget and spare > 0:
+        keep = max(0.0, 1.0 - (total - budget) / spare)
+        for sc, e in extras:
+            sc["min_sec"] = sc["duration_sec"] = round(cut + e * keep + XF, 2)
+        total = sum(adv(sc) for sc in scenes)
+    return round(total, 2)
 
 
 def apply_book_visuals(spec: JobSpec, job, scenes: List[Dict[str, Any]],
@@ -566,7 +726,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     real_media = spec.mode in ("owner", "travel", "commerce", "book")
-    apply_style_env(spec)
+    apply_style_env(spec, len(scenes))
     gen = AssetGenerator(gemini_api_key=spec.api_key, voice_actor=spec.voice_actor, audio_mode=spec.audio_mode,
                          mock=spec.mock, mode=spec.mode, cache_dir=job.assets_dir,
                          readings=owner_readings(spec.name, spec.reading) if spec.mode == "owner" and not spec.memory else None)
@@ -585,6 +745,8 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
     step(5, f"씬 {total}개 나레이션 동시 생성 중...")
     audios = gen.generate_voices([sc for sc, _, _ in pending], force=force,
                                  on_done=lambda d, n: step(5 + int(d / n * 25), f"나레이션 {d}/{n} 완료..."))
+    if spec.mode == "owner":
+        fit_after_voice(spec, [sc for sc, _, _ in pending], audios)         # 실제 낭독 길이로 합계가 59초를 넘으면 영상 구간만 줄임
     manifest = []
     for idx, ((scene, s_num, img), audio) in enumerate(zip(pending, audios)):
         step(30 + int(idx / total * 40), f"[{idx + 1}/{total}] 씬 {s_num} 영상 생성 중...")
@@ -640,8 +802,14 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
                 region=region_of(spec.address) if spec.mode == "owner" else "",
                 core_concept=concept_clean,
                 business_type=spec.business_type or "")
-        thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
-                                      sub_text=copy["thumb_sub"], accent=copy["accent"])
+        if spec.memory:
+            # 🎉 추억: 광고용 큰 글씨 대신 기념 사진 느낌의 감성 썸네일 (감성 명조/둥근 팝체, 판촉 문구 없음)
+            from core.render.thumbnail import render_memory_thumbnail
+            thumb = render_memory_thumbnail(first_frame, copy["thumb_main"], spec.memory_tone, os.path.join(job.final_dir, "final_thumb.png"),
+                                            comp, sub_text=copy["thumb_sub"])
+        else:
+            thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
+                                          sub_text=copy["thumb_sub"], accent=copy["accent"])
     except Exception as e:
         logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {e}")
 

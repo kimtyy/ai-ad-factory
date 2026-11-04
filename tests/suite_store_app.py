@@ -63,7 +63,8 @@ for _i in range(8):
 at2.session_state["uploaded_paths"] = [photos[0], vid, photos[1]]
 at2.run()
 infos = [i.value for i in at2.info]
-check(any("자동 계산: 선택된 3개 에셋에 맞춰 약 14초 쇼츠로 제작됩니다." in v for v in infos), f"사진+영상 혼합(2+15→10초 상한): {[v for v in infos if '⏱️' in v]}")
+check(any("자동 계산: 선택된 3개 에셋에 맞춰 약 19초 쇼츠로 제작됩니다." in v and "3~4초 구간" in v for v in infos),
+      f"사진+영상 혼합(2+15초): 영상은 10초에서 자르지 않고 15초 그대로(2×2+15=19초), 긴 영상은 구간 자막: {[v for v in infos if '⏱️' in v]}")
 at2.session_state["uploaded_paths"] = photos
 at2.run()
 check(any("선택된 8개 에셋에 맞춰 약 16초" in i.value for i in at2.info), "사진 8장: 약 16초")

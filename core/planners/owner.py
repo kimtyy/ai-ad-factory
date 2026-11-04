@@ -450,7 +450,7 @@ def plan_owner_storyboard(
     """
     business_name = (business_name or "").strip()
     search_keyword = (search_keyword or "").strip() or business_name
-    media_orig = list(media_paths or [])[:10]
+    media_orig = list(media_paths or [])[:26]          # 사진 + 영상 구간 (영상은 3~4초 구간으로 나뉘어 올린 파일 수보다 컷이 많아질 수 있음)
     # keep_order: 사장님이 직접 정한 순서를 100% 그대로 (AI 버킷 정렬·외관 제외 없음, 첫 번째로 올린 사진이 첫 컷·썸네일)
     order = list(range(len(media_orig))) if keep_order else order_media_for_concept(media_orig, photo_tags or {}, core_concept, photo_buckets or {})
     media = [media_orig[k] for k in order]                       # 컨셉 순서로 정렬한 미디어 (대본 프롬프트·컷 묶음은 이 순서)

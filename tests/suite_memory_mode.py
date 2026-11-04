@@ -123,13 +123,14 @@ check(list(pk)[0] == "kakao" and len(pk) == 5 and pk["kakao"]["body"].startswith
 alltext = " ".join(v["body"] + v["title"] for v in pk.values())
 check(not any(w in alltext for w in ("가게추천", "검색", "네이버 지도", "메뉴", "위치")) and "#Shorts" in pk["youtube"]["title"], "매장용 문구(가게추천·검색·위치) 없음")
 c = memory_copy("가평 조종면 상인회 가을 단합대회", "formal")
-check(len(c["thumb_main"]) <= 18 and c["title"].endswith("#Shorts") and c["tag_set"]["pool"] and not any("가게" in t for t in c["hashtags"]),
-      f"썸네일 카피 18자 이내·해시태그 추억용: {c['thumb_main']} {c['hashtags']}")
+check(len(c["thumb_main"]) <= 30 and c["title"].endswith("#Shorts") and c["tag_set"]["pool"] and not any("가게" in t for t in c["hashtags"]),
+      f"썸네일 카피 30자 이내·해시태그 추억용: {c['thumb_main']} {c['hashtags']}")
 check(memory_copy("", "warm")["thumb_main"] == "함께한 하루", "모임 이름이 없으면 톤별 기본 썸네일")
 check(memory_copy("가평 조종면 상인회 가을 단합대회", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회"
-      and memory_copy("가평 조종면 상인회 가을 단합대회 행사 안내", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회"
-      and memory_copy("우리 가족 1박2일 힐링 여행", "warm")["thumb_main"] == "우리 가족 1박2일 힐링 여행",
-      "썸네일 제목: 17자 이름은 잘리지 않고(단합대회 보존), 더 길면 단어 경계에서만 자름")
+      and memory_copy("가평 조종면 상인회 가을 단합대회 행사 안내", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회 행사 안내"
+      and memory_copy("우리 가족 1박2일 힐링 여행", "warm")["thumb_main"] == "우리 가족 1박2일 힐링 여행"
+      and memory_copy("가평 조종면 상인회 가을 단합대회 겸 송년 모임 및 신년 인사회 행사 안내", "formal")["thumb_main"] == "가평 조종면 상인회 가을 단합대회 겸 송년 모임 및",
+      "썸네일 제목: 30자까지 잘리지 않고, 더 길면 단어 경계에서만 자름")
 check(seo_metadata("동창회", "lively")["title"] and "동창회" in seo_metadata("동창회", "lively")["description"], "SEO 메타데이터(제목·설명·태그)")
 
 # ---------------------------------------------------------------- 5. 공용 엔진: 기획(1:1 배정) → 렌더 (Mock, 브랜드·엔딩 카드·매장 SEO 없음)
@@ -173,10 +174,10 @@ check(on == "1" and cut_env == "2.47" and "MEMORY_TEMPO" not in os.environ and "
       "추억 작업에서만 2.5초 템포가 켜지고(23장이면 2.47초) 매장 작업이면 꺼짐")
 vscenes = [{"scene_index": i + 1, "duration_sec": 10.0, "min_sec": 10.0, "media": {"type": "video", "path": "x.mp4"}} for i in range(23)]
 tot = pipeline.fit_total_budget(vscenes)
-check(tot <= mem.advance_budget(23) + 0.05 and all(s["min_sec"] >= 2.59 for s in vscenes), f"영상 23개(각 10초)도 진행 합계 한도 {mem.advance_budget(23):.1f}초 이내로 보정 ({tot}초)")
+check(tot <= 58.25 and all(s["min_sec"] >= 2.59 for s in vscenes), f"영상 23개(각 10초)도 59초 한도(마지막이 영상이면 컷 합 58.2초) 이내로 보정 ({tot}초)")
 mixed = [{"scene_index": i + 1, "duration_sec": 2.47} for i in range(20)] + [{"scene_index": 21 + i, "duration_sec": 10.0, "min_sec": 10.0, "media": {"type": "video", "path": "x.mp4"}} for i in range(3)]
 t2 = pipeline.fit_total_budget(mixed)
-check(t2 <= mem.advance_budget(23) + 0.05 and all(s["duration_sec"] == 2.47 for s in mixed[:20]) and all(s["min_sec"] > 2.59 for s in mixed[20:]),
+check(t2 <= 58.25 and all(s["duration_sec"] == 2.47 for s in mixed[:20]) and all(s["min_sec"] > 2.59 for s in mixed[20:]),
       f"사진 20 + 영상 3(각 10초): 사진 컷은 그대로, 영상 초과분만 줄임 ({t2}초)")
 short_clip = [{"scene_index": 1, "duration_sec": 4.0, "min_sec": 4.0, "media": {"type": "video", "path": "x.mp4"}}]
 check(pipeline.fit_total_budget(short_clip) == 3.88 and short_clip[0]["min_sec"] == 4.0, "한도 안이면 영상 길이를 건드리지 않음")
@@ -213,7 +214,73 @@ for k in range(3):
     clips.append(cp)
 mix_media = photos[:6] + [clips[0]] + photos[6:9] + [clips[1]] + photos[9:12] + [clips[2]]
 sc_m, d_m = render_n(15, "silent", media=mix_media)
-check(len(sc_m) == 15 and d_m < 59.0 and all(s["min_sec"] < 10.0 for s in sc_m if s.get("media")), f"사진 12 + 10초 영상 3(15컷): 영상 컷만 줄여 렌더 {d_m:.1f}초 (59초 이내)")
+mi = pipeline.media_items(mix_media, memory=True)
+check(len(sc_m) == mi["cuts"] and mi["expanded"] and mi["trimmed"] and d_m < 59.0,
+      f"사진 12 + 10초 영상 3: 합계가 59초를 넘어 영상만 비율대로 줄이고(10초 상한 아님) 구간 자막 {mi['cuts']}컷, 렌더 {d_m:.1f}초 (59초 이내)")
+
+# ---------------------------------------------------------------- 5-2. 10초 상한 폐지: 영상은 원본 길이 100%, 59초를 넘을 때만 비율대로 줄임
+def make_clip(name, sec):
+    cp = os.path.join(work, name)
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc2=size=360x640:rate=24:duration={sec}",
+                    "-pix_fmt", "yuv420p", cp], check=True)
+    return cp
+
+
+v25m, v15m, v20m = make_clip("m25.mp4", 25), make_clip("m15.mp4", 15), make_clip("m20.mp4", 20)
+sp25 = pipeline.JobSpec(mode="owner", name="동창회", media_paths=[v25m], memory=True, memory_tone="lively", mock=True, audio_mode="silent")
+jb25 = JobContext.create(app="test")
+sc25 = pipeline.plan(sp25, jb25)
+t25 = [s["media"]["trim_start"] for s in sc25]
+check(len(sc25) == 7 and all(3.0 <= s["duration_sec"] <= 4.0 for s in sc25) and abs(t25[-1] + sc25[-1]["duration_sec"] - 25.0) < 0.1 and t25[-1] > 20
+      and len({s["voiceover"] for s in sc25}) == 7, f"🎉 25초 단독 영상: 3~4초 7구간이 0~25초 끝까지, 구간마다 다른 카피 (시작 {t25})")
+d25 = probe_media(pipeline.render(sp25, jb25, sc25).final_path).duration
+check(25.0 <= d25 <= 28.5, f"🎉 25초 영상 렌더 {d25:.1f}초 (10초에서 잘리지 않음)")
+shutil.rmtree(jb25.workdir, ignore_errors=True)
+sp35 = pipeline.JobSpec(mode="owner", name="동창회", media_paths=[v15m, v20m], memory=True, memory_tone="warm", mock=True, audio_mode="silent")
+jb35 = JobContext.create(app="test")
+sc35 = pipeline.plan(sp35, jb35)
+a_sc = [s for s in sc35 if s["media"]["path"] == v15m]
+b_sc = [s for s in sc35 if s["media"]["path"] == v20m]
+check(len(sc35) == 10 and abs(a_sc[-1]["media"]["trim_start"] + a_sc[-1]["duration_sec"] - 15.0) < 0.1
+      and abs(b_sc[-1]["media"]["trim_start"] + b_sc[-1]["duration_sec"] - 20.0) < 0.1, f"🎉 15초 + 20초: 두 영상 모두 끝까지 ({len(a_sc)}구간 + {len(b_sc)}구간)")
+d35 = probe_media(pipeline.render(sp35, jb35, sc35).final_path).duration
+check(35.0 <= d35 <= 38.5, f"🎉 15 + 20초 렌더 {d35:.1f}초 (합계 35초 그대로, 10초 컷 없음)")
+shutil.rmtree(jb35.workdir, ignore_errors=True)
+v80m = make_clip("m80.mp4", 80)
+sc80 = pipeline.plan(pipeline.JobSpec(mode="owner", name="동창회", media_paths=[v80m], memory=True, mock=True), JobContext.create(app="test"))
+check(55.0 <= sum(s["duration_sec"] for s in sc80) <= 58.3 and sc80[0]["media_segments"]["trimmed"], "🎉 80초 영상은 59초 한도에 맞춰 줄임")
+check(not pipeline.media_items([v25m], memory=True, lengths={v25m: 58.0})["trimmed"], "🎉 58초 영상은 줄이지 않음")
+
+# ---------------------------------------------------------------- 5-3. 감성 썸네일 (core/render/thumbnail.py)
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+from core.compositor import AdCompositor  # noqa: E402
+from core.render.thumbnail import BANNED, FONT_BY_TONE, render_memory_thumbnail  # noqa: E402
+from core.youtube_upload import export_cover_jpg  # noqa: E402
+frame = np.array(Image.open(P1).convert("RGB"))
+comp_t = AdCompositor(output_dir=work)
+outs = {}
+for tone_k, ttl in (("formal", "가평 조종면 상인회 가을 단합대회"), ("warm", "우리 가족 힐링 여행"), ("lively", "친구들과 7080 동창회"), ("warm", "")):
+    cc = memory_copy(ttl, tone_k)
+    outs[(tone_k, ttl)] = render_memory_thumbnail(frame, cc["thumb_main"], tone_k, os.path.join(work, f"thumb_{tone_k}_{len(ttl)}.png"), comp_t, sub_text=cc["thumb_sub"])
+sizes = {Image.open(p).size for p in outs.values()}
+check(sizes == {(1080, 1920)} and all(os.path.getsize(p) > 20000 for p in outs.values()), f"감성 썸네일 4종 1080×1920 생성 (이름 있음·없음, 3톤)")
+jpg = export_cover_jpg(next(iter(outs.values())))
+check(os.path.exists(jpg) and Image.open(jpg).format == "JPEG" and os.path.getsize(jpg) <= 2 * 1024 * 1024, "다운로드용 JPEG (2MB 이하) 변환")
+check(FONT_BY_TONE == {"lively": "pop", "warm": "serif", "formal": "serif"} and all(w in BANNED for w in ("특가", "할인", "손해")),
+      "폰트: 유쾌=둥근 팝체, 따뜻·기록=감성 명조 / 상업 문구(특가·할인·손해) 차단 목록")
+# 공백 글리프가 없는 팝체(Gmarket Sans)도 □ 없이: 어절을 따로 그림 → 공백이 있는 줄도 폭 계산이 되고 어절 사이가 비지 않음
+from core.render import thumbnail as thumb_mod  # noqa: E402
+from core.render import fonts as fonts_mod  # noqa: E402
+pf = fonts_mod.load(fonts_mod.resolve("pop", comp_t), 80)
+check(thumb_mod._line_width(pf, "친구들과 7080 동창회") > thumb_mod._line_width(pf, "친구들과") + thumb_mod._line_width(pf, "동창회"), "팝체: 어절 사이 간격을 직접 계산 (공백 글리프 □ 방지)")
+# 영상에 들어가는 커버·최종 렌더에서도 새 썸네일 사용
+sp_t = pipeline.JobSpec(mode="owner", name="가평 상인회 가을 단합대회", media_paths=photos[:4], memory=True, memory_tone="warm", mock=True, audio_mode="silent")
+jb_t = JobContext.create(app="test")
+res_t = pipeline.render(sp_t, jb_t, pipeline.plan(sp_t, jb_t))
+check(res_t.thumb_path and os.path.basename(res_t.thumb_path) == "final_thumb.png" and Image.open(res_t.thumb_path).size == (1080, 1920)
+      and res_t.cover_path and os.path.exists(res_t.cover_path), "렌더가 감성 썸네일(PNG)과 업로드용 커버(JPG)를 함께 만듦")
+shutil.rmtree(jb_t.workdir, ignore_errors=True)
 
 # ---------------------------------------------------------------- 6. 화면: 1단계 토글 → 모임·행사·추억 폼 → 기획 → 편집 카드 1:1
 from streamlit.testing.v1 import AppTest  # noqa: E402
@@ -270,7 +337,7 @@ at.session_state["bgm_on"] = False
 at.button(key="render_cta").click().run()
 check(not at.exception and at.session_state["final_video_path"] and os.path.exists(at.session_state["final_video_path"]), f"화면 렌더 완료 {[e.value[:100] for e in at.exception]}")
 dl = [e for e in at.get("download_button")]
-check(any("썸네일 저장" in e.proto.label for e in dl) and at.session_state["thumb_path"] and os.path.exists(at.session_state["thumb_path"]),
+check(any("썸네일 커버 이미지 저장" in e.proto.label for e in dl) and at.session_state["thumb_path"] and os.path.exists(at.session_state["thumb_path"]),
       f"5단계: 썸네일 미리보기·저장 버튼 {[e.proto.label[:14] for e in dl]}")
 check(any(i.proto.url for i in at.get("imgs")) if at.get("imgs") else True, "썸네일 이미지 표시")
 check(dl and "스마트폰 갤러리에 저장하기 (카카오톡 단톡방 공유용)" in dl[0].proto.label, "5단계: 상단 강조 저장 버튼 라벨")
