@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --text:#F8FAFC; --primary:#8B5CF6; }
+  html, body { margin:0; padding:0; background:transparent; color:var(--text); font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif; }
+  #wrap { padding:2px 0 4px; }
+  button#pick { width:100%; min-height:64px; font-size:18px; font-weight:700; color:#fff; background:var(--primary); border:0; border-radius:14px; padding:14px 12px; cursor:pointer; touch-action:manipulation; }
+  button#pick:disabled { opacity:.45; cursor:not-allowed; }
+  #status { margin-top:8px; font-size:14px; line-height:1.45; min-height:20px; word-break:keep-all; }
+  #status.err { color:#fda4af; } #status.ok { color:#86efac; }
+  #bar { height:6px; border-radius:3px; background:rgba(255,255,255,.15); margin-top:6px; overflow:hidden; display:none; }
+  #bar i { display:block; height:100%; width:0; background:var(--primary); transition:width .15s; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <button id="pick" type="button">📸 내 폰 사진·영상 고르기 (여러 장 가능)</button>
+  <input id="file" type="file" multiple accept="image/*,video/*,.heic,.heif" style="display:none">
+  <div id="bar"><i></i></div>
+  <div id="status"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var args = { label: "", max_files: 10, max_dim: 1440, quality: 0.88, max_video_mb: 40, disabled: false };
+  var busy = false;
+  var $ = function (id) { return document.getElementById(id); };
+  var TOTAL_CAP = 100 * 1024 * 1024;          // 한 번에 보내는 원본 합계 상한 (웹소켓 메시지 한도 안쪽)
+
+  // ---- Streamlit 컴포넌트 프로토콜 (외부 라이브러리 없이 postMessage)
+  function send(type, data) { window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*"); }
+  function setHeight() { send("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight + 4 }); }
+  function setValue(v) { send("streamlit:setComponentValue", { value: v, dataType: "json" }); }
+
+  function status(msg, cls) { var s = $("status"); s.textContent = msg || ""; s.className = cls || ""; setHeight(); }
+  function progress(p) { var b = $("bar"); b.style.display = p == null ? "none" : "block"; if (p != null) b.firstChild.style.width = Math.round(p * 100) + "%"; setHeight(); }
+
+  window.addEventListener("message", function (ev) {
+    var d = ev.data || {};
+    if (d.type !== "streamlit:render") return;
+    var a = d.args || {};
+    for (var k in a) { if (a[k] !== undefined && a[k] !== null) args[k] = a[k]; }
+    var th = d.theme || {};
+    if (th.textColor) document.documentElement.style.setProperty("--text", th.textColor);
+    if (th.primaryColor) document.documentElement.style.setProperty("--primary", th.primaryColor);
+    if (args.label) $("pick").textContent = args.label;
+    $("pick").disabled = !!(d.disabled || args.disabled) || busy;
+    setHeight();
+  });
+
+  // ---- 순수 함수 (테스트용으로 노출)
+  function isImage(f) { return /^image\//.test(f.type || "") || /\.(jpe?g|png|webp|heic|heif|jfif)$/i.test(f.name || ""); }
+  function isVideo(f) { return /^video\//.test(f.type || "") || /\.(mp4|mov|m4v|3gp)$/i.test(f.name || ""); }
+  function fitSize(w, h, maxDim) { var m = Math.max(w, h); if (m <= maxDim) return [w, h]; var r = maxDim / m; return [Math.max(1, Math.round(w * r)), Math.max(1, Math.round(h * r))]; }
+  function jpgName(n) { n = n || "photo"; return n.replace(/\.[^.\/\\]+$/, "") + ".jpg"; }
+  function newBatchId() { return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10); }
+  function stripDataUrl(s) { var i = s.indexOf(","); return i >= 0 ? s.slice(i + 1) : s; }
+
+  function readB64(blob) {
+    return new Promise(function (res, rej) {
+      var r = new FileReader();
+      r.onload = function () { res(stripDataUrl(String(r.result))); };
+      r.onerror = function () { rej(r.error || new Error("읽지 못했어요")); };
+      r.readAsDataURL(blob);
+    });
+  }
+  function decodeBitmap(file) {
+    if (window.createImageBitmap) {
+      return window.createImageBitmap(file, { imageOrientation: "from-image" }).catch(function () { return window.createImageBitmap(file); });
+    }
+    return new Promise(function (res, rej) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () { URL.revokeObjectURL(url); res(img); };
+      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error("decode")); };
+      img.src = url;
+    });
+  }
+  // 사진: 긴 변 max_dim, JPEG으로 즉시 줄임. 브라우저가 못 여는 형식(HEIC 등)은 원본을 그대로 보내 서버가 변환
+  function prepareImage(file) {
+    return decodeBitmap(file).then(function (bmp) {
+      var w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight, s = fitSize(w, h, args.max_dim);
+      var c = document.createElement("canvas"); c.width = s[0]; c.height = s[1];
+      var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, s[0], s[1]); g.drawImage(bmp, 0, 0, s[0], s[1]);
+      if (bmp.close) bmp.close();
+      return new Promise(function (res, rej) {
+        c.toBlob(function (b) { b ? res(b) : rej(new Error("toBlob")); }, "image/jpeg", args.quality);
+      }).then(function (blob) {
+        return readB64(blob).then(function (b64) { return { name: jpgName(file.name), type: "image/jpeg", size: blob.size, data_b64: b64 }; });
+      });
+    }).catch(function () {
+      if (file.size > args.max_video_mb * 1024 * 1024) throw new Error("이 사진 형식은 앱에서 줄일 수 없고 용량도 커요");
+      return readB64(file).then(function (b64) { return { name: file.name || "photo", type: file.type || "application/octet-stream", size: file.size, data_b64: b64 }; });
+    });
+  }
+  function prepareVideo(file) {
+    return readB64(file).then(function (b64) { return { name: file.name || "video.mp4", type: file.type || "video/mp4", size: file.size, data_b64: b64 }; });
+  }
+
+  async function handle(list) {
+    var picked = Array.prototype.slice.call(list || []);
+    if (!picked.length) return;
+    busy = true; $("pick").disabled = true;
+    var files = [], skipped = [], total = 0, room = Math.max(0, args.max_files | 0);
+    var take = room ? picked.slice(0, room) : picked;
+    picked.slice(take.length).forEach(function (f) { skipped.push({ name: f.name || "파일", reason: "최대 개수를 넘었어요" }); });
+    for (var i = 0; i < take.length; i++) {
+      var f = take[i];
+      status("⏳ " + (i + 1) + "/" + take.length + "장 준비 중... " + (f.name || ""));
+      progress(i / take.length);
+      try {
+        if (isVideo(f)) {
+          if (f.size > args.max_video_mb * 1024 * 1024) { skipped.push({ name: f.name, reason: "영상이 " + args.max_video_mb + "MB보다 커요 (아래 PC용 업로더를 쓰세요)" }); continue; }
+          if (total + f.size > TOTAL_CAP) { skipped.push({ name: f.name, reason: "한 번에 올릴 수 있는 합계 용량을 넘었어요 (나눠서 올려 주세요)" }); continue; }
+          var v = await prepareVideo(f); total += f.size; files.push(v);
+        } else if (isImage(f)) {
+          var im = await prepareImage(f); total += im.size; files.push(im);
+        } else {
+          skipped.push({ name: f.name || "파일", reason: "사진이나 영상이 아니에요" });
+        }
+      } catch (e) {
+        skipped.push({ name: f.name || "파일", reason: String((e && e.message) || e).slice(0, 80) });
+      }
+    }
+    progress(1);
+    if (files.length || skipped.length) {
+      setValue({ batch_id: newBatchId(), files: files, skipped: skipped });
+      status((files.length ? "✅ " + files.length + "개 보냈어요. 잠시만요..." : "⚠️ 보낼 수 있는 파일이 없어요") + (skipped.length ? " (제외 " + skipped.length + "개)" : ""), files.length ? "ok" : "err");
+    }
+    setTimeout(function () { progress(null); }, 600);
+    busy = false; $("pick").disabled = !!args.disabled;
+    $("file").value = "";                       // 같은 파일을 다시 골라도 change가 일어나게
+  }
+
+  $("pick").addEventListener("click", function () { if (!busy) $("file").click(); });
+  $("file").addEventListener("change", function (e) { handle(e.target.files); });
+
+  window.__mobileUploader = { fitSize: fitSize, jpgName: jpgName, isImage: isImage, isVideo: isVideo, stripDataUrl: stripDataUrl, newBatchId: newBatchId };
+  send("streamlit:componentReady", { apiVersion: 1 });
+  setHeight();
+})();
+</script>
+</body>
+</html>

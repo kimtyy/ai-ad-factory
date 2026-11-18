@@ -56,3 +56,68 @@ def reject_reason(data: bytes, name: str = "") -> str:
     if bytes(data[4:12]).startswith(b"ftyp") and bytes(data[8:12]) in UNSUPPORTED_BRANDS:
         return "AVIF 사진은 지원하지 않아요 (JPG·PNG·HEIC로 올려 주세요)"
     return f"사진(JPG·PNG·WebP·HEIC)이나 영상(MP4·MOV)이 아니에요{f' ({ext})' if ext else ''}"
+
+
+# ---------------------------------------------------------------- 모바일 컴포넌트(core/ui/mobile_uploader)가 보낸 묶음 받기
+import base64
+import binascii
+
+MAX_BATCH_FILES = 40
+MAX_FILE_BYTES = 120 * 1024 * 1024
+
+
+class UploadedBlob:
+    """컴포넌트로 받은 파일을 st.file_uploader의 UploadedFile처럼 다루게 하는 얇은 껍데기 (name · getvalue · file_id)"""
+
+    def __init__(self, name: str, data: bytes, batch_id: str, index: int):
+        self.name = name
+        self._data = data
+        self.size = len(data)
+        self.file_id = f"{batch_id}:{index}"
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+def decode_batch(value) -> Tuple[Optional[str], List["UploadedBlob"], List[Tuple[str, str]]]:
+    """컴포넌트 반환값 → (batch_id, 받은 파일들, [(이름, 못 받은 이유)]). 값이 없거나 형식이 틀리면 (None, [], []) — 절대 예외를 내지 않는다.
+    data_b64가 깨졌거나 비었거나 너무 크면 그 파일만 이유와 함께 제외한다 (data: URL 머리말은 허용)"""
+    if not isinstance(value, dict):
+        return None, [], []
+    bid = value.get("batch_id")
+    if not isinstance(bid, str) or not bid.strip():
+        return None, [], []
+    blobs: List[UploadedBlob] = []
+    problems: List[Tuple[str, str]] = []
+    for s in (value.get("skipped") or []):
+        if isinstance(s, dict):
+            problems.append((str(s.get("name") or "파일")[:80], str(s.get("reason") or "제외됨")[:80]))
+    files = value.get("files")
+    if not isinstance(files, list):
+        return bid, [], problems
+    for i, f in enumerate(files[:MAX_BATCH_FILES]):
+        if not isinstance(f, dict):
+            problems.append(("파일", "전송 형식이 올바르지 않아요"))
+            continue
+        name = str(f.get("name") or "").strip()[:120] or f"upload_{i + 1}"
+        b64 = f.get("data_b64")
+        if not isinstance(b64, str) or not b64:
+            problems.append((name, "내용이 비어 있어요 (전송 중 끊겼을 수 있어요)"))
+            continue
+        if "," in b64[:100] and b64.lstrip().lower().startswith("data:"):
+            b64 = b64.split(",", 1)[1]
+        if len(b64) > MAX_FILE_BYTES * 4 // 3 + 16:
+            problems.append((name, "파일이 너무 커요"))
+            continue
+        try:
+            data = base64.b64decode("".join(b64.split()), validate=True)
+        except (binascii.Error, ValueError):
+            problems.append((name, "깨진 데이터예요 (다시 올려 주세요)"))
+            continue
+        if not data:
+            problems.append((name, "내용이 비어 있어요"))
+            continue
+        blobs.append(UploadedBlob(name, data, bid, i))
+    if len(files) > MAX_BATCH_FILES:
+        problems.append(("초과분", f"한 번에 {MAX_BATCH_FILES}개까지만 받아요"))
+    return bid, blobs, problems

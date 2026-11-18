@@ -428,48 +428,74 @@ def render_media_manager():
                 st.rerun()
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
-        # 지난 업로드 결과 (성공·거절 안내는 rerun 뒤에도 남겨서 폰에서 올라갔는지 바로 확인)
-        for _msg in st.session_state.get("upload_notice") or []:
+        # 📱 모바일 전용 경량 업로더(커스텀 컴포넌트): 안드로이드 크롬 + Streamlit Cloud iframe에서는 기본 업로더(PUT /_stcore/upload_file)가 파일을 못 보내는 일이 있어,
+        # 브라우저에서 사진을 줄여 컴포넌트 채널로 직접 보낸다. 같은 묶음(batch_id)은 rerun마다 다시 돌아오므로 한 번만 저장한다.
+        from core.media.upload import decode_batch
+        _room = max(0, max_media - len(paths))
+        try:
+            from core.ui.mobile_uploader import mobile_uploader
+            _mb = mobile_uploader(key=f"mobile_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", max_files=max(_room, 1),
+                                  disabled=_room <= 0)
+        except Exception as _e:                  # 컴포넌트를 못 올려도 아래 기본 업로더로 계속 쓸 수 있게
+            _mb = None
+            st.session_state["upload_last_error"] = f"모바일 업로더 로드 실패: {type(_e).__name__}"
+        _bid, _blobs, _probs = decode_batch(_mb)
+        if _bid and _bid != st.session_state.get("last_mobile_upload_batch_id"):
+            st.session_state["last_mobile_upload_batch_id"] = _bid
+            _ingest_uploads(_blobs, paths, max_media, _probs)
+            st.rerun()
+        elif _mb and not _bid:
+            st.session_state["upload_last_error"] = "모바일 업로더가 보낸 데이터 형식이 올바르지 않아요"
+        for _msg in st.session_state.get("upload_notice") or []:            # 지난 업로드 결과는 rerun 뒤에도 남겨서 폰에서 올라갔는지 바로 확인
             (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
-        # 확장자 필터(type=)를 걸지 않는다: 안드로이드 크롬·삼성 갤러리에서 accept 확장자 때문에 파일이 조용히 막히는 일이 있어, 올라온 뒤 서버에서 머리글로 검사한다.
-        # 키는 모드별로 고정 (올릴 때마다 바꾸지 않음): 일부만 올라온 상태에서 위젯을 새로 만들어 나머지 업로드가 날아가는 일을 막는다.
-        new_files = st.file_uploader(
-            (f"📸 모임 사진·영상 최대 {MEMORY_MAX}개까지 추가 (올린 개수 × {MEMORY_CUT_SEC:g}초로 최대 {int(MEMORY_MAX_SEC)}초 쇼츠 완성)" if is_memory
-             else "➕ 내 폰 사진·영상 추가 (JPG/PNG/HEIC/MP4/MOV)"),
-            accept_multiple_files=True, type=None,
-            key=f"file_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", disabled=len(paths) >= max_media,
-            help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
-        )
         st.caption(f"📊 현재 담긴 파일 {len(paths)}개 / 최대 {max_media}개"
-                   + (f" · 이번에 선택된 파일 {len(new_files)}개 처리 중" if new_files else "")
                    + (f" · 최근 오류: {st.session_state['upload_last_error']}" if st.session_state.get("upload_last_error") else ""))
+        # 💻 PC용 끌어다 놓기 / 40MB 이상 대용량 영상 (보조). 확장자 필터(type=)는 걸지 않고 올라온 뒤 서버가 머리글로 검사한다.
+        # 키는 모드별로 고정 (올릴 때마다 바꾸지 않음): 일부만 올라온 상태에서 위젯을 새로 만들어 나머지 업로드가 날아가는 일을 막는다.
+        with st.expander("💻 PC용 끌어다 놓기 / 40MB 이상 대용량 영상", expanded=False):
+            new_files = st.file_uploader(
+                (f"📸 모임 사진·영상 최대 {MEMORY_MAX}개까지 추가 (올린 개수 × {MEMORY_CUT_SEC:g}초로 최대 {int(MEMORY_MAX_SEC)}초 쇼츠 완성)" if is_memory
+                 else "➕ 사진·영상 끌어다 놓기 (JPG/PNG/HEIC/MP4/MOV)"),
+                accept_multiple_files=True, type=None,
+                key=f"file_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", disabled=len(paths) >= max_media,
+                help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
+            )
         done_ids = st.session_state.setdefault("upload_done_ids", set())
         fresh = [f for f in (new_files or []) if getattr(f, "file_id", id(f)) not in done_ids]
         if fresh:
-            from core.media.upload import human_size, reject_reason, sniff
-            notice, saved, bad = [], [], []
             for f in fresh:
                 done_ids.add(getattr(f, "file_id", id(f)))
-                data = f.getvalue()                                   # 받는 즉시 바이트를 읽는다 (갤러리를 갔다 와도 파일이 남게)
-                name = getattr(f, "name", "") or "이름 없는 파일"
-                if not sniff(data, name):
-                    bad.append(name)
-                    st.session_state["upload_last_error"] = f"{name}: 지원하지 않는 파일"
-                    notice.append(("warn", f"⚠️ 올리지 못했어요: {name} — {reject_reason(data, name)}"))
-                    continue
-                try:
-                    saved.append(save_uploaded_file(f))
-                    notice.append(("ok", f"✅ 업로드 완료: {name} ({human_size(len(data))})"))
-                except Exception as e:
-                    st.session_state["upload_last_error"] = f"{name}: {type(e).__name__} {str(e)[:60]}"
-                    notice.append(("warn", f"⚠️ 저장하지 못했어요: {name} ({type(e).__name__}) — 다시 올려 주세요"))
-            added = add_media(paths, saved, limit=max_media)
-            if len(paths) + len(saved) > max_media:
-                notice.append(("warn", f"⚠️ 최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)"))
-            st.session_state["upload_notice"] = notice[-12:]
-            if added != paths:
-                _media_changed(added)
+            _ingest_uploads(fresh, paths, max_media, [])
             st.rerun()               # 위 목록(썸네일 미리보기)에 방금 올린 사진이 바로 보이도록
+
+
+def _ingest_uploads(files, paths: list, max_media: int, problems) -> None:
+    """올라온 파일들(st.file_uploader의 UploadedFile 또는 컴포넌트의 UploadedBlob)을 검사·저장해 목록에 붙이고, 결과 안내를 session_state에 남긴다.
+    받는 즉시 바이트를 읽어 작업 폴더에 저장하므로 갤러리를 갔다 와도 파일이 남는다. 지원하지 않거나 깨진 파일은 이유와 함께 경고한다 (조용히 버리지 않음)"""
+    from core.media.upload import human_size, reject_reason, sniff
+    notice, saved = [], []
+    for name, why in problems:
+        st.session_state["upload_last_error"] = f"{name}: {why}"
+        notice.append(("warn", f"⚠️ 올리지 못했어요: {name} — {why}"))
+    for f in files:
+        data = f.getvalue()
+        name = getattr(f, "name", "") or "이름 없는 파일"
+        if not sniff(data, name):
+            st.session_state["upload_last_error"] = f"{name}: 지원하지 않는 파일"
+            notice.append(("warn", f"⚠️ 올리지 못했어요: {name} — {reject_reason(data, name)}"))
+            continue
+        try:
+            saved.append(save_uploaded_file(f))
+            notice.append(("ok", f"✅ 업로드 완료: {name} ({human_size(len(data))})"))
+        except Exception as e:
+            st.session_state["upload_last_error"] = f"{name}: {type(e).__name__} {str(e)[:60]}"
+            notice.append(("warn", f"⚠️ 저장하지 못했어요: {name} ({type(e).__name__}) — 다시 올려 주세요"))
+    added = add_media(paths, saved, limit=max_media)
+    if len(paths) + len(saved) > max_media:
+        notice.append(("warn", f"⚠️ 최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)"))
+    st.session_state["upload_notice"] = notice[-12:]
+    if added != paths:
+        _media_changed(added)
 
 
 def rematch_scenes(target_scenes: list, api_key: str):

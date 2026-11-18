@@ -101,4 +101,110 @@ if REAL_HEIC:
     ok_heic = len(hp) == 1 and hp[0].lower().endswith(".jpg") and Image.open(hp[0]).size == (160, 120)
     check(ok_heic and not at.exception, f"HEIC 업로드 → JPG로 변환 저장 {hp[-1:] and os.path.basename(hp[-1])}")
 
+# ---------------------------------------------------------------- 4. 모바일 전용 컴포넌트(core/ui/mobile_uploader) 수신: 디코딩·중복 방지·깨진 데이터 방어
+import base64
+import subprocess
+import shutil
+
+from core.media.upload import decode_batch
+
+
+def b64(b):
+    return base64.b64encode(b).decode()
+
+
+batch = {"batch_id": "b-1", "files": [{"name": "a.jpg", "type": "image/jpeg", "size": len(JPG), "data_b64": b64(JPG)},
+                                     {"name": "clip.mp4", "type": "video/mp4", "size": len(MP4_HEAD), "data_b64": b64(MP4_HEAD)},
+                                     {"name": "p.heic", "type": "image/heic", "data_b64": "data:image/heic;base64," + b64(HEIC_HEAD)}],
+         "skipped": [{"name": "big.mp4", "reason": "영상이 40MB보다 커요"}]}
+bid, blobs, probs = decode_batch(batch)
+check(bid == "b-1" and [b_.name for b_ in blobs] == ["a.jpg", "clip.mp4", "p.heic"] and blobs[0].getvalue() == JPG and blobs[2].getvalue() == HEIC_HEAD,
+      "batch_id·파일 3개 디코딩 (data: 머리말이 붙어도 OK)")
+check(probs == [("big.mp4", "영상이 40MB보다 커요")], "브라우저가 제외한 파일은 이유와 함께 전달")
+check(blobs[0].file_id != blobs[1].file_id and blobs[0].name == "a.jpg" and blobs[0].size == len(JPG), "UploadedBlob: 파일마다 고유 file_id·이름·크기")
+check(decode_batch(None) == (None, [], []) and decode_batch("x") == (None, [], []) and decode_batch({"files": []}) == (None, [], []) and decode_batch({"batch_id": ""}) == (None, [], []),
+      "값이 없거나 형식이 틀리면 (None, [], []) — 예외 없음")
+_, bl2, pr2 = decode_batch({"batch_id": "b-2", "files": [{"name": "깨짐.jpg", "data_b64": "@@@###"}, {"name": "빈.jpg", "data_b64": ""}, {"name": "없음.jpg"}, "문자열", {"name": "ok.png", "data_b64": b64(PNG)}]})
+check([x.name for x in bl2] == ["ok.png"] and {n for n, _ in pr2} == {"깨짐.jpg", "빈.jpg", "없음.jpg", "파일"}, f"깨진·빈·누락 데이터는 그 파일만 제외하고 나머지는 받음 {pr2}")
+_, bl3, pr3 = decode_batch({"batch_id": "b-3", "files": [{"name": "n.jpg", "data_b64": b64(JPG)}] * 45})
+check(len(bl3) == 40 and any("40개" in r for _, r in pr3), "한 번에 40개 초과분은 이유와 함께 제외")
+
+# 화면 경로: 컴포넌트가 값을 돌려주는 것처럼 대체해서 저장·완료 안내·중복 방지·rerun 안전 확인
+import core.ui.mobile_uploader as mu_mod
+_orig = mu_mod.mobile_uploader
+state = {"value": None, "calls": []}
+
+
+def fake_component(**kw):
+    state["calls"].append(kw)
+    return state["value"]
+
+
+mu_mod.mobile_uploader = fake_component
+try:
+    at = AppTest.from_file(os.path.join(ROOT, "app_store.py"), default_timeout=120).run()
+    check(not at.exception and state["calls"] and state["calls"][-1]["key"].startswith("mobile_uploader_") and state["calls"][-1]["max_files"] >= 1,
+          f"첫 화면에 모바일 업로더가 그려짐 (key {state['calls'][-1]['key'] if state['calls'] else None})")
+    at.session_state["uploaded_paths"] = []
+    state["value"] = {"batch_id": "phone-1", "files": [{"name": "IMG_1.jpg", "type": "image/jpeg", "data_b64": b64(JPG)},
+                                                      {"name": "IMG_2.jpg", "type": "image/jpeg", "data_b64": b64(img_bytes("JPEG", (200, 100), (10, 90, 160)))},
+                                                      {"name": "망가짐.jpg", "type": "image/jpeg", "data_b64": "###"}],
+                      "skipped": [{"name": "큰영상.mp4", "reason": "영상이 40MB보다 커요 (아래 PC용 업로더를 쓰세요)"}]}
+    at.run()
+    msgs = [x.value for x in at.success] + [x.value for x in at.warning]
+    check(not at.exception and len(at.session_state["uploaded_paths"]) == 2 and all(os.path.exists(p) for p in at.session_state["uploaded_paths"]),
+          f"컴포넌트로 받은 사진 2개 저장 (깨진 1개·브라우저 제외 1개 빼고) {len(at.session_state['uploaded_paths'])}개 {[e.value[:80] for e in at.exception]}")
+    check(any("업로드 완료: IMG_1.jpg" in m for m in msgs) and any("올리지 못했어요: 망가짐.jpg" in m for m in msgs) and any("큰영상.mp4" in m for m in msgs),
+          "완료·거절 안내 표시 (깨진 데이터·큰 영상도 조용히 버리지 않음)")
+    check(at.session_state["last_mobile_upload_batch_id"] == "phone-1", "처리한 batch_id 기록")
+    before = list(at.session_state["uploaded_paths"])
+    at.run(); at.run()
+    check(at.session_state["uploaded_paths"] == before, "같은 batch_id가 rerun마다 돌아와도 중복 저장하지 않음")
+    # 사용자가 하나 지운 뒤 같은 묶음이 또 돌아와도 다시 살아나지 않음
+    at.session_state["uploaded_paths"] = before[:1]
+    at.run()
+    check(at.session_state["uploaded_paths"] == before[:1], "지운 사진이 같은 묶음 재수신으로 되살아나지 않음")
+    state["value"] = {"batch_id": "phone-2", "files": [{"name": "IMG_3.png", "type": "image/png", "data_b64": b64(PNG)}], "skipped": []}
+    at.run()
+    check(len(at.session_state["uploaded_paths"]) == 2 and at.session_state["last_mobile_upload_batch_id"] == "phone-2", "새 batch_id는 목록 뒤에 추가")
+    state["value"] = {"batch_id": "", "files": "엉망"}
+    at.run()
+    check(not at.exception and any("형식이 올바르지 않아요" in c.value for c in at.caption), "엉뚱한 반환값에도 앱이 죽지 않고 상태줄에 원인 표시")
+    pcs = [u for u in at.get("file_uploader") if "사진·영상" in u.proto.label]
+    check(len(pcs) == 1 and list(pcs[0].proto.type) == [] and any("PC용 끌어다 놓기" in e.label for e in at.expander), "PC용 끌어다 놓기는 보조 영역(접힌 칸)으로 유지, 확장자 필터 없음")
+    # 컴포넌트 자체가 로드되지 않아도 기본 업로더로 계속 사용 가능
+    def broken(**kw):
+        raise RuntimeError("component missing")
+    mu_mod.mobile_uploader = broken
+    at2 = AppTest.from_file(os.path.join(ROOT, "app_store.py"), default_timeout=120).run()
+    check(not at2.exception and any("모바일 업로더 로드 실패" in c.value for c in at2.caption) and at2.get("file_uploader"), "컴포넌트 로드 실패 시에도 기본 업로더로 계속 사용 + 원인 표시")
+finally:
+    mu_mod.mobile_uploader = _orig
+
+# 실제 컴포넌트 등록(declare_component) 가능 + index.html은 외부 CDN 없이 프로토콜만 사용
+html_path = os.path.join(ROOT, "core", "ui", "mobile_uploader", "index.html")
+html = open(html_path, encoding="utf-8").read()
+check(os.path.exists(html_path) and "http://" not in html and "https://" not in html and "<script src" not in html, "index.html 외부 CDN·원격 스크립트 의존성 0개")
+check("streamlit:setComponentValue" in html and "streamlit:componentReady" in html and 'accept="image/*,video/*' in html and "multiple" in html, "Streamlit 컴포넌트 프로토콜·image/video accept·multiple")
+def _find(node, name):
+    n = 0
+    for c in getattr(node, "children", {}).values():
+        n += (type(c).__name__ == name) + _find(c, name)
+    return n
+
+
+at_real = AppTest.from_file(os.path.join(ROOT, "app_store.py"), default_timeout=120).run()      # 진짜 컴포넌트(가짜로 바꾸지 않음)
+check(not at_real.exception and _find(at_real.main, "UnknownElement") >= 1, "실제 앱에서 declare_component(로컬 폴더)가 등록·렌더됨 (커스텀 컴포넌트 요소 있음)")
+
+# JS 로직 (노드가 있으면): 프로토콜 메시지·1440px 리사이즈·JPEG 0.88·HEIC 원본 전송·개수/용량 제한
+node = shutil.which("node")
+if node:
+    r = subprocess.run([node, os.path.join(ROOT, "tests", "mobile_uploader_js_test.js")], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    for line in r.stdout.splitlines():
+        if line.startswith(("PASS ", "FAIL ")):
+            check(line.startswith("PASS "), "JS: " + line[5:])
+    check(r.returncode == 0, f"JS 테스트 종료 코드 {r.returncode} {r.stderr[:120]}")
+else:
+    print("SKIP JS 테스트 (node 없음)")
+
 finish(fails)
