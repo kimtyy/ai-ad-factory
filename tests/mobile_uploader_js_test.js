@@ -19,6 +19,7 @@ function makeEnv(opts) {
       id, style: { setProperty() {}, display: "" }, textContent: "", className: "", value: "", disabled: false, _l: {},
       firstChild: { style: {} },
       addEventListener(t, f) { this._l[t] = f; }, click() { this._clicked = (this._clicked || 0) + 1; },
+      get offsetHeight() { return id === "wrap" ? (this._h || 110) : 0; },
     });
   }
   const win = {
@@ -34,7 +35,7 @@ function makeEnv(opts) {
   }
   const doc = {
     getElementById: el,
-    documentElement: { style: { setProperty() {} }, scrollHeight: 120 },
+    documentElement: { style: { setProperty() {} }, scrollHeight: 700 },        // iframe이 커진 상태를 흉내: 내용과 무관하게 큼
     createElement(tag) {
       if (tag !== "canvas") return {};
       const c = { width: 0, height: 0, getContext() { return { fillRect() {}, drawImage() {}, set fillStyle(v) {} }; },
@@ -62,6 +63,17 @@ const values = (env) => env.sent.filter((m) => m.type === "streamlit:setComponen
   render(env, { max_files: 5 }, { disabled: true });
   check(env.el("pick").disabled === true, "disabled 렌더 시 버튼 비활성");
   render(env, { max_files: 5 });
+
+  // 1-b. 높이: 내용(#wrap) 높이 + 8px. documentElement.scrollHeight(700)는 쓰지 않아 빈 검은 박스가 남지 않음
+  const heights = (e) => e.sent.filter((m) => m.type === "streamlit:setFrameHeight").map((m) => m.height);
+  check(heights(env).length >= 1 && heights(env).every((x) => x === 118), `초기 프레임 높이 = 내용 110 + 8 = 118 (scrollHeight 700 무시) ${heights(env)}`);
+  env.el("wrap")._h = 150; env.el("file")._l.change({ target: { files: [] } });
+  render(env, { max_files: 5 });
+  check(heights(env).slice(-1)[0] === 158, `상태 줄이 늘면 높이도 따라감 ${heights(env).slice(-1)[0]}`);
+  env.el("wrap")._h = 110; render(env, { max_files: 5 });
+  check(heights(env).slice(-1)[0] === 118, `내용이 줄면 높이도 다시 줄어듦(한 번 커진 박스가 남지 않음) ${heights(env).slice(-1)[0]}`);
+  const n0 = heights(env).length; render(env, { max_files: 5 }); render(env, { max_files: 5 });
+  check(heights(env).length === n0, "높이가 그대로면 메시지를 반복해서 보내지 않음");
 
   // 2. 버튼 → 파일 선택창
   env.el("pick")._l.click();

@@ -32,7 +32,17 @@
 
   // ---- Streamlit 컴포넌트 프로토콜 (외부 라이브러리 없이 postMessage)
   function send(type, data) { window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*"); }
-  function setHeight() { send("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight + 4 }); }
+  // 높이는 '내용 영역(#wrap)'의 실제 높이로 잰다. documentElement.scrollHeight는 iframe이 한 번 커지면 내용이 작아져도 iframe 높이 아래로 줄지 않아
+  // 버튼·상태 줄 아래에 빈 검은 박스가 남는다.
+  var lastH = 0;
+  function setHeight() {
+    var w = document.getElementById("wrap");
+    var hgt = Math.ceil((w && w.offsetHeight) || 0) + 8;
+    if (hgt < 20) return;
+    if (hgt === lastH) return;
+    lastH = hgt;
+    send("streamlit:setFrameHeight", { height: hgt });
+  }
   function setValue(v) { send("streamlit:setComponentValue", { value: v, dataType: "json" }); }
 
   function status(msg, cls) { var s = $("status"); s.textContent = msg || ""; s.className = cls || ""; setHeight(); }
@@ -140,6 +150,8 @@
   window.__mobileUploader = { fitSize: fitSize, jpgName: jpgName, isImage: isImage, isVideo: isVideo, stripDataUrl: stripDataUrl, newBatchId: newBatchId };
   send("streamlit:componentReady", { apiVersion: 1 });
   setHeight();
+  if (typeof ResizeObserver !== "undefined") { new ResizeObserver(setHeight).observe($("wrap")); }      // 글자가 줄바꿈되는 폭 변화·상태 문구 변경에도 높이를 다시 맞춤
+  window.addEventListener("load", setHeight);
 })();
 </script>
 </body>
