@@ -308,7 +308,9 @@ def save_uploaded_file(up_file) -> str:
         data = b""
 
     fname = getattr(up_file, "name", "") or ""
-    ext = (os.path.splitext(fname)[-1] or "").lower() or ".jpg"
+    from core.media.upload import sniff
+    _kind = sniff(data, fname)                            # 확장자 없음·대문자·content:// 이름이어도 머리글로 사진/영상 판별
+    ext = _kind[1] if _kind else ((os.path.splitext(fname)[-1] or "").lower() or ".jpg")
     if ext in (".heic", ".heif", ".webp"):
         try:
             import pillow_heif
@@ -328,9 +330,9 @@ def save_uploaded_file(up_file) -> str:
                     resized.save(path, optimize=False)
                 else:
                     resized.save(path, quality=92)
-            except Exception:
-                with open(path, "wb") as f:
-                    f.write(data)
+            except Exception as e:
+                # 읽을 수 없는 사진(올라가다 끊김·깨진 파일)을 원본 그대로 저장하면 나중에 목록·렌더 단계에서 앱이 멈춘다 → 저장하지 않고 호출자가 경고한다
+                raise ValueError(f"사진을 열 수 없어요 ({type(e).__name__})") from e
         else:
             with open(path, "wb") as f:
                 f.write(data)
@@ -426,23 +428,43 @@ def render_media_manager():
                 st.rerun()
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
+        # 지난 업로드 결과 (성공·거절 안내는 rerun 뒤에도 남겨서 폰에서 올라갔는지 바로 확인)
+        for _msg in st.session_state.get("upload_notice") or []:
+            (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
+        # 확장자 필터(type=)를 걸지 않는다: 안드로이드 크롬·삼성 갤러리에서 accept 확장자 때문에 파일이 조용히 막히는 일이 있어, 올라온 뒤 서버에서 머리글로 검사한다.
+        # 키는 모드별로 고정 (올릴 때마다 바꾸지 않음): 일부만 올라온 상태에서 위젯을 새로 만들어 나머지 업로드가 날아가는 일을 막는다.
         new_files = st.file_uploader(
             (f"📸 모임 사진·영상 최대 {MEMORY_MAX}개까지 추가 (올린 개수 × {MEMORY_CUT_SEC:g}초로 최대 {int(MEMORY_MAX_SEC)}초 쇼츠 완성)" if is_memory
              else "➕ 내 폰 사진·영상 추가 (JPG/PNG/HEIC/MP4/MOV)"),
-            accept_multiple_files=True, type=UPLOAD_TYPES,
+            accept_multiple_files=True, type=None,
             key=f"file_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", disabled=len(paths) >= max_media,
             help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
         )
-        if new_files:
-            saved = [save_uploaded_file(f) for f in new_files]
+        done_ids = st.session_state.setdefault("upload_done_ids", set())
+        fresh = [f for f in (new_files or []) if getattr(f, "file_id", id(f)) not in done_ids]
+        if fresh:
+            from core.media.upload import human_size, reject_reason, sniff
+            notice, saved, bad = [], [], []
+            for f in fresh:
+                done_ids.add(getattr(f, "file_id", id(f)))
+                data = f.getvalue()                                   # 받는 즉시 바이트를 읽는다 (갤러리를 갔다 와도 파일이 남게)
+                name = getattr(f, "name", "") or "이름 없는 파일"
+                if not sniff(data, name):
+                    bad.append(name)
+                    notice.append(("warn", f"⚠️ 올리지 못했어요: {name} — {reject_reason(data, name)}"))
+                    continue
+                try:
+                    saved.append(save_uploaded_file(f))
+                    notice.append(("ok", f"✅ 업로드 완료: {name} ({human_size(len(data))})"))
+                except Exception as e:
+                    notice.append(("warn", f"⚠️ 저장하지 못했어요: {name} ({type(e).__name__}) — 다시 올려 주세요"))
             added = add_media(paths, saved, limit=max_media)
             if len(paths) + len(saved) > max_media:
-                st.toast(f"최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)", icon="⚠️")
-            st.session_state.media_uploader_nonce = nonce + 1      # 업로더 비우기 (다음 실행에서 같은 파일을 다시 넣지 않게)
+                notice.append(("warn", f"⚠️ 최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)"))
+            st.session_state["upload_notice"] = notice[-12:]
             if added != paths:
                 _media_changed(added)
-                st.toast(f"📱 사진·영상 {len(added) - len(paths)}개 추가!", icon="✨")
-            st.rerun()
+            st.rerun()               # 위 목록(썸네일 미리보기)에 방금 올린 사진이 바로 보이도록
 
 
 def rematch_scenes(target_scenes: list, api_key: str):
@@ -2817,7 +2839,11 @@ with edit_box:
                                 st.rerun()
 
                             # ② 내 사진·영상 업로드
-                            up = st.file_uploader("📷 내 사진·영상으로 교체", type=UPLOAD_TYPES, key=f"scene_upload_{s_num}")
+                            up = st.file_uploader("📷 내 사진·영상으로 교체", type=None, key=f"scene_upload_{s_num}")
+                            from core.media.upload import reject_reason as _rej, sniff as _sniff
+                            if up is not None and not _sniff(up.getvalue(), up.name):
+                                st.warning(f"⚠️ 올리지 못했어요: {up.name} — {_rej(up.getvalue(), up.name)}")
+                                up = None
                             if up is not None:
                                 up_path = save_uploaded_file(up)
                                 applied_key = f"applied_upload_{s_num}"

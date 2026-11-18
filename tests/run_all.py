@@ -42,6 +42,7 @@ SUITES = [
     ("suite_photo_script_sync.py", "컨셉·대본 사진 1:1: 업종 현실 맥락(맥주집 금지어·방문 맥락)·확정 사진 전체 컨셉 제안·사진 N장=문장 N개·문장마다 그 사진 피사체·불일치 교체", False),
     ("suite_ux_flow.py", "2단계 심플 UX: 모드별 스타일 프리셋·모드 전환 데이터 분리·접이식 편집·요약 카드·칩, 네이버 쇼핑 카드 원클릭(사진 5장·마지막 공식 썸네일·5문장 자동 기획), 숙소 원클릭", False),
     ("suite_audio_fonts.py", "나레이션 없음(BGM+자막): TTS 생략·문장 3.6초 균등, 의미 단위 1줄 자막, 자막 폰트 3종(고딕·명조·팝체)·스타일·위치 유지, 화면 선택", False),
+    ("suite_mobile_upload.py", "모바일 업로드: 확장자 필터 없음·머리글(JPEG/PNG/WebP/HEIC/MP4/MOV) 판별·대문자/확장자 없음·PDF 거절 경고·완료 안내·업로더 키 고정", False),
     ("suite_font_space.py", "자막 공백 글리프: 3종 폰트 공백 자리 네모(☒) 0개·글리프 없는 폰트 보강/불합격·비표준 공백 정규화", False),
     ("suite_core_shared.py", "공통 코어 공유: 자막 위치(55%/상단 24%)·2줄 분할·사진 안전 필터가 모드 공통, 점주 시연 모드(탭 숨김)", False),
     ("suite_photo_safety.py", "사진 저작권·초상권 4중 방어: 블로그 도메인 차단·공식 우선, 비전(사람·워터마크·글씨) 제외, 크롭·색감·비네팅 변환, 출처·대가성 문구", False),
@@ -90,7 +91,7 @@ SUITES = [
 
 
 # 모드별 쾌속 테스트: 수정한 모드의 스위트 + 전 모드가 공유하는 코어 스위트만 (2~3분). 전체 회귀는 큰 구조 변경·배포 전 점검용
-CORE_QUICK = ["suite_font_space.py", "suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py", "suite_caption_engine.py"]
+CORE_QUICK = ["suite_mobile_upload.py", "suite_font_space.py", "suite_core_shared.py", "suite_script_guard.py", "suite_photo_safety.py", "suite_memory_limits.py", "suite_caption_engine.py"]
 MODE_SUITES = {
     "owner": ["suite_store_video.py", "suite_store_app.py", "suite_social_packages.py", "suite_place_menu.py", "suite_photo_script_sync.py", "suite_ux_flow.py", "suite_app_owner_hybrid.py", "suite_owner_planner.py", "suite_store_facts.py", "suite_store_research.py", "suite_store_photos.py", "suite_media_groups.py"],
     "stay": ["suite_ux_flow.py", "suite_stay_pipeline.py", "suite_audio_fonts.py", "suite_travel_golden7.py", "suite_scraper_input.py"],
