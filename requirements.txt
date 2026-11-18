@@ -21,3 +21,4 @@ opencv-python-headless>=4.8.0   # 시각 점수·컷 감지 (cv2). 클라우드�
 pandas>=2.0.0
 google-api-python-client>=2.100.0   # 유튜브 업로드
 google-auth-oauthlib>=1.2.0
+fonttools>=4.40.0   # 폰트 공백 글리프 보강 (Gmarket Sans에는 공백이 없어 네모로 찍힘)

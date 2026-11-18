@@ -10,6 +10,7 @@ core/render/fonts.py - 쇼츠·릴스 자막 폰트 3종 프리셋 (전 모드 �
 """
 import logging
 import os
+import re
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
@@ -46,14 +47,95 @@ POP_URLS = (("GmarketSansBold.woff", "https://cdn.jsdelivr.net/gh/projectnoonnu/
 MIN_BYTES = 100_000
 
 
+_ODD_SPACES = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\t\r\n\v\f]+")
+_ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+PROBE_CHARS = "한가0!?.,"                  # 글리프가 실제로 그려져야 하는 글자 (한글·숫자·문장부호)
+SPACE_ADVANCE = 0.26                       # 보강하는 공백 글리프의 폭 (글자 크기 대비)
+
+
+def clean_text(text: str) -> str:
+    """자막·썸네일 문구의 공백 정규화: 폭 없는 문자(U+200B 등)는 지우고, NBSP·전각 공백·탭·줄바꿈은 일반 공백 한 칸으로 (폰트가 못 그리는 공백이 네모로 찍히는 것 방지)"""
+    return " ".join(_ODD_SPACES.sub(" ", _ZERO_WIDTH.sub("", str(text or ""))).split())
+
+
+def _ink(font, ch: str) -> int:
+    from PIL import Image, ImageDraw
+    im = Image.new("L", (240, 240), 0)
+    ImageDraw.Draw(im).text((20, 20), ch, font=font, fill=255)
+    return int(sum(1 for v in im.getdata() if v))
+
+
+def space_is_blank(spec: Optional[Spec]) -> bool:
+    """공백(U+0020)이 '빈 여백'으로 그려지는지: 글리프가 없으면 .notdef 네모(☒)가 찍혀 잉크가 생긴다. 폭도 0보다 커야 한다"""
+    try:
+        f = ImageFont.truetype(spec[0], 96, index=spec[1])
+        return _ink(f, " ") == 0 and f.getlength(" ") > 0
+    except Exception:
+        return False
+
+
+def glyphs_ok(spec: Optional[Spec]) -> bool:
+    """한글·숫자·문장부호가 그려지고, 공백이 빈 여백인 폰트인지 (두부·빈 글리프 방지)"""
+    try:
+        f = ImageFont.truetype(spec[0], 96, index=spec[1])
+        return all(_ink(f, ch) > 0 for ch in PROBE_CHARS) and space_is_blank(spec)
+    except Exception:
+        return False
+
+
+def add_space_glyph(src: str, dst: str) -> bool:
+    """공백(U+0020)·NBSP(U+00A0) 글리프가 없는 폰트(둥근 팝체 Gmarket Sans 등)에 빈 공백 글리프를 넣어 dst(.otf/.ttf)로 저장. 실패하면 False"""
+    try:
+        from fontTools.ttLib import TTFont
+        t = TTFont(src)
+        if "CFF " in t:
+            from fontTools.misc.psCharStrings import T2CharString
+            cff = t["CFF "].cff
+            top = cff.topDictIndex[0]
+            pd = top.Private
+            w = int(t["head"].unitsPerEm * SPACE_ADVANCE)
+            cs = T2CharString(program=[w - pd.nominalWidthX, "endchar"], private=pd, globalSubrs=cff.GlobalSubrs)
+            top.CharStrings.charStringsIndex.append(cs)
+            top.CharStrings.charStrings["space"] = len(top.CharStrings.charStringsIndex) - 1
+            t.setGlyphOrder(t.getGlyphOrder() + ["space"])
+            if isinstance(top.charset, list):
+                top.charset = list(top.charset) + ["space"]
+        else:
+            from fontTools.pens.ttGlyphPen import TTGlyphPen
+            w = int(t["head"].unitsPerEm * SPACE_ADVANCE)
+            t["glyf"]["space"] = TTGlyphPen(None).glyph()
+            t.setGlyphOrder(t.getGlyphOrder() + ["space"])
+        t["hmtx"].metrics["space"] = (w, 0)
+        for st in t["cmap"].tables:
+            if st.isUnicode():
+                st.cmap[0x20] = "space"
+                st.cmap[0xA0] = "space"
+        t.flavor = None
+        t.save(dst)
+        return True
+    except Exception as e:
+        logger.warning(f"공백 글리프 보강 실패 ({os.path.basename(src)}): {type(e).__name__}: {e}")
+        return False
+
+
+def with_space(path: str) -> Optional[str]:
+    """공백 글리프가 없는 폰트는 보강본(<이름>_sp.otf)을 만들어 그 경로를, 이미 정상이면 원래 경로를, 보강도 안 되면 None(불합격)"""
+    if space_is_blank((path, 0)):
+        return path
+    fixed = os.path.splitext(path)[0] + "_sp.otf"
+    if (os.path.exists(fixed) and os.path.getmtime(fixed) >= os.path.getmtime(path) and space_is_blank((fixed, 0)))             or (add_space_glyph(path, fixed) and space_is_blank((fixed, 0))):
+        return fixed
+    return None
+
+
 def _loads(spec: Optional[Spec]) -> bool:
-    """실제로 열리고 한글 '한'이 그려지는 폰트인지 (두부·빈 글리프 방지)"""
+    """실제로 열리고 한글 '한'이 그려지는 폰트인지 (두부·빈 글리프 방지). 공백이 네모로 찍히는 폰트는 불합격"""
     if not spec or not os.path.exists(spec[0]):
         return False
     try:
         f = ImageFont.truetype(spec[0], 48, index=spec[1])
         b = f.getbbox("한")
-        return bool(b and (b[2] - b[0]) > 10)
+        return bool(b and (b[2] - b[0]) > 10) and glyphs_ok(spec)
     except Exception:
         return False
 
@@ -80,14 +162,17 @@ def _download(url: str, target: str, timeout: int = 40) -> bool:
 
 def pop_font(font_dir: str) -> Optional[Spec]:
     """둥근 예능 팝체: fonts/에 있으면 그대로, 없으면 받아 옴. 안 되면 None (호출자가 고딕 볼드로 대체)"""
+    def usable(p: str) -> Optional[Spec]:
+        fixed = with_space(p)               # 공백 글리프가 없으면 보강, 보강도 안 되면 불합격(→ 고딕 볼드로 대체)
+        return (fixed, 0) if fixed and _loads((fixed, 0)) else None
     for name in POP_FILES:
         p = os.path.abspath(os.path.join(font_dir, name))
-        if os.path.exists(p) and os.path.getsize(p) > MIN_BYTES and _loads((p, 0)):
-            return (p, 0)
+        if os.path.exists(p) and os.path.getsize(p) > MIN_BYTES and usable(p):
+            return usable(p)
     for name, url in POP_URLS:
         p = os.path.abspath(os.path.join(font_dir, name))
-        if _download(url, p) and _loads((p, 0)):
-            return (p, 0)
+        if _download(url, p) and usable(p):
+            return usable(p)
     return None
 
 

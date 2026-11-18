@@ -176,7 +176,8 @@ class AdCompositor:
         """
         if not text:
             return []
-        clean = re.sub(r'\s+', ' ', text).strip()
+        from core.render.fonts import clean_text
+        clean = clean_text(text)
         if not clean:
             return []
 
