@@ -440,6 +440,9 @@ def render_media_manager():
             key=f"file_uploader_{curr_mode}_{'mem' if is_memory else 'shop'}_{nonce}", disabled=len(paths) >= max_media,
             help="영상은 자동으로 9:16 세로 규격화·무음 처리되어 그대로 영상 장면으로 들어갑니다. 올린 파일은 목록 맨 뒤에 붙어요."
         )
+        st.caption(f"📊 현재 담긴 파일 {len(paths)}개 / 최대 {max_media}개"
+                   + (f" · 이번에 선택된 파일 {len(new_files)}개 처리 중" if new_files else "")
+                   + (f" · 최근 오류: {st.session_state['upload_last_error']}" if st.session_state.get("upload_last_error") else ""))
         done_ids = st.session_state.setdefault("upload_done_ids", set())
         fresh = [f for f in (new_files or []) if getattr(f, "file_id", id(f)) not in done_ids]
         if fresh:
@@ -451,12 +454,14 @@ def render_media_manager():
                 name = getattr(f, "name", "") or "이름 없는 파일"
                 if not sniff(data, name):
                     bad.append(name)
+                    st.session_state["upload_last_error"] = f"{name}: 지원하지 않는 파일"
                     notice.append(("warn", f"⚠️ 올리지 못했어요: {name} — {reject_reason(data, name)}"))
                     continue
                 try:
                     saved.append(save_uploaded_file(f))
                     notice.append(("ok", f"✅ 업로드 완료: {name} ({human_size(len(data))})"))
                 except Exception as e:
+                    st.session_state["upload_last_error"] = f"{name}: {type(e).__name__} {str(e)[:60]}"
                     notice.append(("warn", f"⚠️ 저장하지 못했어요: {name} ({type(e).__name__}) — 다시 올려 주세요"))
             added = add_media(paths, saved, limit=max_media)
             if len(paths) + len(saved) > max_media:

@@ -9,6 +9,9 @@ textColor = "#F8FAFC"
 [server]
 # 스마트폰 영상 업로드 허용 용량 (MB)
 maxUploadSize = 500
+# 안드로이드 크롬은 Streamlit Cloud iframe 안에서 XSRF 쿠키를 빼고 업로드(PUT /_stcore/upload_file)를 보내 403으로 막힐 수 있어 해제 (노트북 크롬은 통과)
+enableXsrfProtection = false
+enableCORS = false
 # 클라우드 배포: 브라우저 자동 열기·사용 통계 끔 (Community Cloud는 포트·주소를 자체 관리)
 headless = true
 
