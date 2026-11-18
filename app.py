@@ -147,6 +147,21 @@ st.set_page_config(
 
 # 색상/폰트는 .streamlit/config.toml 테마가 담당. 아래 CSS는 key로 지정한 요소(st-key-*)의 레이아웃만 다룸
 st.markdown("""<style>
+/* 영상 소스 바둑판: 모바일 4열(12장도 3줄), PC는 6열. 사진은 정사각형으로 잘라 보이고 버튼은 한 줄에 3개 */
+.st-key-media_grid { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 6px !important; }
+@media (min-width: 769px) { .st-key-media_grid { grid-template-columns: repeat(6, minmax(0, 1fr)) !important; } }
+.st-key-media_grid > div { width: auto !important; min-width: 0 !important; flex: none !important; }
+.st-key-media_grid [data-testid="stImage"] img, .st-key-photo_grid [data-testid="stImage"] img { aspect-ratio: 1 / 1; object-fit: cover; width: 100% !important; height: auto; border-radius: 6px; }
+.st-key-media_grid [data-testid="stCaptionContainer"] { font-size: .72rem; line-height: 1.1; margin: 0; text-align: center; }
+.st-key-media_grid [data-testid="stVerticalBlock"] { gap: 2px !important; }
+.st-key-media_grid [data-testid="stHorizontalBlock"], .st-key-media_grid [class*="st-key-media_btns_"] { flex-wrap: nowrap !important; gap: 2px !important; justify-content: space-between; }
+.st-key-media_grid [class*="st-key-media_btns_"] > div { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+.st-key-media_grid button { min-height: 1.7rem !important; height: 1.7rem; padding: 0 !important; font-size: .75rem; width: 100%; }
+/* 후보 사진 그리드(1단계 하단): 폰에서도 가로 4열 정사각형 바둑판 */
+@media (max-width: 768px) {
+  .st-key-photo_grid [data-testid="stHorizontalBlock"] { flex-direction: row !important; flex-wrap: wrap !important; gap: .3rem !important; }
+  .st-key-photo_grid [data-testid="stColumn"] { flex: 0 0 calc(25% - .3rem) !important; min-width: calc(25% - .3rem) !important; width: auto !important; }
+}
 .st-key-scene_carousel{overflow-x:auto;scroll-snap-type:x mandatory;flex-wrap:nowrap!important;padding-bottom:8px}
 .st-key-scene_carousel>div{flex:0 0 240px!important;width:240px!important;min-width:240px;scroll-snap-align:start}
 @media (max-width:640px){.st-key-scene_carousel>div{flex-basis:78vw!important;width:78vw!important;min-width:78vw}}
@@ -403,29 +418,28 @@ def render_media_manager():
                     + (f" · 🎞️ 컷 {_memory_cuts()}개 = 카피 {_memory_cuts()}줄" if is_memory and paths else ""))
         if st.session_state.pop("media_stale", False):
             st.info("사진·영상 구성이 바뀌었어요. 씬 수까지 맞추려면 [🚀 스토리보드 자동 기획]을 다시 눌러 주세요.")
-        for i, p in enumerate(paths):
-            tag = hashlib.md5(p.encode()).hexdigest()[:8]
-            c_pos, c_img, c_info, c_up, c_down, c_del = st.columns([0.85, 1.1, 2.3, 0.45, 0.45, 0.45], vertical_alignment="center")
-            order_choice = c_pos.selectbox("순서", options=list(range(1, len(paths) + 1)), index=i,
-                                           format_func=lambda x: str(x or ""),
-                                           key=f"media_pos_{tag}_{i}", label_visibility="collapsed",
-                                           help=f"현재 {i+1}번째. 원하는 순서 번호를 선택하면 즉시 이동합니다.")
-            if order_choice - 1 != i:
-                _media_changed(reorder_media(paths, i, order_choice - 1))
-                st.rerun()
-            thumb, label = _media_thumb(p)
-            if thumb:
-                c_img.image(thumb, width=88)
-            c_info.caption(label or os.path.basename(p)[:28])
-            if c_up.button("⬆", key=f"media_up_{tag}", disabled=i == 0, help="한 칸 앞으로"):
-                _media_changed(move_media(paths, i, -1))
-                st.rerun()
-            if c_down.button("⬇", key=f"media_down_{tag}", disabled=i == len(paths) - 1, help="한 칸 뒤로"):
-                _media_changed(move_media(paths, i, +1))
-                st.rerun()
-            if c_del.button("🗑", key=f"media_del_{tag}", help="목록에서 빼기"):
-                _media_changed(remove_media(paths, i))
-                st.rerun()
+        # 한 줄 요약 (올린 직후 '✅ 총 N개 준비 완료' 1줄 + 거절된 파일 경고만. 파일마다 알림 박스를 만들지 않아 세로 길이가 늘지 않는다)
+        for _msg in st.session_state.get("upload_notice") or []:
+            (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
+        # 썸네일 바둑판: CSS(.st-key-media_grid)가 모바일에서도 가로 4열 정사각형으로 모은다 (st.columns는 폰에서 1열로 접히므로 쓰지 않음)
+        with st.container(horizontal=True, key="media_grid", gap="small"):
+            for i, p in enumerate(paths):
+                tag = hashlib.md5(p.encode()).hexdigest()[:8]
+                with st.container(key=f"media_item_{tag}"):
+                    thumb, label = _media_thumb(p)
+                    if thumb:
+                        st.image(thumb, use_container_width=True)
+                    st.caption(f"**{i + 1}**" + (f" · {label}" if label else ""))
+                    with st.container(horizontal=True, key=f"media_btns_{tag}", gap="xxsmall"):
+                        if st.button("◀", key=f"media_up_{tag}", disabled=i == 0, help="한 칸 앞으로"):
+                            _media_changed(move_media(paths, i, -1))
+                            st.rerun()
+                        if st.button("▶", key=f"media_down_{tag}", disabled=i == len(paths) - 1, help="한 칸 뒤로"):
+                            _media_changed(move_media(paths, i, +1))
+                            st.rerun()
+                        if st.button("🗑", key=f"media_del_{tag}", help="목록에서 빼기"):
+                            _media_changed(remove_media(paths, i))
+                            st.rerun()
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
         # 📱 모바일 전용 경량 업로더(커스텀 컴포넌트): 안드로이드 크롬 + Streamlit Cloud iframe에서는 기본 업로더(PUT /_stcore/upload_file)가 파일을 못 보내는 일이 있어,
@@ -446,8 +460,6 @@ def render_media_manager():
             st.rerun()
         elif _mb and not _bid:
             st.session_state["upload_last_error"] = "모바일 업로더가 보낸 데이터 형식이 올바르지 않아요"
-        for _msg in st.session_state.get("upload_notice") or []:            # 지난 업로드 결과는 rerun 뒤에도 남겨서 폰에서 올라갔는지 바로 확인
-            (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
         st.caption(f"📊 현재 담긴 파일 {len(paths)}개 / 최대 {max_media}개"
                    + (f" · 최근 오류: {st.session_state['upload_last_error']}" if st.session_state.get("upload_last_error") else ""))
         # 💻 PC용 끌어다 놓기 / 40MB 이상 대용량 영상 (보조). 확장자 필터(type=)는 걸지 않고 올라온 뒤 서버가 머리글로 검사한다.
@@ -472,7 +484,7 @@ def render_media_manager():
 def _ingest_uploads(files, paths: list, max_media: int, problems) -> None:
     """올라온 파일들(st.file_uploader의 UploadedFile 또는 컴포넌트의 UploadedBlob)을 검사·저장해 목록에 붙이고, 결과 안내를 session_state에 남긴다.
     받는 즉시 바이트를 읽어 작업 폴더에 저장하므로 갤러리를 갔다 와도 파일이 남는다. 지원하지 않거나 깨진 파일은 이유와 함께 경고한다 (조용히 버리지 않음)"""
-    from core.media.upload import human_size, reject_reason, sniff
+    from core.media.upload import reject_reason, sniff
     notice, saved = [], []
     for name, why in problems:
         st.session_state["upload_last_error"] = f"{name}: {why}"
@@ -486,14 +498,15 @@ def _ingest_uploads(files, paths: list, max_media: int, problems) -> None:
             continue
         try:
             saved.append(save_uploaded_file(f))
-            notice.append(("ok", f"✅ 업로드 완료: {name} ({human_size(len(data))})"))
         except Exception as e:
             st.session_state["upload_last_error"] = f"{name}: {type(e).__name__} {str(e)[:60]}"
             notice.append(("warn", f"⚠️ 저장하지 못했어요: {name} ({type(e).__name__}) — 다시 올려 주세요"))
     added = add_media(paths, saved, limit=max_media)
     if len(paths) + len(saved) > max_media:
         notice.append(("warn", f"⚠️ 최대 {max_media}개까지만 담았어요 (나머지 {len(paths) + len(saved) - max_media}개는 제외)"))
-    st.session_state["upload_notice"] = notice[-12:]
+    if saved:
+        notice.insert(0, ("ok", f"✅ 총 {len(added)}개 준비 완료" + (f" (이번에 {len(saved)}개 추가)" if len(saved) != len(added) else "")))
+    st.session_state["upload_notice"] = notice[:6]
     if added != paths:
         _media_changed(added)
 
@@ -727,15 +740,6 @@ NAV_CSS = """
   .st-key-nav_bottom [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }
   .st-key-nav_bottom button { padding: 6px 2px !important; min-height: 2.6rem; font-size: .78rem; white-space: nowrap; }
   .stMainBlockContainer { padding-bottom: 5.5rem !important; }
-  /* 영상 소스 목록: 한 줄(순서·사진·이름) + 버튼 줄로 촘촘하게 (버튼이 세로로 길게 쌓이지 않게) */
-  .st-key-media_manager [data-testid="stHorizontalBlock"] { flex-direction: row !important; flex-wrap: wrap !important; gap: .3rem !important; align-items: center; }
-  .st-key-media_manager [data-testid="stColumn"] { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important; }
-  .st-key-media_manager [data-testid="stColumn"]:nth-child(1) { flex: 0 0 4.2rem !important; }
-  .st-key-media_manager [data-testid="stColumn"]:nth-child(3) { flex: 1 1 30% !important; }
-  .st-key-media_manager [data-testid="stColumn"]:nth-child(n+4) button { min-height: 2.4rem; padding: 0 .6rem; }
-  /* 후보 사진 그리드: 1열로 길게 늘어지지 않고 3열 바둑판 */
-  .st-key-photo_grid [data-testid="stHorizontalBlock"] { flex-direction: row !important; flex-wrap: wrap !important; gap: .4rem !important; }
-  .st-key-photo_grid [data-testid="stColumn"] { flex: 0 0 calc(33.333% - .4rem) !important; min-width: calc(33.333% - .4rem) !important; width: auto !important; }
 }
 /* PC: 설정 버튼을 좌측 바 맨 아래로 */
 .st-key-nav_side { display: flex; flex-direction: column; min-height: calc(100vh - 7rem); }

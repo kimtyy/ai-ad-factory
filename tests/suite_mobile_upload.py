@@ -59,8 +59,8 @@ paths = at.session_state["uploaded_paths"]
 msgs = [x.value for x in at.success] + [x.value for x in at.warning]
 check(not at.exception, f"업로드 후 오류 없음 {[e.value[:120] for e in at.exception]}")
 check(len(paths) == 2 and all(os.path.exists(p) for p in paths), f"사진 2개(JPG·확장자 없는 PNG)만 저장, PDF는 제외 — {len(paths)}개")
-check(any("업로드 완료: IMG_20261118_1.JPG" in m and "KB" in m for m in msgs), "화면에 '업로드 완료: 파일명 (용량)'")
-check(any("업로드 완료: 1000012345" in m for m in msgs), "확장자 없는 파일도 완료 표시")
+check(sum("준비 완료" in x.value for x in at.success) == 1 and any("총 2개 준비 완료" in m for m in msgs), "성공 안내는 맨 위에 딱 1줄 '총 N개 준비 완료' (파일마다 박스 없음)")
+check(not any("업로드 완료:" in m for m in msgs), "파일마다 '업로드 완료: 파일명' 박스를 만들지 않음")
 check(any("올리지 못했어요: 메뉴판.pdf" in m and "PDF" in m for m in msgs), "지원하지 않는 PDF는 이유와 함께 경고 (조용히 버리지 않음)")
 check(any("heic사진.HEIC" in m for m in msgs), f"가짜(깨진) HEIC는 저장 실패 시에도 안내가 남음 — {[m[:50] for m in msgs if 'HEIC' in m]}")
 def _count_images(node):
@@ -154,8 +154,8 @@ try:
     msgs = [x.value for x in at.success] + [x.value for x in at.warning]
     check(not at.exception and len(at.session_state["uploaded_paths"]) == 2 and all(os.path.exists(p) for p in at.session_state["uploaded_paths"]),
           f"컴포넌트로 받은 사진 2개 저장 (깨진 1개·브라우저 제외 1개 빼고) {len(at.session_state['uploaded_paths'])}개 {[e.value[:80] for e in at.exception]}")
-    check(any("업로드 완료: IMG_1.jpg" in m for m in msgs) and any("올리지 못했어요: 망가짐.jpg" in m for m in msgs) and any("큰영상.mp4" in m for m in msgs),
-          "완료·거절 안내 표시 (깨진 데이터·큰 영상도 조용히 버리지 않음)")
+    check(any("총 2개 준비 완료" in m for m in msgs) and any("올리지 못했어요: 망가짐.jpg" in m for m in msgs) and any("큰영상.mp4" in m for m in msgs),
+          "1줄 요약 + 거절 안내 표시 (깨진 데이터·큰 영상도 조용히 버리지 않음)")
     check(at.session_state["last_mobile_upload_batch_id"] == "phone-1", "처리한 batch_id 기록")
     before = list(at.session_state["uploaded_paths"])
     at.run(); at.run()
@@ -186,6 +186,25 @@ html_path = os.path.join(ROOT, "core", "ui", "mobile_uploader", "index.html")
 html = open(html_path, encoding="utf-8").read()
 check(os.path.exists(html_path) and "http://" not in html and "https://" not in html and "<script src" not in html, "index.html 외부 CDN·원격 스크립트 의존성 0개")
 check("streamlit:setComponentValue" in html and "streamlit:componentReady" in html and 'accept="image/*,video/*' in html and "multiple" in html, "Streamlit 컴포넌트 프로토콜·image/video accept·multiple")
+# ---------------------------------------------------------------- 5. 모바일 스크롤 압축: 4열 정사각형 바둑판 CSS(단독 앱에도 주입) + 보안 설정 복원
+at.session_state["uploaded_paths"] = [p for p in at.session_state["uploaded_paths"] if os.path.exists(p)]
+at.run()
+css = " ".join(m.value for m in at.markdown if "st-key-media_grid" in (m.value or ""))
+check("grid-template-columns: repeat(4, minmax(0, 1fr))" in css and "aspect-ratio: 1 / 1" in css and "object-fit: cover" in css,
+      "단독 매장 앱에도 영상 소스 4열 정사각형 바둑판 CSS가 주입됨 (모바일 NAV_CSS에만 있으면 샵스토리에서는 안 먹음)")
+check("st-key-photo_grid" in css and "calc(25% - .3rem)" in css, "후보 사진 그리드도 모바일 4열")
+tag_ = lambda p: __import__("hashlib").md5(p.encode()).hexdigest()[:8]
+_keys = {b_.key for b_ in at.button}
+_p = at.session_state["uploaded_paths"]
+check(len(_p) == 2 and all(f"media_{k}_{tag_(p)}" in _keys for p in _p for k in ("up", "down", "del")), "사진마다 ◀ ▶ 🗑 버튼이 바둑판 항목 안에 있음")
+check(not any(s_.key and s_.key.startswith("media_pos_") for s_ in at.selectbox), "항목마다 '순서' 선택칸(세로를 늘리던 것)은 없음")
+cfg = open(os.path.join(ROOT, ".streamlit", "config.toml"), encoding="utf-8").read()
+import tomllib
+srv = tomllib.loads(cfg).get("server", {})
+check(srv.get("maxUploadSize") == 500 and srv.get("enableXsrfProtection", True) is True and srv.get("enableCORS", True) is True and "false" not in cfg.lower().split("[server]")[1].split("[browser]")[0].replace("headless = true", ""),
+      f"config.toml: XSRF·CORS 보호 복원(끄는 설정 없음), maxUploadSize=500 유지 — {srv}")
+
+
 def _find(node, name):
     n = 0
     for c in getattr(node, "children", {}).values():
