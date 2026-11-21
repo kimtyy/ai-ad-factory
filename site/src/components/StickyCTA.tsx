@@ -11,7 +11,7 @@ export const StickyCTA: FC<StickyCTAProps> = ({ onOpenModal, selectedMenu }) => 
       <div className="max-w-md mx-auto">
         <button
           onClick={onOpenModal}
-          className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#E03131] to-[#C92A2A] hover:from-[#C92A2A] hover:to-[#B02525] text-white font-extrabold text-[15px] sm:text-[16px] flex items-center justify-center gap-2 shadow-lg shadow-red-500/25 active:scale-[0.98] transition-all"
+          className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#0F2744] to-[#1E3A5F] hover:from-[#1E3A5F] hover:to-[#2A4D7A] text-white font-extrabold text-[15px] sm:text-[16px] flex items-center justify-center gap-2 shadow-lg shadow-[#0F2744]/25 active:scale-[0.98] transition-all"
         >
           <span>🎬 이 기획으로 무료 샘플·제작 신청하기</span>
         </button>

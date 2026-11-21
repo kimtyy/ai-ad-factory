@@ -121,7 +121,6 @@ export const AdminPage: FC = () => {
 
   // 5. 진행 상태 변경
   const handleStatusChange = async (leadId: string, newStatus: '접수대기' | '제작완료' | '상담완료') => {
-    // UI 즉각 반영
     setLeads((prev) =>
       prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l))
     );
@@ -174,7 +173,7 @@ export const AdminPage: FC = () => {
     return (
       <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
         <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8 border border-slate-100 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#C92A2A] to-[#FA5252] flex items-center justify-center text-white font-black text-xl shadow-md mx-auto mb-4">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#0F2744] to-[#1E3A5F] flex items-center justify-center text-white font-black text-xl shadow-md mx-auto mb-4">
             S
           </div>
           <h2 className="text-xl font-extrabold text-slate-900 mb-1">
@@ -185,7 +184,7 @@ export const AdminPage: FC = () => {
           </p>
 
           {errorMsg && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-[#C92A2A] font-bold">
+            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-bold">
               {errorMsg}
             </div>
           )}
@@ -197,12 +196,12 @@ export const AdminPage: FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="관리자 비밀번호를 입력하세요"
-              className="w-full h-12 px-4 rounded-xl bg-slate-50 border border-slate-200 focus:border-[#E03131] focus:bg-white focus:outline-none text-sm font-medium transition-all"
+              className="w-full h-12 px-4 rounded-xl bg-slate-50 border border-slate-200 focus:border-[#0F2744] focus:bg-white focus:outline-none text-sm font-medium transition-all"
             />
             <button
               type="submit"
               disabled={isLoading || !password.trim()}
-              className="w-full h-12 rounded-xl bg-[#E03131] hover:bg-[#C92A2A] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
+              className="w-full h-12 rounded-xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
             >
               {isLoading ? '로그인 확인 중...' : '대시보드 로그인'}
             </button>
@@ -221,38 +220,53 @@ export const AdminPage: FC = () => {
     );
   }
 
-  // 대시보드 메인 화면
+  // 대시보드 메인 화면 (모바일 2줄 반응형 레이아웃 & 상시 작업실 버튼)
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-slate-900">
       {/* 상단 네비게이션 헤더 */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-3 shadow-xs">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          {/* 타이틀 영역 */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-[#E03131] flex items-center justify-center text-white font-black text-sm shadow-xs">
+            <div className="w-8 h-8 rounded-xl bg-[#0F2744] flex items-center justify-center text-white font-black text-sm shadow-xs shrink-0">
               S
             </div>
-            <div>
-              <h1 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-                <span>점주 리드 관리 대시보드</span>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-50 text-[#C92A2A] border border-red-100">
-                  총 {leads.length}건
-                </span>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-extrabold text-slate-900 whitespace-nowrap">
+                점주 리드 관리 대시보드
               </h1>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-[#EEF3F9] text-[#0F2744] border border-[#D0DCEB] whitespace-nowrap">
+                총 {leads.length}건
+              </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* 버튼 영역 (모바일 줄바꿈 방지) */}
+          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap sm:flex-nowrap">
+            {/* 상시 제작 작업실 열기 버튼 */}
+            <a
+              href="https://shopstory-store.streamlit.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-[#0F2744] to-[#1E3A5F] hover:from-[#1E3A5F] hover:to-[#2A4D7A] text-white text-xs font-bold shadow-xs active:scale-95 transition-all flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <span>🎬</span>
+              <span>제작 작업실 열기</span>
+              <span>↗</span>
+            </a>
+
             <button
               onClick={() => fetchLeads(token)}
               disabled={isLoading}
-              className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors flex items-center gap-1 whitespace-nowrap"
             >
               <span>🔄</span>
               <span>{isLoading ? '새로고침 중...' : '새로고침'}</span>
             </button>
+
             <button
               onClick={handleLogout}
-              className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-medium text-slate-500 transition-colors"
+              className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-medium text-slate-500 transition-colors whitespace-nowrap"
             >
               로그아웃
             </button>
@@ -275,9 +289,17 @@ export const AdminPage: FC = () => {
           <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-xs">
             <div className="text-4xl mb-3">📭</div>
             <h3 className="text-base font-bold text-slate-800">아직 접수된 리드가 없습니다</h3>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-slate-400 mt-1 mb-4">
               점주님이 무료 진단 후 연락처를 남기면 이곳에 실시간으로 표시됩니다.
             </p>
+            <a
+              href="https://shopstory-store.streamlit.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white text-xs font-bold shadow-sm"
+            >
+              <span>🎬 오프라인 의뢰 건 바로 제작하기 (작업실 열기 ↗)</span>
+            </a>
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
@@ -285,13 +307,13 @@ export const AdminPage: FC = () => {
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold">
-                    <th className="py-3 px-4">접수일시</th>
-                    <th className="py-3 px-4">상호명</th>
-                    <th className="py-3 px-4">사장님 성함</th>
-                    <th className="py-3 px-4">연락처</th>
+                    <th className="py-3 px-4 whitespace-nowrap">접수일시</th>
+                    <th className="py-3 px-4 whitespace-nowrap">상호명</th>
+                    <th className="py-3 px-4 whitespace-nowrap">사장님 성함</th>
+                    <th className="py-3 px-4 whitespace-nowrap">연락처</th>
                     <th className="py-3 px-4">선택 기획 옵션</th>
-                    <th className="py-3 px-4">진행 상태</th>
-                    <th className="py-3 px-4 text-right">작업실</th>
+                    <th className="py-3 px-4 whitespace-nowrap">진행 상태</th>
+                    <th className="py-3 px-4 text-right whitespace-nowrap">작업실</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
@@ -316,7 +338,7 @@ export const AdminPage: FC = () => {
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         <a
                           href={`tel:${lead.phoneNumber.replace(/[^0-9]/g, '')}`}
-                          className="font-bold text-[#E03131] hover:underline flex items-center gap-1"
+                          className="font-bold text-[#0F2744] hover:underline flex items-center gap-1"
                         >
                           <span>📞</span>
                           <span>{lead.phoneNumber}</span>
@@ -326,7 +348,7 @@ export const AdminPage: FC = () => {
                       {/* 선택 기획 옵션 */}
                       <td className="py-3.5 px-4">
                         <div className="flex flex-wrap gap-1 max-w-xs">
-                          <span className="px-2 py-0.5 rounded-md bg-red-50 text-[#C92A2A] font-bold text-[11px] truncate max-w-[140px]">
+                          <span className="px-2 py-0.5 rounded-md bg-[#EEF3F9] text-[#0F2744] font-bold text-[11px] truncate max-w-[140px] border border-[#D0DCEB]">
                             🍽️ {lead.planOptions?.selectedMenu || '대표 메뉴'}
                           </span>
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[11px]">
@@ -371,7 +393,7 @@ export const AdminPage: FC = () => {
                           href="https://shopstory-store.streamlit.app"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold shadow-xs active:scale-95 transition-all"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white text-xs font-bold shadow-xs active:scale-95 transition-all"
                         >
                           <span>🎬</span>
                           <span>작업실 열기</span>

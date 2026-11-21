@@ -99,7 +99,7 @@ export const LeadModal: FC<LeadModalProps> = ({
 
             {/* 헤더 */}
             <div className="mb-4">
-              <span className="text-[11px] font-bold text-[#C92A2A] bg-red-50 border border-red-100 px-2.5 py-0.5 rounded-full inline-block mb-1.5">
+              <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2.5 py-0.5 rounded-full inline-block mb-1.5">
                 무료 숏폼 샘플 제작 신청
               </span>
               <h3 className="text-[20px] font-extrabold text-slate-900 leading-snug">
@@ -119,7 +119,7 @@ export const LeadModal: FC<LeadModalProps> = ({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">주인공 메뉴:</span>
-                <span className="font-bold text-[#C92A2A]">{planOptions.selectedMenu}</span>
+                <span className="font-bold text-[#0F2744]">{planOptions.selectedMenu}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">스타일 세팅:</span>
@@ -131,7 +131,7 @@ export const LeadModal: FC<LeadModalProps> = ({
 
             {/* 에러 메시지 */}
             {errorMessage && (
-              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-[#C92A2A] font-semibold">
+              <div className="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-semibold">
                 ⚠️ {errorMessage}
               </div>
             )}
@@ -152,7 +152,7 @@ export const LeadModal: FC<LeadModalProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  사장님 성함 <span className="text-[#E03131]">*</span>
+                  사장님 성함 <span className="text-[#0F2744]">*</span>
                 </label>
                 <input
                   type="text"
@@ -160,13 +160,13 @@ export const LeadModal: FC<LeadModalProps> = ({
                   value={ownerName}
                   onChange={(e) => setOwnerName(e.target.value)}
                   placeholder="예: 홍길동"
-                  className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#E03131] focus:outline-none text-sm font-medium text-slate-900 transition-all"
+                  className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 transition-all"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  휴대폰 번호 <span className="text-[#E03131]">*</span>
+                  휴대폰 번호 <span className="text-[#0F2744]">*</span>
                 </label>
                 <input
                   type="tel"
@@ -175,7 +175,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                   onChange={handlePhoneChange}
                   placeholder="010-0000-0000"
                   maxLength={13}
-                  className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#E03131] focus:outline-none text-sm font-medium text-slate-900 transition-all"
+                  className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 transition-all"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
                   * 영상 제작 완료 알림 및 영상 파일을 카카오톡으로 전송해 드립니다.
@@ -188,7 +188,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                   type="checkbox"
                   checked={agreed}
                   onChange={(e) => setAgreed(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 text-[#E03131] rounded border-slate-300 focus:ring-0"
+                  className="mt-0.5 w-4 h-4 text-[#0F2744] rounded border-slate-300 focus:ring-0"
                 />
                 <span className="text-[11px] text-slate-500 leading-tight">
                   [필수] 매장 진단 리포트 발송 및 무료 영상 샘플 안내를 위한 개인정보 수집·이용에 동의합니다.
@@ -198,7 +198,7 @@ export const LeadModal: FC<LeadModalProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full h-13 mt-4 rounded-2xl bg-gradient-to-r from-[#E03131] to-[#C92A2A] hover:from-[#C92A2A] hover:to-[#B02525] text-white font-extrabold text-[15px] shadow-lg shadow-red-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                className="w-full h-13 mt-4 rounded-2xl bg-gradient-to-r from-[#0F2744] to-[#1E3A5F] hover:from-[#1E3A5F] hover:to-[#2A4D7A] text-white font-extrabold text-[15px] shadow-lg shadow-[#0F2744]/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
               >
                 {isSubmitting ? (
                   <div className="flex items-center gap-2">
@@ -222,7 +222,7 @@ export const LeadModal: FC<LeadModalProps> = ({
             </div>
 
             <div>
-              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
                 신청 접수 완료
               </span>
               <h3 className="text-[21px] font-extrabold text-slate-900 mt-2">
@@ -232,12 +232,12 @@ export const LeadModal: FC<LeadModalProps> = ({
 
             <div className="bg-slate-50 rounded-2xl p-4 text-xs text-slate-600 leading-relaxed text-left border border-slate-100 space-y-2">
               <p>
-                <strong>{ownerName || '사장님'}</strong>의 매장{' '}
-                <strong className="text-[#C92A2A]">{storeName}</strong> 맞춤 기획안으로 영상을 제작해,
+                <strong>{ownerName || '사장님'}</strong> 님 매장{' '}
+                <strong className="text-[#0F2744]">{storeName}</strong> 맞춤 기획안으로 영상을 제작해,
                 입력하신 번호(<strong className="text-slate-800">{phoneNumber}</strong>, 카카오톡)로 빠르게 안내드릴게요.
               </p>
               <div className="pt-2 border-t border-slate-200/60 text-[11px] text-slate-500">
-                • 제작 예상 소요 시간: 10분 이내 순차 발송<br />
+                • 제작 안내: 확인 후 순차 발송 (영업시간 기준 1~2시간 이내)<br />
                 • 담당자 직접 문의: <a href="mailto:kimtyy@gmail.com" className="underline text-slate-700">kimtyy@gmail.com</a>
               </div>
             </div>
@@ -245,7 +245,7 @@ export const LeadModal: FC<LeadModalProps> = ({
             <div className="pt-2 space-y-2">
               <button
                 onClick={onResetAll}
-                className="w-full h-12 rounded-2xl bg-slate-900 hover:bg-black text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
+                className="w-full h-12 rounded-2xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
               >
                 다른 매장도 무료 진단해보기
               </button>

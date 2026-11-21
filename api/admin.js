@@ -92,7 +92,11 @@ export default async function handler(req, res) {
     const webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
     if (webhookUrl) {
       try {
-        const gasRes = await fetch(`${webhookUrl}?action=get_leads`, { headers: { 'Accept': 'application/json' } });
+        const gasRes = await fetch(`${webhookUrl}?action=get_leads`, {
+          method: 'GET',
+          redirect: 'follow',
+          headers: { 'Accept': 'application/json' },
+        });
         if (gasRes.ok) {
           const gasData = await gasRes.json();
           if (Array.isArray(gasData.leads)) {
@@ -112,3 +116,4 @@ export default async function handler(req, res) {
 
   return res.status(405).json({ error: 'Method Not Allowed' });
 }
+

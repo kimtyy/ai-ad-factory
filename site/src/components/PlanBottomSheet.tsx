@@ -97,14 +97,14 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                     onClick={() => onChangeOptions({ ...options, selectedMenu: menu })}
                     className={`px-3.5 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 transition-all ${
                       isSelected
-                        ? 'bg-[#E03131] text-white shadow-sm shadow-red-500/30'
+                        ? 'bg-[#0F2744] text-white shadow-sm shadow-[#0F2744]/20'
                         : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                     }`}
                   >
                     <span>{menu}</span>
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-semibold ${
-                        isSelected ? 'bg-white/20 text-white' : 'bg-red-50 text-[#C92A2A]'
+                        isSelected ? 'bg-white/20 text-white' : 'bg-[#EEF3F9] text-[#0F2744]'
                       }`}
                     >
                       AI 추천
@@ -135,7 +135,7 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                       onClick={() => onChangeOptions({ ...options, selectedMenu: menu.name })}
                       className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
                         isSelected
-                          ? 'bg-[#E03131] text-white font-bold shadow-xs'
+                          ? 'bg-[#0F2744] text-white font-bold shadow-xs'
                           : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
                     >
@@ -162,7 +162,7 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                     onClick={() => onChangeOptions({ ...options, font })}
                     className={`p-3 rounded-2xl text-xs text-left font-bold transition-all border ${
                       isSelected
-                        ? 'border-[#E03131] bg-red-50/50 text-[#C92A2A]'
+                        ? 'border-[#0F2744] bg-[#EEF3F9]/70 text-[#0F2744]'
                         : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                     }`}
                   >
@@ -187,12 +187,12 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                     onClick={() => onChangeOptions({ ...options, voice })}
                     className={`p-3 rounded-2xl text-xs text-left font-bold transition-all border flex items-center justify-between ${
                       isSelected
-                        ? 'border-[#E03131] bg-red-50/50 text-[#C92A2A]'
+                        ? 'border-[#0F2744] bg-[#EEF3F9]/70 text-[#0F2744]'
                         : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                     }`}
                   >
                     <span>{voice}</span>
-                    {isSelected && <span className="text-[#C92A2A] text-sm font-black">✓</span>}
+                    {isSelected && <span className="text-[#0F2744] text-sm font-black">✓</span>}
                   </button>
                 );
               })}
@@ -213,7 +213,7 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                     onClick={() => onChangeOptions({ ...options, bgm })}
                     className={`p-3 rounded-2xl text-xs text-center font-bold transition-all border ${
                       isSelected
-                        ? 'border-[#E03131] bg-red-50/50 text-[#C92A2A]'
+                        ? 'border-[#0F2744] bg-[#EEF3F9]/70 text-[#0F2744]'
                         : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                     }`}
                   >
@@ -229,7 +229,7 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
         <div className="mt-8 pt-4 border-t border-slate-100">
           <button
             onClick={onClose}
-            className="w-full h-13 py-3.5 rounded-2xl bg-slate-900 hover:bg-black text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
+            className="w-full h-13 py-3.5 rounded-2xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
           >
             기획 수정 완료 (적용하기)
           </button>

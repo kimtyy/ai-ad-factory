@@ -14,6 +14,8 @@ export const ReportScreen: FC<ReportScreenProps> = ({
   onOpenBottomSheet,
   onResetSearch,
 }) => {
+  const shortsCount = result.scoreCard.shortsCount || 0;
+
   return (
     <div className="px-4 py-6 space-y-6">
       {/* 매장 헤더 카드 */}
@@ -21,7 +23,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
         <div className="flex items-start justify-between gap-3 mb-2">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-[#C92A2A] border border-red-100">
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#EEF3F9] text-[#0F2744] border border-[#D0DCEB]">
                 {result.category}
               </span>
               <span className="text-[11px] text-slate-400 font-medium">진단 완료</span>
@@ -51,14 +53,14 @@ export const ReportScreen: FC<ReportScreenProps> = ({
         </div>
       </div>
 
-      {/* 1. 손님이 기억하는 우리 가게 필살기 TOP 3 */}
+      {/* 1. 손님이 기억하는 우리 가게 필살기 TOP 3 (모바일 2단 분기 줄바꿈 방지) */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 px-1">
+          <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5 whitespace-nowrap">
             <span>손님이 기억하는 필살기</span>
-            <span className="text-[#C92A2A]">TOP 3</span>
+            <span className="text-[#0F2744]">TOP 3</span>
           </h3>
-          <span className="text-xs text-slate-400 font-medium">네이버 리뷰 빅데이터 요약</span>
+          <span className="text-xs text-slate-400 font-medium whitespace-nowrap">네이버 리뷰 빅데이터 요약</span>
         </div>
 
         <div className="space-y-3">
@@ -71,10 +73,10 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                 <div
                   className={`w-7 h-7 rounded-xl flex items-center justify-center font-black text-sm shrink-0 shadow-2xs ${
                     item.rank === 1
-                      ? 'bg-gradient-to-tr from-[#E03131] to-[#FA5252] text-white'
+                      ? 'bg-gradient-to-tr from-[#0F2744] to-[#1E3A5F] text-white'
                       : item.rank === 2
-                      ? 'bg-amber-500 text-white'
-                      : 'bg-slate-700 text-white'
+                      ? 'bg-slate-700 text-white'
+                      : 'bg-slate-500 text-white'
                   }`}
                 >
                   {item.rank}
@@ -84,14 +86,14 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                     <h4 className="text-[15px] font-bold text-slate-900 leading-snug">
                       {item.title}
                     </h4>
-                    <span className="text-[11px] font-bold text-[#C92A2A] bg-red-50 px-2 py-0.5 rounded-full shrink-0">
+                    <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] px-2 py-0.5 rounded-full shrink-0">
                       {item.mentionRate}
                     </span>
                   </div>
                   <p className="text-xs text-slate-600 leading-relaxed mb-2">
                     {item.description}
                   </p>
-                  <div className="bg-slate-50 rounded-xl p-2.5 text-[11px] text-slate-500 italic border-l-2 border-[#E03131]">
+                  <div className="bg-slate-50 rounded-xl p-2.5 text-[11px] text-slate-500 italic border-l-2 border-[#0F2744]">
                     {item.sampleReview}
                   </div>
                 </div>
@@ -101,15 +103,22 @@ export const ReportScreen: FC<ReportScreenProps> = ({
         </div>
       </div>
 
-      {/* 2. 우리 가게 홍보 성적표 (결핍 찌르기) */}
+      {/* 2. 우리 가게 홍보 성적표 */}
       <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight">
             우리 가게 홍보 성적표
           </h3>
-          <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-full">
-            긴급 점검 필요
-          </span>
+          {/* shortsCount 여부에 따른 조건부 배지 논리 수정 */}
+          {shortsCount === 0 ? (
+            <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200 whitespace-nowrap">
+              🚨 긴급 점검 필요
+            </span>
+          ) : (
+            <span className="text-xs font-bold text-[#0F2744] bg-[#EEF3F9] px-2.5 py-0.5 rounded-full border border-[#D0DCEB] whitespace-nowrap">
+              💡 릴스·클립 확장 추천
+            </span>
+          )}
         </div>
 
         <div className="space-y-3">
@@ -144,7 +153,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
           {/* 홍보 쇼츠 영상 - 유튜브 실제 검색 연동 결과 */}
           <div
             className={`p-4 rounded-2xl border transition-all ${
-              result.scoreCard.shortsCount === 0
+              shortsCount === 0
                 ? 'bg-red-50/70 border-red-200'
                 : 'bg-emerald-50/60 border-emerald-200'
             }`}
@@ -157,18 +166,18 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                   <div className="text-[11px] text-slate-500">YouTube 쇼츠 & 롱폼 실시간 검색</div>
                 </div>
               </div>
-              {result.scoreCard.shortsCount === 0 ? (
+              {shortsCount === 0 ? (
                 <span className="text-xs font-black text-[#C92A2A] bg-white px-2.5 py-1 rounded-full border border-red-200 shadow-2xs">
                   🚨 유튜브 쇼츠 0편 (비어 있음!)
                 </span>
               ) : (
                 <span className="text-xs font-bold text-emerald-700 bg-white px-2.5 py-1 rounded-full border border-emerald-200 shadow-2xs">
-                  ✅ 유튜브 영상 {result.scoreCard.shortsCount}편 확인됨
+                  ✅ 유튜브 영상 {shortsCount}편 확인됨
                 </span>
               )}
             </div>
 
-            {result.scoreCard.shortsCount === 0 ? (
+            {shortsCount === 0 ? (
               <p className="text-xs text-red-900 leading-relaxed font-medium mt-1">
                 딱 하나, <strong className="font-extrabold underline decoration-red-400">여기가 비어 있어요!</strong><br />
                 아직 유튜브에 홍보 쇼츠가 한 편도 없습니다. 경쟁 매장이 선점하기 전에 첫 영상을 확보해야 합니다.
@@ -197,7 +206,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                 <div className="text-[11px] text-slate-500">유튜브 외 3대 숏폼 채널 동시 진출</div>
               </div>
             </div>
-            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 shrink-0">
+            <span className="text-xs font-bold text-[#0F2744] bg-[#EEF3F9] px-2.5 py-1 rounded-full border border-[#D0DCEB] shrink-0">
               💡 동시 확산 필요
             </span>
           </div>
@@ -208,14 +217,14 @@ export const ReportScreen: FC<ReportScreenProps> = ({
       <div className="bg-gradient-to-br from-white to-slate-50 rounded-3xl p-5 shadow-sm border border-slate-200/80">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#E03131]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#0F2744]" />
             <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight">
               AI 쇼츠 기획 노트
             </h3>
           </div>
           <button
             onClick={onOpenBottomSheet}
-            className="text-xs font-bold text-[#C92A2A] hover:text-[#B02525] flex items-center gap-0.5 group"
+            className="text-xs font-bold text-[#0F2744] hover:text-[#1E3A5F] flex items-center gap-0.5 group"
           >
             <span>기획 수정하기</span>
             <span className="group-hover:translate-x-0.5 transition-transform">&gt;</span>
@@ -232,7 +241,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
               <span className="text-[16px] font-extrabold text-slate-900">
                 {planOptions.selectedMenu || result.aiPlan.recommendedMenu}
               </span>
-              <span className="text-[11px] font-bold text-[#C92A2A] bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">
+              <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2 py-0.5 rounded-full">
                 AI 추천
               </span>
             </div>
