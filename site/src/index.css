@@ -7,8 +7,6 @@
 :root {
   font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
   --font-sans: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
-  --font-serif: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
-  --font-mono: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
 }
 
 * {
@@ -19,23 +17,25 @@
 
 html,
 body {
-  background: #000;
-  color: #fff;
+  background-color: #F8F9FA;
+  color: #1E293B;
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Lenis smooth scroll */
-.lenis.lenis-smooth {
-  scroll-behavior: auto !important;
+/* Custom scrollbar for bottomsheet */
+::-webkit-scrollbar {
+  width: 5px;
 }
-
-.lenis.lenis-stopped {
-  overflow: hidden;
+::-webkit-scrollbar-track {
+  background: transparent;
 }
-
-.lenis.lenis-scrolling iframe {
-  pointer-events: none;
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
