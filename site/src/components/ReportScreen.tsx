@@ -141,24 +141,65 @@ export const ReportScreen: FC<ReportScreenProps> = ({
             </span>
           </div>
 
-          {/* 홍보 쇼츠 영상 - 결핍 찌르기 */}
-          <div className="p-4 rounded-2xl bg-red-50/70 border border-red-200">
+          {/* 홍보 쇼츠 영상 - 유튜브 실제 검색 연동 결과 */}
+          <div
+            className={`p-4 rounded-2xl border transition-all ${
+              result.scoreCard.shortsCount === 0
+                ? 'bg-red-50/70 border-red-200'
+                : 'bg-emerald-50/60 border-emerald-200'
+            }`}
+          >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2.5">
                 <span className="text-lg">🎬</span>
                 <div>
-                  <div className="text-xs font-extrabold text-slate-900">홍보 쇼츠 영상</div>
-                  <div className="text-[11px] text-slate-500">유튜브 쇼츠 / 인스타 릴스</div>
+                  <div className="text-xs font-extrabold text-slate-900">유튜브 홍보 영상</div>
+                  <div className="text-[11px] text-slate-500">YouTube 쇼츠 & 롱폼 실시간 검색</div>
                 </div>
               </div>
-              <span className="text-xs font-black text-[#C92A2A] bg-white px-2.5 py-1 rounded-full border border-red-200 shadow-2xs">
-                🚨 0편 (비어 있음!)
-              </span>
+              {result.scoreCard.shortsCount === 0 ? (
+                <span className="text-xs font-black text-[#C92A2A] bg-white px-2.5 py-1 rounded-full border border-red-200 shadow-2xs">
+                  🚨 유튜브 쇼츠 0편 (비어 있음!)
+                </span>
+              ) : (
+                <span className="text-xs font-bold text-emerald-700 bg-white px-2.5 py-1 rounded-full border border-emerald-200 shadow-2xs">
+                  ✅ 유튜브 영상 {result.scoreCard.shortsCount}편 확인됨
+                </span>
+              )}
             </div>
-            <p className="text-xs text-red-900 leading-relaxed font-medium mt-1">
-              딱 하나, <strong className="font-extrabold underline decoration-red-400">여기가 비어 있어요!</strong><br />
-              요즘 손님 82%는 쇼츠·릴스를 보고 첫 방문을 결정합니다. 경쟁 매장이 먼저 선점하기 전에 1편을 확보해 두셔야 합니다.
-            </p>
+
+            {result.scoreCard.shortsCount === 0 ? (
+              <p className="text-xs text-red-900 leading-relaxed font-medium mt-1">
+                딱 하나, <strong className="font-extrabold underline decoration-red-400">여기가 비어 있어요!</strong><br />
+                아직 유튜브에 홍보 쇼츠가 한 편도 없습니다. 경쟁 매장이 선점하기 전에 첫 영상을 확보해야 합니다.
+              </p>
+            ) : (
+              <div className="mt-1 space-y-1.5">
+                <p className="text-xs text-emerald-900 leading-relaxed font-medium">
+                  기존 영상이 확인되지만, 알고리즘 유입을 유지하려면 신메뉴·계절별 새 쇼츠를 꾸준히 이어가야 합니다.
+                </p>
+                {result.scoreCard.sampleVideoTitle && (
+                  <div className="p-2 rounded-xl bg-white/80 border border-emerald-100 text-[11px] text-emerald-800 font-medium truncate flex items-center gap-1.5">
+                    <span className="shrink-0 text-emerald-600 font-bold">▶ 최근 영상:</span>
+                    <span className="truncate">{result.scoreCard.sampleVideoTitle}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 인스타 릴스 · 네이버 클립 · 틱톡 정직한 안내 */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="text-lg">📱</span>
+              <div>
+                <div className="text-xs font-bold text-slate-800">인스타 릴스 · 네이버 클립 · 틱톡</div>
+                <div className="text-[11px] text-slate-500">유튜브 외 3대 숏폼 채널 동시 진출</div>
+              </div>
+            </div>
+            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 shrink-0">
+              💡 동시 확산 필요
+            </span>
           </div>
         </div>
       </div>

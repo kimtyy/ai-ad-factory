@@ -1,5 +1,5 @@
 // site/api/diagnose.js
-// 네이버 지역 검색 API + 블로그 검색 API + 네이버 플레이스 공식 메뉴판 실시간 수집
+// 네이버 지역 검색 API + 블로그 검색 API + 네이버 플레이스 공식 메뉴판 + 유튜브 실제 영상 검색
 
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 
@@ -119,7 +119,6 @@ async function fetchNaverBlog(storeName, clientId, clientSecret) {
 // 3. 네이버 플레이스 공식 메뉴판 수집 (m.place.naver.com Apollo state)
 async function fetchNaverPlaceMenu(storeName) {
   try {
-    // 3-1. 네이버 모바일 검색에서 place_id 찾기
     const searchUrl = `https://m.search.naver.com/search.naver?query=${encodeURIComponent(storeName)}`;
     const searchRes = await fetch(searchUrl, {
       headers: {
@@ -137,7 +136,6 @@ async function fetchNaverPlaceMenu(storeName) {
     const cat = placeMatch[1];
     const pid = placeMatch[2];
 
-    // 3-2. 플레이스 메뉴 페이지 호출
     const menuUrl = `https://m.place.naver.com/${cat}/${pid}/menu/list`;
     const menuRes = await fetch(menuUrl, {
       headers: {
@@ -185,6 +183,53 @@ async function fetchNaverPlaceMenu(storeName) {
   }
 }
 
+// 4. 유튜브 실제 검색 연동 (shortsCount & 대표 영상 제목)
+async function fetchYouTubeVideos(storeName, apiKey) {
+  if (apiKey) {
+    try {
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(storeName)}&type=video&maxResults=10&key=${apiKey}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const items = data.items || [];
+        return {
+          count: items.length,
+          sampleTitle: items.length > 0 ? cleanHtml(items[0].snippet.title) : '',
+        };
+      }
+    } catch (e) {
+      console.warn('YouTube API call error:', e.message);
+    }
+  }
+
+  // 폴백: 유튜브 웹 검색 HTML 결과 파싱
+  try {
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(storeName)}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'ko-KR,ko;q=0.9',
+      },
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const titleMatches = Array.from(html.matchAll(/"title":\{"runs":\[\{"text":"([^"]+)"\}\]/g));
+      const filtered = titleMatches
+        .map(m => m[1])
+        .filter(t => t && !t.includes('YouTube') && !t.includes('홈') && !t.includes('동영상'));
+      
+      return {
+        count: filtered.length,
+        sampleTitle: filtered.length > 0 ? cleanHtml(filtered[0]) : '',
+      };
+    }
+  } catch (e) {
+    console.warn('YouTube scraping fallback error:', e.message);
+  }
+
+  return { count: 0, sampleTitle: '' };
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -210,13 +255,15 @@ export default async function handler(req, res) {
   const trimmedName = storeName.trim();
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
+  const youtubeApiKey = process.env.YOUTUBE_API_KEY;
 
   try {
-    // 병렬로 네이버 지역정보, 블로그 리뷰, 플레이스 메뉴판 수집
-    const [localItem, blogItems, placeResult] = await Promise.all([
+    // 병렬로 네이버 지역정보, 블로그 리뷰, 플레이스 메뉴판, 유튜브 영상 수집
+    const [localItem, blogItems, placeResult, youtubeResult] = await Promise.all([
       fetchNaverLocal(trimmedName, clientId, clientSecret),
       fetchNaverBlog(trimmedName, clientId, clientSecret),
       fetchNaverPlaceMenu(trimmedName),
+      fetchYouTubeVideos(trimmedName, youtubeApiKey),
     ]);
 
     // 1. 매장명 및 주소, 업종 결정
@@ -229,14 +276,12 @@ export default async function handler(req, res) {
     // 2. 실제 메뉴판 목록 확정
     let menus = placeResult.menus || [];
     if (menus.length === 0) {
-      // 블로그 제목 등에서 메뉴명 힌트 추출 또는 기본 메뉴 세팅
       menus = [
         { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },
         { name: '스페셜 단품 요리', price: '인기', isPopular: true, desc: '정성껏 조리하는 메인 메뉴' },
       ];
     }
 
-    // 대표 추천 메뉴 (첫 번째 메뉴 또는 isPopular 메뉴)
     const recommendedMenu = menus[0]?.name || `${resolvedName} 대표 메뉴`;
 
     // 3. 실제 손님 블로그 리뷰 기반 필살기 TOP 3 생성
@@ -313,7 +358,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4. 첫 3초 훅 카피 구성
     const hookCopy = `${resolvedName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${recommendedMenu} 실물 영접 🔥`;
 
     return res.status(200).json({
@@ -325,7 +369,8 @@ export default async function handler(req, res) {
       scoreCard: {
         menuCount: menus.length,
         hasPhotos: true,
-        shortsCount: 0,
+        shortsCount: youtubeResult.count,
+        sampleVideoTitle: youtubeResult.sampleTitle,
       },
       aiPlan: {
         recommendedMenu,

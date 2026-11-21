@@ -82,7 +82,8 @@ export const KNOWN_STORES: Record<string, StoreDiagnosticResult> = {
     scoreCard: {
       menuCount: 14,
       hasPhotos: true,
-      shortsCount: 0,
+      shortsCount: 5,
+      sampleVideoTitle: '가평 설악에서 여기 모르면 진짜 손해! 효정명인갈비 #shorts',
     },
     aiPlan: {
       recommendedMenu: '효정수제돼지갈비',

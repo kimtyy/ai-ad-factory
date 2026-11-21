@@ -1,14 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { SearchScreen } from './components/SearchScreen';
 import { ReportScreen } from './components/ReportScreen';
 import { PlanBottomSheet } from './components/PlanBottomSheet';
 import { LeadModal } from './components/LeadModal';
 import { StickyCTA } from './components/StickyCTA';
+import { AdminPage } from './pages/AdminPage';
 import { StoreDiagnosticResult, PlanOptions, LeadSubmission } from './types';
 import { diagnoseStore, submitLead } from './services/api';
 
 export default function App() {
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsAdmin(window.location.pathname.startsWith('/admin'));
+    }
+  }, []);
+
   const [storeName, setStoreName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<StoreDiagnosticResult | null>(null);
@@ -70,6 +79,10 @@ export default function App() {
     setIsLeadCompleted(true);
   };
 
+  if (isAdmin) {
+    return <AdminPage />;
+  }
+
   return (
     <div className="min-h-screen bg-[#F8F9FA] flex flex-col items-center">
       {/* 모바일 뷰 카드 레이아웃: max-w-md로 스마트폰 프레임 최적화 */}
@@ -101,7 +114,7 @@ export default function App() {
           </p>
           <div className="text-[11px] text-slate-400">
             상호: 허브스마트 | 대표: 김태영 | 문의: kimtyy@gmail.com<br />
-            © 2026 허브스마트. All rights reserved.
+            © 2026 허브스마트. All rights reserved. · <a href="/admin" className="underline hover:text-slate-600">관리자</a>
           </div>
         </footer>
 
