@@ -51,6 +51,56 @@ export const KNOWN_STORES: Record<string, StoreDiagnosticResult> = {
       { name: '먹태구이 & 땅콩', price: '14,000원', isPopular: false, desc: '바삭하게 구워 청양마요 소스와 함께' },
     ],
   },
+  '효정명인갈비': {
+    storeName: '효정명인갈비',
+    category: '한식 / 숯불구이·갈비',
+    address: '경기 가평군 설악면 한양부로 93 1층',
+    summary: '30년 고기 명인의 특제 비법 양념으로 숙성한 부드러운 수제돼지갈비와 푸짐한 한상차림으로 가평 설악면을 대표하는 숯불갈비 명가',
+    topStrengths: [
+      {
+        rank: 1,
+        title: '자극적이지 않고 깊은 풍미의 효정수제돼지갈비',
+        description: '달지 않고 육즙이 꽉 찬 수제 양념갈비로 가평 현지인과 여행객 모두에게 극찬',
+        mentionRate: '손님 솔직 후기',
+        sampleReview: '“가평에서 닭갈비 대신 제대로 된 돼지갈비 찾다가 발견한 보물 같은 곳! 된찌 하나만으로도 밥 한 공기 뚝딱입니다.”',
+      },
+      {
+        rank: 2,
+        title: '양념게장과 신선한 채소 등 정갈한 밑반찬 구성',
+        description: '고기와 함께 곁들이기 좋은 신선한 반찬과 구수한 차돌 된장찌개 호평',
+        mentionRate: '방문자 추천',
+        sampleReview: '“평일 낮에도 만석일 정도로 현지인 맛집 느낌 풀풀 나고, 반찬 하나하나 손맛이 살아있어서 정말 맛있게 먹었습니다.”',
+      },
+      {
+        rank: 3,
+        title: '설악IC 인근 가족 외식 및 모임하기 좋은 넓고 쾌적한 매장',
+        description: '아난티 코드 근처 깔끔한 단체석과 편리한 주차 시설로 재방문율 우수',
+        mentionRate: '재방문 만족',
+        sampleReview: '“부모님 생신 모임으로 방문했는데 어른들도 아이들도 너무 좋아하셨어요. 가평 오면 무조건 재방문입니다.”',
+      },
+    ],
+    scoreCard: {
+      menuCount: 14,
+      hasPhotos: true,
+      shortsCount: 0,
+    },
+    aiPlan: {
+      recommendedMenu: '효정수제돼지갈비',
+      hookCopy: '가평 가면 닭갈비만 드시나요? 숯불에 지글지글 구워 육즙 폭발하는 효정수제돼지갈비 실물 영접 🔥',
+      conceptPitch: '숯불 위에서 노릇하게 익어가는 양념갈비의 윤기와 타닥타닥 굽는 ASMR 사운드를 첫 3초에 집중 배치해 방문 욕구를 자극합니다.',
+    },
+    menus: [
+      { name: '효정수제돼지갈비', price: '19,000원', isPopular: true, desc: '명인의 비법 양념으로 숙성한 부드러운 시그니처 돼지갈비' },
+      { name: '삼겹살 (국내산)', price: '19,000원', isPopular: true, desc: '두툼한 육즙이 살아있는 명품 생삼겹살' },
+      { name: '양념소갈비', price: '44,000원', isPopular: false, desc: '특제 간장양념의 깊은 맛이 배어있는 소갈비' },
+      { name: '소생갈비', price: '43,000원', isPopular: false, desc: '마블링이 뛰어난 최상급 프리미엄 소생갈비' },
+      { name: '한우육회', price: '28,000원', isPopular: false, desc: '당일 도축 신선한 한우 우둔살로 버무린 육회' },
+      { name: '차돌 된장찌개', price: '10,000원', isPopular: false, desc: '차돌박이가 듬뿍 들어가 진하고 구수한 찌개' },
+      { name: '양념게장', price: '6,000원', isPopular: false, desc: '매콤달콤한 밥도둑 수제 게장' },
+      { name: '알쓰지 도가니곰탕', price: '16,000원', isPopular: false, desc: '사골과 도가니를 3시간 이상 푹 고아낸 보양식' },
+      { name: '비빔냉면 / 물냉면', price: '9,000원', isPopular: false, desc: '갈비와 찰떡궁합인 시원한 냉면' },
+    ],
+  },
 };
 
 export function generateDynamicDiagnosis(storeName: string): StoreDiagnosticResult {

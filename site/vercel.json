@@ -2,15 +2,7 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/privacy.html",
-      "destination": "/privacy.html"
-    },
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/(.*)",
+      "source": "/((?!api|privacy\\.html|favicon\\.svg|robots\\.txt).*)",
       "destination": "/index.html"
     }
   ],
@@ -26,4 +18,3 @@
     }
   ]
 }
-

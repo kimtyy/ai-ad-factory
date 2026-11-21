@@ -7,10 +7,10 @@ interface SearchScreenProps {
 }
 
 const POPULAR_EXAMPLES = [
+  '효정명인갈비',
   '설맥 가평현리점',
   '제주 돈사돈 본점',
   '어니언 안국',
-  '백소정 건대입구점',
 ];
 
 export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => {
