@@ -170,6 +170,21 @@ fn = script_violation_finder(lst, core_concept=CONCEPT, hook=lst[0], usp=USP, lo
 check(fn(lst[1]) is not None and "나열" in (fn(lst[1]) or ""), "대본 보정 탐지기가 나열형 줄을 LLM 재작성 대상으로 지적")
 
 
+# ---------------------------------------------------------------- 5-2. 공간 컷 안전 문구 (3090683: 건조한 시설 묘사 금지어와 함께 쓰이는 폴백)
+from core.script_guard import find_banned_style as _fbs
+
+space = ["매장 홀", "단체석", "매장 내부 좌석"]
+ext = ["매장 외관 간판", "매장 입구 간판"]
+check(all(_fbs(ow.photo_fallback_line(s, 0, short=sh)) is None and 10 <= len(ow.photo_fallback_line(s, 0, short=sh)) <= 27 for s in space + ext for sh in (True, False)),
+      "공간·외관 안전 문구는 새 시설 묘사 금지어에 걸리지 않고 길이도 알맞음")
+check(all("편안" not in ow.photo_fallback_line(s, 0, short=sh) and "머물" not in ow.photo_fallback_line(s, 0, short=sh) for s in ext for sh in (True, False)),
+      "외관·간판·입구 사진에는 실내 분위기 문구('편안하게 즐기기')를 붙이지 않음")
+check(all("편안" in ow.photo_fallback_line(s, 0, short=True) for s in space), "홀·좌석 사진은 편안하게 머물기 좋은 공간 문구")
+check(all(_fbs(t) is None for t in ["넓은 홀에서 둘러앉아 한 잔 어때요?", "룸이라 도란도란 모이기 좋죠.", "테이블 가득 안주가 올라와요.", "좌석이 넉넉해서 단체로도 편해요.", "드나들기 좋은 위치예요"])
+      and all(_fbs(t) for t in ["둘러앉은 테이블이 줄지어 놓인 매장 안이에요", "통로 따라 좌석이 이어져 드나들기 편하죠"]), "새 시설 묘사 금지어: 건조한 구조 나열만 막고 자연스러운 공간 이야기는 오탐하지 않음")
+from core.mode_policy import CAPTION_POS_OPTIONS, OWNER_TOP_POLICY, RAP_TOP_POLICY
+check(OWNER_TOP_POLICY.center_y == 0.27 and RAP_TOP_POLICY.center_y == 0.27 and "27%" in CAPTION_POS_OPTIONS["top"], "상단 자막 높이 27% (랩형·사장님 상단 정책과 안내 문구가 같은 값)")
+
 # ---------------------------------------------------------------- 6. 프롬프트가 가드와 충돌하지 않음 (권장 어미·예시가 금지 패턴이면 모델이 지시대로 써도 버려져 안전 문구가 남발됨)
 from core.script_guard import find_banned_style
 

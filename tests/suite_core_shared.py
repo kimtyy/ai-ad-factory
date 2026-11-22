@@ -27,7 +27,7 @@ os.environ["OWNER_CAPTION_POS"] = "top"
 top = (get_mode_policy("owner").center_y, get_mode_policy("travel").center_y)
 os.environ.pop("OWNER_CAPTION_POS", None)
 os.environ.pop("TRAVEL_STAY_STYLE", None)
-check(mid == (0.55, 0.50) and stay_mid == 0.55 and top == (0.24, 0.24), f"자막 위치 단일 스위치: 기본 55%(매장·숙소 자동 수집) / 상단 24%(둘 다 같이) — {mid} {stay_mid} {top}")
+check(mid == (0.55, 0.50) and stay_mid == 0.55 and top == (0.27, 0.27), f"자막 위치 단일 스위치: 기본 55%(매장·숙소 자동 수집) / 상단 27%(둘 다 같이) — {mid} {stay_mid} {top}")
 
 # ---------------------------------------------------------------- 2. 2줄 분할 자막은 같은 함수 (모드가 달라도 같은 문장은 같게 나뉨)
 comp = AdCompositor(output_dir=tmp("coreshared_"))

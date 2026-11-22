@@ -127,5 +127,13 @@ def pick(subject: str, index: int = 0, short: bool = False) -> str:
     return tpl[index % len(tpl)].format(n=subject)
 
 
+EXTERIOR_WORDS: Tuple[str, ...] = ("외관", "간판", "입구")
+
+
+def is_exterior(subject: str) -> bool:
+    """매장 밖 사진(외관·간판·입구): 실내 분위기 문구('편안하게 즐기기 좋아요')를 붙이면 어색하다"""
+    return any(w in (subject or "") for w in EXTERIOR_WORDS)
+
+
 def is_space(subject: str) -> bool:
     return any(w in (subject or "") for w in SPACE_WORDS)

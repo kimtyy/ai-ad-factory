@@ -373,29 +373,31 @@ export const ReportScreen: FC<ReportScreenProps> = ({
           <div className="space-y-1.5">
             <div className="w-full aspect-[9/16] rounded-2xl overflow-hidden bg-slate-900 shadow-md border border-slate-200">
               <iframe
-                src="https://www.youtube.com/embed/6G1JpEvY2iw"
+                src="https://www.youtube.com/embed/6G1JpEvY2iw?playsinline=1&rel=0&modestbranding=1"
                 title="샵스토리 제작 쇼츠 샘플 1"
+                loading="lazy"
                 className="w-full h-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
               />
             </div>
             <p className="text-[11px] font-bold text-slate-700 text-center truncate">
-              🎬 설맥 가평현리점 쇼츠
+              🎬 효정명인갈비 쇼츠 ①
             </p>
           </div>
           <div className="space-y-1.5">
             <div className="w-full aspect-[9/16] rounded-2xl overflow-hidden bg-slate-900 shadow-md border border-slate-200">
               <iframe
-                src="https://www.youtube.com/embed/U8FELXcHHIg"
+                src="https://www.youtube.com/embed/U8FELXcHHIg?playsinline=1&rel=0&modestbranding=1"
                 title="샵스토리 제작 쇼츠 샘플 2"
+                loading="lazy"
                 className="w-full h-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
               />
             </div>
             <p className="text-[11px] font-bold text-slate-700 text-center truncate">
-              🎬 효정명인갈비 쇼츠
+              🎬 효정명인갈비 쇼츠 ②
             </p>
           </div>
         </div>
@@ -444,7 +446,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
             </li>
             <li className="flex items-start gap-2">
               <span className="text-[#0F2744] font-bold shrink-0">✓</span>
-              <span><strong>무상 수정 지원:</strong> 영상 전달 후 7일간 자막·목소리·배경음악 수정을 지원합니다.</span>
+              <span><strong>7일 책임 수정 보장:</strong> 영상 전달 후 7일간 자막·목소리·배경음악 수정을 책임지고 지원합니다.</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-[#0F2744] font-bold shrink-0">✓</span>

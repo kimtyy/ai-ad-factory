@@ -319,7 +319,7 @@ scenes = pl.plan(spec, job)
 check(os.environ.get("COMMERCE_SHOP_STYLE") == "1" and get_mode_policy("commerce") is SHOP_POLICY and SHOP_POLICY.center_y == 0.55 and SHOP_POLICY.semantic_chunks,
       "plan()이 18초 5문장 쇼핑 스타일 정책(중단 55%·의미 단위 자막)을 켬")
 os.environ["OWNER_CAPTION_POS"] = "top"
-check(get_mode_policy("commerce") is SHOP_TOP_POLICY and SHOP_TOP_POLICY.center_y == 0.24, "자막 위치 '상단'이면 24%")
+check(get_mode_policy("commerce") is SHOP_TOP_POLICY and SHOP_TOP_POLICY.center_y == 0.27, "자막 위치 '상단'이면 27%")
 os.environ.pop("OWNER_CAPTION_POS", None)
 has = [pl.scene_has_media(s) for s in scenes]
 check(all(has) and scenes[4].get("image_path") == paths[-1] and scenes[0].get("image_path") == paths[0], f"사진 배정: 문장별 컷, 마지막 씬 = 공식 썸네일 ({sum(has)}/5)")

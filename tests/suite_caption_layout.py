@@ -134,14 +134,14 @@ for label, mp in (("ffmpeg 조립", False), ("MoviePy 대체", True)):
     check(d_mid < 0.2 and d_before > 1.0, f"[{label}] 디졸브 중 이전 자막이 이미 꺼져 있음 (자막 유무 차이 {d_mid:.2f}), 그 전엔 보임 ({d_before:.2f})")
     check(wm_early > 50 and wm_top > 50, f"[{label}] 워터마크는 씬 전환에서도 끊기지 않음 (전환 중 {wm_top}px ≈ 평소 {wm_early}px)")
 
-# ---------------------------------------------------------------- 6. 자막 위치 선택: 기본 55%, 상단 여백 24%(가로 사진 중심 52%)
+# ---------------------------------------------------------------- 6. 자막 위치 선택: 기본 55%, 상단 여백 27%(가로 사진 중심 52%)
 import os as _os2
 from core.compositor import AdCompositor as _AC
 _os2.environ.pop("OWNER_CAPTION_POS", None)
 check(get_mode_policy("owner").center_y == 0.55, "기본 자막 위치 55% (채널명·제목·AI 라벨이 올라오는 하단 60~90% 위)")
 _os2.environ["OWNER_CAPTION_POS"] = "top"
 _top = get_mode_policy("owner")
-check(_top.center_y == 0.24 and _top.landscape_fg_center_y == 0.52 and get_mode_policy("travel").center_y == 0.50, "상단 여백 선택: 자막 24%, 가로 사진 중심 52%, 다른 모드는 그대로")
+check(_top.center_y == 0.27 and _top.landscape_fg_center_y == 0.52 and get_mode_policy("travel").center_y == 0.50, "상단 여백 선택: 자막 27%, 가로 사진 중심 52%, 다른 모드는 그대로")
 def _rows(ov):
     a = np.array(ov)[..., 3] > 40 if np.array(ov).shape[-1] == 4 else None
     ys = np.where(a.any(axis=1))[0]
@@ -150,6 +150,6 @@ _cap = "젓가락도 심심하지 않아요!"
 _t0, _t1 = _rows(_AC(output_dir=tmp("cappos_")).create_overlay_image(_cap, None, W, H, mode="owner"))
 _os2.environ.pop("OWNER_CAPTION_POS", None)
 _m0, _m1 = _rows(_AC(output_dir=tmp("cappos_")).create_overlay_image(_cap, None, W, H, mode="owner"))
-check(abs((_m0 + _m1) / 2 - 0.55) < 0.02 and abs((_t0 + _t1) / 2 - 0.24) < 0.02, f"실제 자막 그림 위치: 기본 중심 {(_m0+_m1)/2:.2f}, 상단 {(_t0+_t1)/2:.2f}")
+check(abs((_m0 + _m1) / 2 - 0.55) < 0.02 and abs((_t0 + _t1) / 2 - 0.27) < 0.02, f"실제 자막 그림 위치: 기본 중심 {(_m0+_m1)/2:.2f}, 상단 {(_t0+_t1)/2:.2f}")
 
 finish(fails)

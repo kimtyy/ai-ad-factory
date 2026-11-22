@@ -248,6 +248,8 @@ def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "", short:
     subject = _subject_phrase(tag)                                  # '과일 화채', '반건조 오징어'처럼 명사 끝, 꾸미는 말은 한 낱말까지
     if not subject:
         return ""
+    if _FP.is_exterior(subject):
+        return f"{subject}, 여기가 바로 그곳이에요!" if short else "이 간판이 보이면 바로 그곳이에요, 찾아오세요!"          # 밖에서 찍은 사진: 실내 분위기 문구 대신
     if _FP.is_space(subject):
         return f"{subject}, 편안하게 즐기기 좋아요!" if short else f"여유롭고 아늑한 분위기라 편안하게 머물기 좋아요!"      # 공간 사진은 메뉴 문구 대신 (2초 컷은 짧게)
     tpl = _FP.templates(subject, short)                              # 그 음식 종류에 맞는 문구만 (같은 종류 안에서만 돌려 씀)
