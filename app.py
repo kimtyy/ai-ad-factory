@@ -2010,12 +2010,23 @@ def _lead_autosync():
                                      menu=lead.get("menu", ""), strengths=LL.voted_keywords(home))
     n_photo = 0
     if not offline:
-        _search_store_photos(lead["store"], ss.get("owner_address", "") or lead.get("address", ""), quiet=True)
-        found = list(ss.get("store_photo_candidates") or [])
-        seen = {it.get("link") for it in found}
+        # 공식 플레이스 사진 우선 확보
+        place_photos = bundle.get("photos") or []
         mine = [{"title": lead["store"], "link": p["url"], "thumbnail": p["url"], "width": p.get("width", 0), "height": p.get("height", 0), "source": "official"}
-                for p in (bundle.get("photos") or []) if p.get("url") and p["url"] not in seen]
-        ss["store_photo_candidates"] = (mine + found)[:PHOTO_CANDIDATES]               # 사장님이 플레이스에 올린 공식 사진을 맨 앞에
+                for p in place_photos if p.get("url")]
+
+        # 공식 사진이 충분하면(6장 이상) 무관한 웹 검색 잡사진으로 24장 억지 패딩 방지
+        if len(mine) >= 6:
+            ss["store_photo_candidates"] = mine[:PHOTO_CANDIDATES]
+        else:
+            _search_store_photos(lead["store"], ss.get("owner_address", "") or lead.get("address", ""), quiet=True)
+            found = list(ss.get("store_photo_candidates") or [])
+            seen = {it.get("link") for it in mine}
+            supplement = [it for it in found if it.get("link") not in seen]
+            if ss.get("official_only", True):
+                supplement = [it for it in supplement if it.get("source") != "blog"]
+            max_pad = 12 if ss.get("official_only", True) else PHOTO_CANDIDATES
+            ss["store_photo_candidates"] = (mine + supplement)[:max_pad]
         n_photo = len(ss["store_photo_candidates"])
     if offline:
         ss["lead_sync_note"] = ("info", "Mock/오프라인 모드라 네이버 조회는 건너뛰고 점주 메모·선택 메뉴만 자랑 칸에 넣었어요.")
@@ -2439,7 +2450,7 @@ with edit_box:
     else:
         st.markdown("### [2단계] 🎯 컨셉 잡기")
         _w_pov()
-        st.caption("💡 광고는 1컨셉 1메시지: 영상 전체가 입증할 단 하나의 핵심 이유를 고르세요 (기본안이 자동 선택돼 있어요).")
+        st.caption("💡 1컨셉 1메시지: 영상이 입증할 핵심 이유 1개를 선택하세요.")
 
         st.session_state.setdefault("suggested_concepts", [])
         st.session_state.setdefault("selected_concept_idx", 0)
@@ -2447,7 +2458,7 @@ with edit_box:
         st.session_state.setdefault("selected_core_concept", "")
 
         analyze_concept_btn = st.button(
-            "🔍 사진 팩트 기반 3대 떡상 컨셉 도출하기",
+            "🔍 사진 팩트 기반 3대 컨셉 도출",
             type="primary",
             use_container_width=True,
             help="사진 속 보이는 사실과 입력 정보를 교차 분석해 3가지 결핍 앵글 1컨셉을 제안받아요."
@@ -2510,6 +2521,14 @@ with edit_box:
             if st.session_state.suggested_concepts and not st.session_state.selected_core_concept:
                 st.session_state.selected_core_concept = st.session_state.suggested_concepts[0]["core_concept"]
 
+        # 넘어온 점주 선택 주인공 메뉴가 있다면 1번 추천 컨셉에 필수 반영
+        lead_menu_val = str((st.session_state.get("lead_params") or {}).get("menu") or "").strip()
+        if lead_menu_val and st.session_state.suggested_concepts:
+            from core.concepts import apply_lead_menu
+            st.session_state.suggested_concepts = apply_lead_menu(st.session_state.suggested_concepts, lead_menu_val)
+            if st.session_state.get("selected_concept_idx", 0) == 0:
+                st.session_state.selected_core_concept = st.session_state.suggested_concepts[0]["core_concept"]
+
         concepts = st.session_state.suggested_concepts or []
         raw_concept_labels = []
         for c in concepts:
@@ -2553,7 +2572,7 @@ with edit_box:
             if chosen_idx < len(concepts):
                 active_c = concepts[chosen_idx]
                 st.session_state.selected_core_concept = str(active_c.get("core_concept") or "")
-                st.info(f"🎯 **선택된 코어 컨셉:** {st.session_state.selected_core_concept}\n\n💡 *전략 방향:* {str(active_c.get('description') or '')}")
+                st.info(f"🎯 **선택된 1컨셉:** {st.session_state.selected_core_concept}")
 
 # ==============================================================================
 # 2단계: AI 대본 기획 및 실시간 편집 (st.data_editor)
@@ -2578,7 +2597,7 @@ with edit_box:
         st.session_state.owner_tempo = "rap"
         col_plan_desc = st.container()
     elif is_owner_mode:
-        st.caption("올린 사진 한 장마다 짧은 한 줄 카피가 1:1로 붙어요 (사진 N장 = 2초 카피 N줄).")
+        st.caption("💡 사진 1장당 2초 카피가 1:1로 매칭됩니다.")
         generate_plan_btn = st.button("🚀 선택된 컨셉으로 대본 만들기", use_container_width=True, type="primary", key="generate_plan_btn",
                                       help="사진 1장 = 문장 1개. 문장마다 그 사진에 찍힌 메뉴·장면만 말해요.")
         st.session_state.owner_tempo = "rap"
@@ -2597,12 +2616,14 @@ with edit_box:
                        + (" · ⚠️ Dry-run 테스트 데이터" if hook_hints.is_dryrun else ""))
         elif hook_vertical and hints_enabled():
             st.caption("🔥 레이더 패턴 없음 → 기본 후킹 규칙으로 기획 (🔥 실시간 떡상 레이더 화면에서 수집)")
-        concept_badge = f" | 🎯 1컨셉: **{st.session_state.get('selected_core_concept', '')}**" if st.session_state.get('selected_core_concept') else ""
         if is_memory:
             from core.planners.memory import TONES as _MT, tone_of as _mtone
-            st.caption(f"모드: **🎉 모임·행사·추억** | 분위기: **{_MT[_mtone(st.session_state.get('mem_tone'))]['label']}** | 성우 말투: **{selected_tone_label}**")
+            st.caption(f"🎉 **추억 쇼츠** · {_MT[_mtone(st.session_state.get('mem_tone'))]['label']} · {selected_tone_label}")
         else:
-            st.caption(f"모드: **{production_mode}** | 화자: **{script_style_options.get(selected_script_style, '')}** | 말투: **{selected_tone_label}**{concept_badge}")
+            concept_short = st.session_state.get('selected_core_concept', '')
+            if len(concept_short) > 28:
+                concept_short = concept_short[:28] + "…"
+            st.caption(f"🎯 **{concept_short}** · {script_style_options.get(selected_script_style, '')} · {selected_tone_label}")
 
 def _owner_store_facts() -> dict:
     """붙여 넣은 메뉴판·리뷰 글과 주소에서 뽑은 매장 고유 팩트 (글을 고치면 바로 반영되도록 매번 다시 뽑음)"""

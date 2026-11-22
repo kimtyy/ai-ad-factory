@@ -15,6 +15,20 @@ export const ReportScreen: FC<ReportScreenProps> = ({
   onResetSearch,
 }) => {
   const shortsCount = result.scoreCard.shortsCount || 0;
+  const currentMenu = planOptions.selectedMenu || result.aiPlan.recommendedMenu;
+  const isDefaultMenu = !planOptions.selectedMenu || planOptions.selectedMenu === result.aiPlan.recommendedMenu;
+
+  // 주인공 메뉴 변경 시 3초 훅(Hook) 카피 안의 메뉴명 실시간 동기화
+  const dynamicHookCopy = (() => {
+    if (isDefaultMenu) {
+      return result.aiPlan.hookCopy;
+    }
+    const defaultMenu = result.aiPlan.recommendedMenu;
+    if (defaultMenu && result.aiPlan.hookCopy.includes(defaultMenu)) {
+      return result.aiPlan.hookCopy.split(defaultMenu).join(currentMenu);
+    }
+    return `${result.storeName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${currentMenu} 실물 영접 🔥`;
+  })();
 
   return (
     <div className="px-4 py-6 space-y-6">
@@ -239,11 +253,17 @@ export const ReportScreen: FC<ReportScreenProps> = ({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[16px] font-extrabold text-slate-900">
-                {planOptions.selectedMenu || result.aiPlan.recommendedMenu}
+                {currentMenu}
               </span>
-              <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2 py-0.5 rounded-full">
-                AI 추천
-              </span>
+              {isDefaultMenu ? (
+                <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2 py-0.5 rounded-full">
+                  AI 추천
+                </span>
+              ) : (
+                <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                  직접 선택
+                </span>
+              )}
             </div>
           </div>
 
@@ -252,7 +272,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
               시선을 훔치는 첫 3초 훅(Hook) 카피
             </div>
             <div className="text-[14px] font-bold text-slate-800 leading-relaxed">
-              “{result.aiPlan.hookCopy}”
+              “{dynamicHookCopy}”
             </div>
           </div>
         </div>

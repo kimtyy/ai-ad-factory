@@ -31,6 +31,14 @@ const BGM_OPTIONS = [
   '세련된',
 ];
 
+// 단순 음료/공기밥/사리/부속 항목 필터링 (주인공 메뉴에서 제외)
+const EXCLUDED_SIDE_ITEMS_REGEX = /^(생수|생수\s*\d+[a-zA-Z가-힣]*|콜라|코카콜라|사이다|칠성사이다|환타|웰치스|토닉워터|토닉워터\s*\([^\)]*\)|진로토닉|공기밥|공깃밥|햇반|레몬\s*슬라이스|음료수|캔음료|탄산음료|생과일쥬스|라면사리|우동사리|떡사리|당면사리|소면사리|치즈사리|수제비사리|사리추가|공기밥추가|소주|맥주|참이슬|처음처럼|진로|새로|카스|테라|켈리|막걸리)$/i;
+
+const isExcludedSideItem = (name: string): boolean => {
+  const clean = name.replace(/\s+/g, '').replace(/[(\[（].*?[)\]）]/g, '');
+  return EXCLUDED_SIDE_ITEMS_REGEX.test(clean) || EXCLUDED_SIDE_ITEMS_REGEX.test(name.trim());
+};
+
 export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
   isOpen,
   onClose,
@@ -43,14 +51,18 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
 
   if (!isOpen) return null;
 
+  // 단순 음료/사리 제외한 메인 요리 중심 필터링 (후보가 없으면 전체 메뉴 허용)
+  const validMenus = menus.filter((m) => !isExcludedSideItem(m.name));
+  const menuPool = validMenus.length > 0 ? validMenus : menus;
+
   // AI 추천 2~3개 메뉴
-  const topRecommendedMenus = menus.slice(0, 3).map((m) => m.name);
-  if (!topRecommendedMenus.includes(recommendedMenu) && recommendedMenu) {
+  const topRecommendedMenus = menuPool.slice(0, 3).map((m) => m.name);
+  if (!topRecommendedMenus.includes(recommendedMenu) && recommendedMenu && !isExcludedSideItem(recommendedMenu)) {
     topRecommendedMenus.unshift(recommendedMenu);
   }
 
   // 나머지 메뉴 목록
-  const otherMenus = menus.filter((m) => !topRecommendedMenus.includes(m.name));
+  const otherMenus = menuPool.filter((m) => !topRecommendedMenus.includes(m.name));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">

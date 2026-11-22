@@ -7,9 +7,10 @@ core/concepts.py - 모드별 기본 '1컨셉' 후보 (사진·AI 분석 전에 �
 from typing import Dict, List
 
 
-def default_concepts(mode: str, name: str = "") -> List[Dict[str, str]]:
+def default_concepts(mode: str, name: str = "", lead_menu: str = "") -> List[Dict[str, str]]:
     """mode: travel / commerce / book / video_overlay → [{id, angle, badge, headline, core_concept, description}] (3개)"""
     nm = (name or "").strip()
+    menu = (lead_menu or "").strip()
     if mode == "travel":
         return [
             {"id": "price_view", "angle": "가성비 + 공간 로망", "badge": "💸 1인당 가성비 + 로망 공간", "headline": "이 가격에 이런 숙소가 있다고요?",
@@ -20,7 +21,7 @@ def default_concepts(mode: str, name: str = "") -> List[Dict[str, str]]:
              "core_concept": "개별 온수풀·자쿠지 등 물놀이 시설로 하루를 채우는 숙소", "description": "확인된 물 시설만 말하는 도파민형"},
         ]
     if mode == "commerce":
-        what = nm or "이 상품"
+        what = menu or nm or "이 상품"
         return [
             {"id": "pain_solution", "angle": "불편 해결", "badge": "🔧 생활 속 불편 해결", "headline": "아직도 이렇게 하세요?",
              "core_concept": f"생활 속 불편함 하나를 해결하는 {what}", "description": "기존 방식의 한계를 짚고 단 하나의 킬러 기능으로 해결"},
@@ -42,3 +43,19 @@ def default_concepts(mode: str, name: str = "") -> List[Dict[str, str]]:
         {"id": "highlight", "angle": "하이라이트", "badge": "🔥 하이라이트", "headline": "이 장면이 핵심이에요",
          "core_concept": "영상 속 가장 눈에 띄는 한 장면으로 승부", "description": "촬영 영상의 핵심 장면 하나"},
     ]
+
+
+def apply_lead_menu(concepts: List[Dict[str, str]], lead_menu: str) -> List[Dict[str, str]]:
+    """점주가 선택한 주인공 메뉴가 있으면 1번 추천 컨셉에 필수 반영"""
+    if not concepts or not (lead_menu or "").strip():
+        return concepts
+    menu = lead_menu.strip()
+    out = [dict(c) for c in concepts]
+    c0 = out[0]
+    c0["id"] = "lead_menu_focus"
+    c0["badge"] = f"🍽️ [점주 선택] {menu}"
+    c0["headline"] = f"{menu}, 아직 안 드셔보셨어요?"
+    c0["core_concept"] = f"손님 극찬 시그니처 '{menu}'의 확실한 맛과 독보적 매력"
+    c0["description"] = f"점주님이 선택하신 대표 메뉴 '{menu}'를 주인공으로 손님의 시선을 사로잡는 실속형 1컨셉"
+    out[0] = c0
+    return out

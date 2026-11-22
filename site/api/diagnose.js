@@ -48,15 +48,22 @@ async function fetchNaverBlog(storeName, address, clientId, clientSecret) {
   return [];
 }
 
+// 부동산·매매·양도·임대·폐업 관련 영상 제외 필터 (실제 매장 홍보/후기 영상만 집계)
+const REAL_ESTATE_VIDEO_REGEX = /(양도|매매|임대|폐업|권리금|부동산|점포정리|상가임대|상가매매|매물|임대료|보증금)/i;
+
 // 4. 유튜브 실제 검색 연동 (shortsCount & 대표 영상 제목)
 async function fetchYouTubeVideos(storeName, apiKey) {
   if (apiKey) {
     try {
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(storeName)}&type=video&maxResults=10&key=${apiKey}`;
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(storeName)}&type=video&maxResults=15&key=${apiKey}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        const items = data.items || [];
+        const items = (data.items || []).filter((item) => {
+          const title = item.snippet?.title || '';
+          const desc = item.snippet?.description || '';
+          return !REAL_ESTATE_VIDEO_REGEX.test(title) && !REAL_ESTATE_VIDEO_REGEX.test(desc);
+        });
         return {
           count: items.length,
           sampleTitle: items.length > 0 ? cleanHtml(items[0].snippet.title) : '',
@@ -81,7 +88,7 @@ async function fetchYouTubeVideos(storeName, apiKey) {
       const titleMatches = Array.from(html.matchAll(/"title":\{"runs":\[\{"text":"([^"]+)"\}\]/g));
       const filtered = titleMatches
         .map(m => m[1])
-        .filter(t => t && !t.includes('YouTube') && !t.includes('홈') && !t.includes('동영상'));
+        .filter(t => t && !t.includes('YouTube') && !t.includes('홈') && !t.includes('동영상') && !REAL_ESTATE_VIDEO_REGEX.test(t));
       
       return {
         count: filtered.length,
