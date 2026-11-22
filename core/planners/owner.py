@@ -172,21 +172,11 @@ def _roles_for(business_type: str, count: int) -> List[str]:
 
 
 _CONTAINER_WORDS = {"잔", "접시", "그릇", "컵", "병", "모둠", "세트", "한잔", "한접시", "플레이트", "메뉴판"}
-# 온라인 숏폼 광고 카피 전문가 템플릿: 건조한 AI 설명문("한 입이면 끝!", "테이블마다...") 금지, 감각적이고 생생한 구어체
-_PHOTO_TEMPLATES = (
-    "{n}, 이 비주얼 보면 오늘 바로 가고 싶어질 걸요?",
-    "{n}, 노릇하고 고소한 풍미가 입안 가득 맴돌아요.",
-    "{n}, 시원하고 달콤한 맛에 기분까지 상쾌해지죠.",
-    "{n}, 바삭하고 쫄깃한 식감에 자꾸만 손이 가요.",
-    "{n}, 매콤달콤한 감칠맛에 젓가락을 못 멈추죠.",
-)
-_PHOTO_TEMPLATES_SHORT = (
-    "{n}, 비주얼부터 시선 강탈!",
-    "{n}, 노릇하고 고소한 풍미!",
-    "{n}, 시원 달콤한 감칠맛!",
-    "{n}, 바삭 쫄깃한 이 식감!",
-    "{n}, 자꾸만 손이 가는 맛!",
-)
+# 안전 문구(photo_fallback_line)는 core/food_profiles.py 의 음식 종류별 사전만 쓴다. 예전처럼 씬 번호로 형용사를 돌려 쓰면
+# '설맥치킨, 시원 달콤한 감칠맛!' / '눈꽃빙수, 바삭 쫄깃한 이 식감!'처럼 음식과 형용사가 정반대로 뒤바뀐다. 종류를 모르는 피사체는 중립 문구.
+from core import food_profiles as _FP
+_PHOTO_TEMPLATES = _FP.NEUTRAL_LONG
+_PHOTO_TEMPLATES_SHORT = _FP.NEUTRAL_SHORT
 
 
 def scrub_menus(text: str, banned: List[str]) -> str:
@@ -258,12 +248,11 @@ def photo_fallback_line(tag: str, index: int = 0, core_concept: str = "", short:
     subject = _subject_phrase(tag)                                  # '과일 화채', '반건조 오징어'처럼 명사 끝, 꾸미는 말은 한 낱말까지
     if not subject:
         return ""
-    if any(w in subject for w in ("매장", "홀", "내부", "실내", "좌석", "입구", "외관", "간판", "단체석", "룸")):
-        return f"아늑하고 쾌적한 {subject}에서 편안하게 머물기 좋아요!"      # 공간 사진은 메뉴 문구 대신
-    if short:
-        return _PHOTO_TEMPLATES_SHORT[index % len(_PHOTO_TEMPLATES_SHORT)].format(n=subject)
-    k = 0 if index == 0 else 1 + (index - 1) % (len(_PHOTO_TEMPLATES) - 1)
-    return _PHOTO_TEMPLATES[k].format(n=subject)
+    if _FP.is_space(subject):
+        return f"{subject}, 아늑하고 편안해요!" if short else f"아늑하고 쾌적한 {subject}에서 편안하게 머물기 좋아요!"      # 공간 사진은 메뉴 문구 대신 (2초 컷은 짧게)
+    tpl = _FP.templates(subject, short)                              # 그 음식 종류에 맞는 문구만 (같은 종류 안에서만 돌려 씀)
+    k = 0 if index == 0 or len(tpl) == 1 else 1 + (index - 1) % (len(tpl) - 1)
+    return tpl[k].format(n=subject)
 
 
 def _unsupported_claim(text: str, usp: str) -> Optional[str]:
@@ -405,20 +394,33 @@ def beat_groups(media_sorted: List[str], tags: Dict[str, str]) -> List[List[int]
     return [s1, sorted(s2), s3, sorted(s4), s5]
 
 
+RAP_CTA_MAX = 24            # 2초 컷 자막·TTS에 맞는 마지막 줄 길이 (공백 포함). 상호명이 길어 불가피할 때만 넘김
+
+
 def rap_cta(search_keyword: str, context_kind: str = "") -> str:
-    """랩형 마지막 줄: 저장 유도 없이 상호로 바로 오세요 (예: '오늘 밤 시원한 맥주 생각나면 설맥 가평현리점으로 바로 오세요!')"""
+    """랩형 마지막 줄: 저장 유도 없이 상호로 바로 오세요. 18~24자 안에서 가장 풍성한 문구 (예: '오늘 밤 설맥 가평현리점으로 바로 오세요!')"""
     from core.script_guard import with_josa
     kw = (search_keyword or "").strip()
     if not kw:
         return "오늘 바로 들러 보세요!"
-    lead = {"bar": "오늘 밤 시원한 맥주 생각나면 ", "cafe": "커피 한 잔 생각나면 "}.get(context_kind, "오늘은 ")
-    return f"{lead}{with_josa(kw, '으로/로')} 바로 오세요!"
+    target = with_josa(kw, "으로/로")
+    leads = {"bar": ("오늘 밤 시원한 맥주 생각나면 ", "오늘 밤 한잔하러 ", "오늘 밤 "), "cafe": ("커피 한 잔 생각나면 ", "오늘은 커피 한 잔, ")}.get(context_kind, ("오늘은 ",))
+    for lead in leads + ("",):
+        cand = f"{lead}{target} 바로 오세요!"
+        if len(cand) <= RAP_CTA_MAX:
+            return cand
+    return f"{target} 오세요!"                                           # 상호가 길면 가장 짧은 형태 (상호 공개가 우선)
+
+
+def rap_cta_limit(search_keyword: str, context_kind: str = "") -> int:
+    return max(RAP_CTA_MAX, len(rap_cta(search_keyword, context_kind)))
 
 
 def valid_rap_cta(text: str, search_keyword: str = "") -> bool:
     t = (text or "").strip()
     kw = re.sub(r"\s+", "", search_keyword or "")
-    return bool(t) and len(t) <= 44 and t.endswith("!") and "저장" not in t and "검색" not in t and (not kw or kw in re.sub(r"\s+", "", t)) and not find_banned_style(t)
+    return bool(t) and len(t) <= rap_cta_limit(search_keyword) and t.endswith("!") and "저장" not in t and "검색" not in t \
+        and (not kw or kw in re.sub(r"\s+", "", t)) and not find_banned_style(t)
 
 
 def _scene(i: int, role: str, text: str, hook: str = "") -> Dict[str, Any]:
@@ -520,6 +522,8 @@ def plan_owner_storyboard(
         tag_i = tag_by_scene[i] if i < len(tag_by_scene) else ""
         llm_cta = str(item.get("voiceover") or "").strip() if is_last else ""
         cta_ok = valid_rap_cta(llm_cta, search_keyword) if rap else valid_cta(llm_cta, search_keyword)
+        if is_last and rap and len(llm_cta) > rap_cta_limit(search_keyword, ctx_kind):
+            cta_ok = False                                       # 랩형 CTA는 2초 컷 — 길면 고정 문구(18~24자)로
         text = (llm_cta if (llm_cta and cta_ok) else cta_line) if is_last else str(item.get("voiceover") or "").strip() or (
             photo_fallback_line(tag_i, i, core_concept, short=rap) or lines.get(role, lines["exterior"]))   # 엔진 실패 시에도 1:1 사진 카피 유지
         if not is_last:
@@ -546,7 +550,7 @@ def plan_owner_storyboard(
             if ghost:
                 logger.info(f"[사진에 없는 메뉴 차단] 씬 {i + 1}: '{ghost}' (대사: {text}) → 그 사진을 말하는 문구로 교체")
                 text = safe()
-            if tag_i and photo_subject_issues([text], [tag_i]):
+            if tag_i and photo_subject_issues([text], [tag_i], hook_first=(i == 0)):
                 logger.info(f"[사진-대사 불일치 차단] 씬 {i + 1}: 화면 '{tag_i}' (대사: {text}) → 그 사진을 말하는 문구로 교체")
                 text = safe()
             copied = find_example_copy(text, fact_evidence) or find_invented_menu(text, fact_evidence)
@@ -569,9 +573,11 @@ def plan_owner_storyboard(
             text = sanitize_signboard_words(text)
             text = fix_voice_agreement(text)
             n_cut = len(groups[i]) if i < len(groups) else 1
-            hard_max = 26 if rap else max(VO_HARD_MAX, 12 * n_cut + 8)
+            hard_max = 26 if rap else max(VO_HARD_MAX, 12 * n_cut + 8)      # 랩형 2초 컷 호흡: 이보다 길면 컷이 늘어져 쇼츠 59초를 넘김
             if len(text) > hard_max:
-                text = shorten_line(text, hard_max - 3, hard_max)
+                # 랩형(2초 컷)은 어절을 뚝 잘라 '…달게!'처럼 끊긴 비문을 내보내지 않는다 → 완결된 사진 1:1 안전 문구로
+                safe_text = photo_fallback_line(tag_i, i, core_concept, short=True) if (rap and not is_last and tag_i) else ""
+                text = safe_text or shorten_line(text, hard_max - 3, hard_max)
             if rap:
                 text = text.strip() if re.search(r"[!?,.…]$", text.strip()) else text.strip() + "!"        # 랩형 숏카피: 어미 완성 대신 짧은 끊김 허용
                 text = clamp_line_to_policy(text, pol)
@@ -617,6 +623,8 @@ def plan_owner_storyboard(
             tag_j = tag_by_scene[j] if j < len(tag_by_scene) else ""
             rep_text = photo_fallback_line(tag_j, j, core_concept, short=rap) if tag_j else ""
             if not rep_text:
+                if not core_concept:
+                    continue      # 교체할 근거(사진 피사체·컨셉)가 없으면 원래 줄을 둔다 (긴 업종 템플릿으로 바꾸면 컷이 길어져 59초를 넘김)
                 rep_text = lines.get(roles[j], lines["exterior"])
             scenes[j]["voiceover"] = scenes[j]["subtitle"] = scenes[j]["caption"] = rep_text
 
@@ -872,41 +880,47 @@ JSON만 출력:
 
 OWNER_SYSTEM = build_ad_system_prompt("동네 매장·플레이스", mode="owner")
 # 대본 생성 전용: 전문 숏폼 광고 카피라이터 시스템 프롬프트
-LOCKIN_BLOCK = """[전문 숏폼 광고 카피라이터 4대 절대 원칙]
-당신은 100만 뷰를 터뜨리는 모바일 숏폼 바이럴 광고 카피 전문가입니다.
+LOCKIN_BLOCK = """[전문 숏폼 광고 카피라이터 원칙 — "쇼츠는 광고다. 광고는 1컨셉 1메시지다" + "대본과 화면은 1:1이다"]
+당신은 100만 뷰를 터뜨리는 모바일 숏폼 바이럴 광고 카피 전문가입니다. 이 영상은 '메뉴 소개 목록'이 아니라 '한 줄 스토리'입니다.
 
-1. [사진과 대사 1:1 절대 일치 — 다른 메뉴 억지 복붙 금지]
-   - 각 씬의 대사는 오직 해당 씬 사진의 Vision 판독 결과(화면에 실제로 보이는 메뉴/장면)에만 1:1로 맞춰 작성하세요.
-   - 버터먹은먹태 사진에는 먹태 얘기만, 눈꽃빙수 사진에는 빙수 얘기만 쓰세요.
-   - 1번 사진이 점주 대표 메뉴일 때만 1번 씬에서 그 메뉴를 말하고, 다른 씬에 점주의 주인공 메뉴 이름을 억지로 끼워 넣거나 복붙하지 마세요!
+1. [한 줄 스토리 = 선택된 1컨셉 1메시지]
+   - 점주가 고른 코어 컨셉이 영상 전체의 이야기입니다. 모든 줄은 그 컨셉의 상황·감정을 이어 가는 한 편의 짧은 이야기로 읽혀야 합니다.
+   - 흐름: 훅(그 상황을 짚는 공감) → 증거(각 메뉴가 그 상황의 해답인 이유) → 마무리(그래서 오늘 여기) → CTA(상호명).
+   - 중간 줄 공식 = [그 줄 사진 속 피사체] + [컨셉의 상황과 이어지는 이유 한 가지: 식감·온도·곁들이는 순간].
+   - 줄과 줄은 앞 줄을 받아서 이어 가세요. 앞 줄의 상황을 받는 말('거기에', '이어서', '입가심은', '마무리는', '같이 먹으면')을 자연스럽게 쓰되, '그리고/또한/따라서/그러므로'는 쓰지 마세요.
+   - 실패 예: "{메뉴}, {형용사}!"처럼 메뉴 이름 + 형용사만 나열한 줄, 컨셉의 상황이 한 번도 안 보이는 줄. 컨셉 문구를 그대로 베끼지 말고 그 상황의 말을 새 문장으로 쓰세요.
 
-2. [사진에 없는 과장·숫자 날조 엄격 금지]
-   - "통로 끝까지 이어진 단체석 10명부터 30명까지!"처럼 사진이나 제공된 정보에 없는 인원수, 좌석 수, 거리(N분), 경력(N년) 등 수치를 절대 지어내지 마세요.
-   - 눈에 보이는 공간감("여유롭고 쾌적한 좌석", "도란도란 모이기 좋은 룸")과 실제 메뉴 비주얼만 묘사하세요.
+2. [사진과 대사 1:1 — 다른 메뉴 억지 복붙 금지]
+   - 각 줄은 오직 그 줄 사진의 Vision 판독 결과(화면에 실제로 보이는 메뉴/장면)만 말하세요. 먹태 사진엔 먹태, 빙수 사진엔 빙수만 쓰세요.
+   - 1번 사진이 점주 대표 메뉴일 때만 1번 줄에서 그 메뉴를 말하고, 다른 줄에 주인공 메뉴 이름을 끼워 넣거나 복붙하지 마세요.
+   - 형용사는 그 음식에 어울리는 것만 쓰세요. 빙수·냉면은 시원·사르르·달콤, 치킨·튀김은 바삭·고소, 구이·먹태는 노릇·고소, 찜·탕은 푹·뜨끈. 음식과 정반대의 식감(빙수에 '바삭', 치킨에 '시원 달콤')은 절대 금지.
 
-3. [건조한 설명문 금지 & 살아있는 구어체 카피]
+3. [사진에 없는 과장·숫자 날조 엄격 금지]
+   - 사진이나 제공된 정보에 없는 인원수·좌석 수·거리(N분)·경력(N년)·가격 등 수치를 지어내지 마세요. 눈에 보이는 공간감과 메뉴 비주얼만 묘사하세요.
+
+4. [건조한 설명문 금지 & 살아있는 구어체]
    - 금지어: "테이블마다 자리가 넉넉해 편하게 앉아요", "한 입이면 끝!", "확실한 맛과 독보적 매력", "손님 극찬 시그니처", "이게 이유예요", "직접 보면 알아요", "그래서 찾는 집이에요", "남녀노소 누구나", "정갈한 밑반찬", "극락 그 자체", "맛을 내요", "이어져요".
-   - 각 사진에 실제로 보이는 식감(바삭/쫄깃/노릇), 온도(살얼음/시원/뜨끈), 색감, 풍미를 감각적인 단어로 살려 1줄(14~22자 내외)로 끊어 쓰세요.
-   - 앞뒤 씬과 어미(~죠 / ~해요 / ~네요 / ~거든요 / ~있죠)가 단조롭게 겹치지 않게 리듬감 있게 변주하세요.
+   - 줄마다 14~22자 내외로 끊고, 어미(~죠 / ~해요 / ~네요 / ~예요)를 씬마다 변주해 리듬을 만드세요. '~거든요', '~고요'는 금지 어미입니다.
 
-4. [씬별 역할 분담과 기승전결 숏폼 호흡]
-   - 씬 1 (첫 3초 후킹): 스크롤을 멈추게 하는 강한 질문·공감·비주얼 훅 (상호명 금지, 1번 컷 피사체 직결). 예: "가평 현리에서 2차 안주 고민 끝, 이 비주얼이면 못 참죠."
-   - 중간 씬 (메뉴/공간): 각 사진 속 피사체만 1:1로 살린 한 줄 세일즈 카피.
-   - 마지막 씬 (행동 유도 CTA): 상호명 + 지역/분위기를 자연스럽게 엮어 방문을 당기는 마무리. 예: "오늘 밤 시원한 한 잔, 설맥 가평현리점으로 바로 오세요!"
+5. [씬 역할]
+   - 씬 1(첫 3초 훅): 컨셉의 상황을 짚는 공감·질문 + 1번 사진 피사체 (상호명 금지).
+   - 중간 씬: 위 공식(사진 피사체 1:1 + 컨셉과 이어지는 이유). 마지막 중간 줄은 '그래서 오늘 여기'로 CTA를 자연스럽게 받치세요.
+   - 마지막 씬(CTA): 상호명으로 바로 오게 하는 18~24자의 짧은 한 줄. 길게 늘이지 마세요.
 """
 OWNER_SCRIPT_SYSTEM = OWNER_SYSTEM + "\n\n" + LOCKIN_BLOCK
-FEWSHOT_BLOCK = """[Few-Shot: 1:1 사진 카피 + 숏폼 광고 호흡 예시]
-[Bad 1: 사진과 무관하게 한 메뉴만 복붙]
-화면: <먹태 구이> / 대사: "골뱅이 무침의 확실한 맛과 독보적 매력, 이게 이유예요!" (엉뚱한 메뉴 복붙 금지!)
-[Bad 2: 지어낸 수치·건조한 설명문]
-화면: <테이블 홀> / 대사: "통로 끝까지 이어진 단체석 10명부터 30명까지! 편하게 앉아요." (숫자 날조·건조한 설명 금지!)
+FEWSHOT_BLOCK = """[Few-Shot: 한 줄 스토리 + 사진 1:1 예시 — 다른 업종의 가상 매장입니다. 구조만 배우고, 문구·메뉴는 이 매장의 입력으로 새로 쓰세요(예시 문구 복사 금지)]
+컨셉: "비 오는 날, 뜨끈한 국물이 당길 때"
+[Bad 1: 메뉴 이름 + 형용사만 나열 / 음식과 정반대 형용사]
+사진2 순대국밥 → "순대국밥, 바삭한 식감!"   사진3 수육 → "수육, 시원 달콤한 감칠맛!"   (이야기도 없고, 음식과 형용사가 정반대)
+[Bad 2: 사진과 무관한 말 / 지어낸 수치]
+화면: <테이블 홀> / 대사: "통로 끝까지 이어진 단체석 10명부터 30명까지!"   (숫자 날조·건조한 설명 금지)
 
-[Good: 사진 1:1 매칭 + 살아있는 카피라이터 구어체]
-사진1 <대표 메뉴: 골뱅이 무침> → 1문장(후킹): "가평 현리에서 2차 안주 고민 끝, 이 비주얼이면 못 참죠."
-사진2 <버터먹은먹태> → 2문장: "노릇하게 구워낸 고소한 버터 향에 자꾸만 손이 가요."
-사진3 <치즈 계란말이> → 3문장: "도톰한 계란 속 부드러운 치즈가 폭포처럼 흘러내리네요."
-사진4 <매장 홀 좌석> → 4문장: "탁 트인 쾌적한 공간이라 도란도란 모여 한잔하기 딱이죠."
-사진5 <외관·간판> → 5문장(CTA): "오늘 밤 시원한 한 잔, 설맥 가평현리점으로 바로 오세요!"
+[Good: 컨셉 한 줄 스토리 + 줄마다 그 사진 1:1]
+사진1 <순대국밥> → (훅) "비 오는 날엔 역시 뜨끈한 국물이죠, 이 한 그릇 보세요."
+사진2 <수육> → "거기에 보들보들한 수육 한 점이면 속까지 든든해져요."
+사진3 <깍두기> → "얼큰한 국물엔 아삭한 깍두기가 입가심으로 딱이죠."
+사진4 <매장 홀> → "빗소리 들으며 도란도란 먹기 좋은 자리까지 있죠."
+사진5 <외관·간판> → (CTA) "비 오는 날엔 [상호]로 바로 오세요!"
 """
 
 
@@ -956,15 +970,17 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
     chk_pol = pol if rap or not multi else _dc_replace(pol, max_chars=max(pol.max_chars, 12 * max_cuts + 8))
     if rap:
         scene_rule = (f"- 총 {n}줄 = 사진 {n}장 (줄 i = 사진 i, 위 '문장별 화면 사진·피사체' 목록과 1:1). 한 줄은 2초 안팎의 짧고 강렬한 숏카피입니다. "
-                      f"줄 i는 반드시 그 순간 화면에 나오는 사진 속 피사체만 1:1로 직접 말해야 해요(버터먹은먹태는 먹태만, 눈꽃빙수는 빙수만). 1번 씬의 대표 메뉴를 다른 씬에 억지로 복붙하지 마세요.")
-        length_rule = ("- 각 voiceover는 공백 포함 14~22자의 랩처럼 리듬감 있는 숏카피. '~해요' 완결형뿐 아니라 '~죠', '~네요', '~거든요', '~!' 등 어미를 씬마다 다채롭게 변주하세요. "
+                      f"줄 i는 반드시 그 순간 화면에 나오는 사진 속 피사체만 1:1로 직접 말하되(먹태는 먹태만, 빙수는 빙수만), 그 말이 코어 컨셉의 상황과 이어지는 이유 한 가지(식감·온도·곁들이는 순간)를 함께 담아 "
+                      f"전체가 한 줄 스토리처럼 이어져야 해요. 메뉴 이름 + 형용사만 나열하지 말고, 1번 씬의 대표 메뉴를 다른 씬에 복붙하지 마세요.")
+        length_rule = ("- 각 voiceover는 공백 포함 14~22자의 랩처럼 리듬감 있는 숏카피. '~해요' 완결형뿐 아니라 '~죠', '~네요', '~예요', '~!' 등 어미를 씬마다 다채롭게 변주하세요('~거든요'는 금지 어미). "
                        "비문·어색한 낱말 결합은 금지입니다 (음식에 '한 잔'을 붙이는 '건어물 한 잔', 깨진 낱말 '개와' 같은 표현 금지).")
         readable_rule = ("- [길이] 줄마다 2초 안에 읽히게 14~22자 내외. '테이블마다 자리가 넉넉해 편하게 앉아요', '한 입이면 끝!' 같은 건조한 설명문이나 상투어는 절대 금지.\n"
                          "- [조사·어미 호응] '~이/가'로 시작한 주어 뒤에는 타동사를 쓰지 마세요. '생버섯이 곁들여요'(X) → '생버섯이 곁들여져요'(O) 또는 '생버섯까지 곁들여요'(O).")
-        structure_rule = (f"- [숏폼 카피 구조 (사진 {n}장 = 숏카피 {n}줄)]: 1줄=후킹(상호 없이, 1번 사진 피사체 + 방문 고민/공감. 예: '가평 현리에서 2차 안주 고민 끝, 이 비주얼이면 못 참죠.') → "
-                          f"중간 줄=각 사진 피사체 1:1 묘사(노릇/바삭/살얼음 등 감각적 식감·온도 1줄, 씬마다 어미 변주) → "
-                          f"마지막 줄=상호명으로 바로 오세요 CTA ('{rap_cta(search_keyword, context_kind)}' 형태, 상호명·지역은 이 줄에서만 공개).")
-        last_rule = f"* 마지막 줄은 정확히 '{rap_cta(search_keyword, context_kind)}' 형태로 상호명을 말하며 끝내세요 (상호명·지역은 이 줄에서만 공개)."
+        structure_rule = (f"- [한 줄 스토리 구조 (사진 {n}장 = 숏카피 {n}줄)]: 1줄=훅(코어 컨셉의 상황 공감 + 1번 사진 피사체, 상호 없이) → "
+                          f"중간 줄=각 사진 피사체 1:1 + 컨셉 상황과 이어지는 이유(그 음식에 맞는 식감·온도 1가지, 앞 줄을 받아 이어 가기, 어미 변주) → "
+                          f"마지막 줄=상호명으로 바로 오세요 CTA (18~24자, '{rap_cta(search_keyword, context_kind)}' 형태, 상호명·지역은 이 줄에서만 공개).")
+        last_rule = (f"* 마지막 줄은 정확히 '{rap_cta(search_keyword, context_kind)}' 형태로, 공백 포함 {RAP_CTA_MAX}자 안팎의 짧은 한 줄로 끝내세요 "
+                     f"(상호명·지역은 이 줄에서만 공개, 길게 늘이지 말 것).")
     else:
         scene_rule = (f"- 총 {n}문장({'5문장 호흡' if n == 5 else '사진 1장 = 문장 1개'}). "
                       + ("사진 " + str(len(media)) + "장이 문장에 묶여 있어요: 아래 '문장별 화면 사진·피사체' 목록대로, 한 문장 동안 컷 여러 장이 1.2~1.5초 간격으로 빠르게 전환되는 문장은 "
@@ -972,7 +988,7 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
                       + "각 문장은 반드시 그 순간 화면에 나오는 사진 속 피사체만 1:1로 직접 말해야 합니다(먹태는 먹태만, 빙수는 빙수만). 1번 메뉴를 다른 씬에 억지로 끼워 넣거나 복붙하지 마세요.")
         length_rule = (f"- 각 voiceover는 생생한 구어체 한 문장, 공백 포함 14~24자 내외 (최대 {pol.max_chars}자)."
                        + (f" 단, 컷이 여러 장 전환되는 문장은 컷당 약 11~14자를 더해 길게 쓰세요." if multi else "")
-                       + " 앞뒤 씬과 어미(~죠 / ~해요 / ~네요 / ~거든요 / ~있죠)를 다채롭게 변주하고, '테이블마다 자리가 넉넉해 편하게 앉아요', '한 입이면 끝!' 같은 건조한 설명문은 절대 금지합니다.")
+                       + " 앞뒤 씬과 어미(~죠 / ~해요 / ~네요 / ~예요 / ~있죠)를 다채롭게 변주하고('~거든요'는 금지 어미), '테이블마다 자리가 넉넉해 편하게 앉아요', '한 입이면 끝!' 같은 건조한 설명문은 절대 금지합니다.")
         readable_rule = ("- [길이·자막 가독성] 마지막 CTA를 뺀 각 문장은 공백 포함 14~24자로 간결하게. 자막이 최대 2줄씩 나뉘어 읽혀야 합니다.\n"
                          "  늘어지는 서술어('~하는 분들은 여기서 확인해 보세요')는 빼고, 감각적인 식감·온도·풍미 단어 위주로 쓰세요.")
         structure_rule = ("- [숏폼 비트 리듬형 구조]: 1문장=후킹(상호 없이, 1번 사진 피사체 + 방문 공감/질문) → 중간 문장=각 사진 속 피사체 1:1 묘사(식감·온도·색감 1줄, 어미 변주) "
@@ -984,10 +1000,11 @@ def _plan_with_llm(business_name, usp, business_type, roles, media, cta_line, to
     concept_override_prompt = ""
     if core_concept and core_concept.strip():
         concept_override_prompt = f"""
-[★ 숏폼 광고 테마 & 1컨셉 톤앤매너]
-이번 영상은 점주가 선정한 아래 핵심 테마를 배경 분위기로 삼아 전개합니다.
-단, 각 씬의 구체적인 대사는 반드시 '해당 씬 사진 속 피사체'(버터먹은먹태는 먹태만, 눈꽃빙수는 빙수만)만을 1:1로 묘사해야 하며,
-1번 씬의 주인공 메뉴 이름을 다른 씬에 억지로 끼워 넣거나 복붙하지 마세요!
+[★ 점주 선택 1컨셉 1메시지 = 이 영상의 한 줄 스토리]
+아래 컨셉이 영상 전체의 이야기입니다. 메뉴 사진이 바뀌어도 이야기는 이 컨셉 하나로 이어져야 하고,
+각 줄은 "이 컨셉의 상황에서 그 사진 속 메뉴가 왜 어울리는지"를 말해야 합니다 (메뉴 이름만 나열 금지).
+단, 줄에 등장하는 메뉴·피사체는 반드시 그 줄 사진의 것만 1:1로 쓰고(먹태는 먹태만, 빙수는 빙수만),
+1번 씬의 주인공 메뉴 이름을 다른 씬에 복붙하지 마세요. 컨셉 문구를 그대로 베끼지 말고 그 상황의 말을 새 문장으로 쓰세요.
 ★ 확정된 코어 컨셉: "{core_concept.strip()}"
 JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 """
@@ -1031,7 +1048,7 @@ JSON의 "core_concept" 필드에도 정확히 이 값을 그대로 넣으세요.
 {hook_hints.prompt_block if hook_hints else ""}
 - role은 다음 중 하나: {", ".join(k for k in ROLE_LABELS_KO if k != "cta")} (마지막 씬은 "cta")
 
-JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시지", "story": "기승전결 전체 스토리 요약", "scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
+JSON만 출력: {{"core_concept": "이번 영상의 단 하나의 핵심 메시지", "story": "한 줄 스토리 (40자 이내: 컨셉의 상황 → 메뉴들이 주는 답 → 오늘 여기)", "scenes": [{{"scene_index": 1, "role": "...", "hook_title": "...", "voiceover": "..."}}]}}
 """)
     # 대본 엔진: Claude → OpenAI → Gemini 자동 백업 (core/llm/router.py)
     data, engine = generate_json(contents, OWNER_SCRIPT_SYSTEM, temperature=0.6, gemini_api_key=api_key, purpose="사장님 광고 대본")

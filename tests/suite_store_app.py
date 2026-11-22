@@ -90,14 +90,23 @@ def fake_speech(text, output_path, voice_actor="female_20s", rate=None, pitch=No
 
 tts.generate_speech = fake_speech
 ag.TTS_WORKERS = 1
+_env_keep = {k: _os.environ.get(k) for k in ("OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "TTS_ENGINE")}
+_os.environ["OPENAI_API_KEY"] = ""                    # 키 없는 환경의 기본 경로: Azure 키 없음 → Edge, 백업은 OpenAI 키가 없으니 gTTS (Azure→OpenAI 경로는 suite_tts_engines.py)
+for _k in ("AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "TTS_ENGINE"):
+    _os.environ.pop(_k, None)
 try:
     gen = ag.AssetGenerator(cache_dir=W, mode="owner", audio_mode="voice_and_sub", mock=False)
     scenes = [{"scene_index": i, "voiceover": f"{i}번째 씬 문장이에요!", "duration_sec": 2.0} for i in range(1, 5)]
     out = gen.generate_voices(scenes, force=True)
 finally:
     tts.generate_speech = _gs
+    for _k, _v in _env_keep.items():
+        if _v is None:
+            _os.environ.pop(_k, None)
+        else:
+            _os.environ[_k] = _v
 engines = [c[0] for c in calls]
-check(len(out) == 4 and all(_os.path.exists(p) for p in out) and gen.tts_engine == "gtts", f"Edge 실패 → 전 씬 백업 성우로 완성 ({len(out)}씬, 엔진={gen.tts_engine})")
+check(len(out) == 4 and all(_os.path.exists(p) for p in out) and gen.tts_engine == "gtts", f"Edge 실패(Azure 키 없음) + OpenAI 키 없음 → 전 씬 gTTS로 완성 ({len(out)}씬, 엔진={gen.tts_engine})")
 check(engines.count("gtts") == 4 and engines.count("edge") == 1, f"Edge는 순차(한 씬 실패 시 즉시 전환), 백업은 4씬 모두 같은 엔진: {engines}")
 import json
 meta = [json.load(open(p + ".voice.json", encoding="utf-8")) for p in out]

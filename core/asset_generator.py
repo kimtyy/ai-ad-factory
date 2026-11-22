@@ -334,7 +334,7 @@ class AssetGenerator:
                     cached_actor, cached_engine = _meta.get("voice_actor"), _meta.get("engine", "edge")
             except (OSError, ValueError, AttributeError):
                 cached_actor, cached_engine = None, "edge"
-            if cached_actor != self.voice_actor or cached_engine != getattr(self, "tts_engine", "edge"):
+            if cached_actor != self.voice_actor or cached_engine != self._engine():
                 force = True                        # 성우나 합성 엔진이 다르면 다시 만든다 (한 영상에 두 목소리가 섞이지 않게)
 
         if self.audio_mode == "silent":
@@ -385,7 +385,7 @@ class AssetGenerator:
         metadata_path = audio_path + ".voice.json"
         temp_path = metadata_path + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as cache_file:
-            json.dump({"voice_actor": self.voice_actor, "engine": getattr(self, "tts_engine", "edge")}, cache_file)
+            json.dump({"voice_actor": self.voice_actor, "engine": self._engine()}, cache_file)
         os.replace(temp_path, metadata_path)
 
     def generate_voices(self, scenes: List[Dict[str, Any]], force: bool = False,
@@ -397,11 +397,14 @@ class AssetGenerator:
         try:
             return self._generate_voices_once(scenes, force, on_done)
         except RuntimeError as e:
-            # 백업 성우: Edge-TTS가 어느 한 씬이라도 끝내 실패하면 '전 씬'을 백업 엔진(gTTS)으로 다시 만든다. 한 영상 안에서 목소리가 섞이는 것보다 낫다.
-            if os.getenv("TTS_BACKUP_ALL", "").strip() != "1" or getattr(self, "tts_engine", "edge") != "edge" or self.mock or self.audio_mode == "silent":
+            # 백업 성우: 기본 엔진(Azure 공식 API, 키가 없으면 Edge)이 어느 한 씬이라도 끝내 실패하면 '전 씬'을 백업 엔진(OpenAI, 키가 없으면 gTTS)으로 다시 만든다.
+            # 한 영상 안에서 목소리가 섞이는 것보다 낫다.
+            from core import tts as _tts
+            backup = _tts.backup_engine(self._engine())
+            if os.getenv("TTS_BACKUP_ALL", "").strip() != "1" or not backup or self.mock or self.audio_mode == "silent":
                 raise
-            logger.warning(f"Edge-TTS 실패 → 전 씬 백업 성우(gTTS)로 일괄 전환: {str(e)[:160]}")
-            self.tts_engine = "gtts"
+            logger.warning(f"{self._engine()} 음성 실패 → 전 씬 백업 성우({backup})로 일괄 전환: {str(e)[:160]}")
+            self.tts_engine = backup
             return self._generate_voices_once(scenes, True, on_done)
 
     def _generate_voices_once(self, scenes: List[Dict[str, Any]], force: bool = False,
@@ -428,16 +431,21 @@ class AssetGenerator:
         logger.info(f"씬 음성 {len(scenes)}개 동시 생성 완료 (최대 {TTS_WORKERS}개씩)")
         return [r for r in results if r is not None]
 
+    def _engine(self) -> str:
+        """지금 쓰는 음성 엔진 (백업으로 바뀌었으면 그 엔진, 아니면 기본: Azure 키가 있으면 azure, 없으면 edge)"""
+        from core import tts as _tts
+        return getattr(self, "tts_engine", None) or _tts.default_engine()
+
     def _speak_checked(self, text: str, path: str, rate: str, pitch: str, scene_num: int, keep_commas: bool = False) -> str:
-        """Edge-TTS 합성 + 잘린 응답이면 재시도 (TTS_RETRIES회)"""
+        """음성 합성(기본 Azure 공식 API · 백업 OpenAI · 키 없으면 Edge) + 잘린 응답이면 재시도 (TTS_RETRIES회)"""
         from core.tts import generate_speech
         for attempt in range(TTS_RETRIES + 1):
             generate_speech(text=text, output_path=path, voice_actor=self.voice_actor, rate=rate, pitch=pitch, force=True,
-                            keep_commas=keep_commas, engine=getattr(self, "tts_engine", "edge"))
+                            keep_commas=keep_commas, engine=self._engine())
             sec = _audio_seconds(path)
             if not tts_too_short(text, sec):
                 return path
-            logger.warning(f"씬 {scene_num} Edge-TTS 잘린 응답 ({sec or 0:.2f}초, {len(text)}자) → 재시도 {attempt + 1}/{TTS_RETRIES}")
+            logger.warning(f"씬 {scene_num} 음성 잘린 응답 ({sec or 0:.2f}초, {len(text)}자) → 재시도 {attempt + 1}/{TTS_RETRIES}")
         raise RuntimeError(f"Edge-TTS가 {TTS_RETRIES + 1}회 연속 잘린 음성을 반환 ('{text}')")
 
     def _spoken_hook(self, scene: Dict[str, Any]) -> str:
@@ -496,7 +504,7 @@ class AssetGenerator:
                         f"{_audio_seconds(out_path) or 0:.2f}초) -> {out_path}")
         except Exception as e:
             # 삑 소리 더미나 다른 성우로 조용히 때우지 않는다: 한 씬만 목소리가 바뀌거나 효과음이 나는 영상이 만들어짐
-            logger.error(f"씬 {scene_num} Edge-TTS 음성 생성 실패: {e}")
+            logger.error(f"씬 {scene_num} 음성 생성 실패({self._engine()}): {e}")
             raise RuntimeError(f"씬 {scene_num} 나레이션 음성을 만들지 못했어요 (같은 성우 유지를 위해 다른 음성으로 대체하지 않음): {e}")
         finally:
             for temporary_path in temporary_paths:

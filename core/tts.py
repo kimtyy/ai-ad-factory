@@ -417,6 +417,131 @@ def _run_async_safe(coro):
         return asyncio.run(coro)
 
 
+# ---------------------------------------------------------------- 엔진 선택: 기본 Azure 공식 API → 백업 OpenAI (→ 마지막 수단 gTTS)
+ENGINES = ("azure", "edge", "openai", "gtts")
+AZURE_ATTEMPTS = 4
+OPENAI_ATTEMPTS = 3
+OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
+AZURE_OUTPUT_FORMAT = "audio-24khz-96kbitrate-mono-mp3"
+
+
+def azure_configured() -> bool:
+    return bool(os.getenv("AZURE_SPEECH_KEY", "").strip() and os.getenv("AZURE_SPEECH_REGION", "").strip())
+
+
+def openai_configured() -> bool:
+    return bool(os.getenv("OPENAI_API_KEY", "").strip())
+
+
+def default_engine() -> str:
+    """기본 음성 엔진: TTS_ENGINE 으로 강제하거나, Azure 키·지역이 있으면 azure(공식 API), 없으면 기존 edge(키 없이 동작)"""
+    forced = os.getenv("TTS_ENGINE", "").strip().lower()
+    if forced in ENGINES:
+        return forced
+    return "azure" if azure_configured() else "edge"
+
+
+def backup_engine(primary: str) -> Optional[str]:
+    """기본 엔진이 끝내 실패했을 때 전 씬을 다시 만들 백업 엔진: OpenAI(키가 있을 때) → 없으면 gTTS. 이미 백업이면 None (더 넘길 곳 없음)"""
+    forced = os.getenv("TTS_BACKUP_ENGINE", "").strip().lower()
+    if forced in ENGINES and forced != primary:
+        return forced
+    if primary == "gtts" or (primary == "openai" and not forced):
+        return None
+    if primary != "openai" and openai_configured():
+        return "openai"
+    return "gtts" if primary != "gtts" else None
+
+
+def _is_female_voice(voice: str) -> bool:
+    return "SunHi" in (voice or "")
+
+
+def _speed_from_rate(rate: str) -> float:
+    """'+18%' → 1.18, '-5%' → 0.95 (OpenAI는 배속 숫자, 범위 0.25~4.0)"""
+    m = re.match(r"^\s*([+-]?\d+(?:\.\d+)?)\s*%\s*$", rate or "")
+    return round(min(4.0, max(0.25, 1.0 + float(m.group(1)) / 100.0)), 2) if m else 1.0
+
+
+def _azure_ssml(text: str, voice: str, rate: str, pitch: str) -> str:
+    from xml.sax.saxutils import escape
+    return ("<speak version='1.0' xml:lang='ko-KR' xmlns='http://www.w3.org/2001/10/synthesis'>"
+            f"<voice name='{voice}'><prosody rate='{rate}' pitch='{pitch}'>{escape(text)}</prosody></voice></speak>")
+
+
+def _azure_synthesize(text: str, voice: str, rate: str, pitch: str, output_path: str, post=None) -> None:
+    """Azure Speech 공식 REST API (키·지역은 환경변수). 429/5xx는 호출자가 재시도, 401/403/400은 즉시 오류"""
+    import requests
+    post = post or requests.post
+    region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    url = os.getenv("AZURE_SPEECH_ENDPOINT", "").strip() or f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    r = post(url, data=_azure_ssml(text, voice, rate, pitch).encode("utf-8"), timeout=30, headers={
+        "Ocp-Apim-Subscription-Key": os.getenv("AZURE_SPEECH_KEY", "").strip(), "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": AZURE_OUTPUT_FORMAT, "User-Agent": "shopstory-tts"})
+    if r.status_code != 200 or not r.content:
+        raise _TtsHttpError("Azure Speech", r.status_code, getattr(r, "text", "")[:160])
+    with open(output_path, "wb") as f:
+        f.write(r.content)
+
+
+class _TtsHttpError(RuntimeError):
+    def __init__(self, who: str, status: int, detail: str = ""):
+        super().__init__(f"{who} HTTP {status} {detail}".strip())
+        self.status = status
+
+    @property
+    def retryable(self) -> bool:
+        return self.status in (408, 425, 429) or self.status >= 500
+
+
+def _openai_synthesize(text: str, voice: str, rate: str, output_path: str, post=None) -> None:
+    """OpenAI TTS (백업 성우). gpt-4o-mini-tts는 말투를 instructions로, tts-1 계열은 speed 숫자로 지정"""
+    import requests
+    post = post or requests.post
+    model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
+    female = _is_female_voice(voice)
+    name = (os.getenv("OPENAI_TTS_VOICE_FEMALE", "nova") if female else os.getenv("OPENAI_TTS_VOICE_MALE", "onyx")).strip()
+    body = {"model": model, "voice": name, "input": text, "response_format": "mp3"}
+    # OpenAI 음성은 같은 대사를 Edge/Azure보다 훨씬 느리게 읽는다 (실측: 23자 문장 gpt-4o-mini-tts 4.4초 vs Edge 2.3초) → 2초 컷 영상에 맞게 속도를 보정한다.
+    # speed는 두 모델 모두 지원. 보정 계수는 OPENAI_TTS_PACE 로 조정 (기본: gpt-4o-mini-tts 1.45, tts-1 계열 1.1)
+    try:
+        pace = float(os.getenv("OPENAI_TTS_PACE", "") or (1.1 if model.startswith("tts-1") else 1.45))
+    except ValueError:
+        pace = 1.45
+    body["speed"] = round(min(4.0, max(0.25, _speed_from_rate(rate) * pace)), 2)
+    if not model.startswith("tts-1"):             # tts-1 계열은 instructions 미지원
+        body["instructions"] = (f"한국어 동네 매장 홍보 숏폼 나레이션입니다. {'밝고' if female else '차분하고'} 또렷하게 읽어 주세요. "
+                                "문장 끝을 늘어뜨리지 말고 자연스러운 한국어 억양으로 말하세요.")
+    r = post(OPENAI_TTS_URL, json=body, timeout=60, headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '').strip()}"})
+    if r.status_code != 200 or not r.content:
+        raise _TtsHttpError("OpenAI TTS", r.status_code, getattr(r, "text", "")[:160])
+    with open(output_path, "wb") as f:
+        f.write(r.content)
+
+
+def _synthesize_with_retries(who: str, attempts: int, fn, output_path: str) -> str:
+    """공식 API 공통 재시도: 일시 오류(429·5xx·네트워크)만 재시도하고, 키·권한·요청 오류(400·401·403)는 바로 알린다"""
+    import time
+    last: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            fn()
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                logger.info(f"[{who} 성공] {output_path} ({os.path.getsize(output_path):,} bytes)")
+                return output_path
+            raise RuntimeError(f"{who} 출력 파일이 비어 있어요")
+        except _TtsHttpError as e:
+            last = e
+            if not e.retryable:
+                break
+        except Exception as e:                                   # 네트워크 끊김·시간 초과 등
+            last = e
+        if attempt < attempts:
+            logger.warning(f"[{who} 재시도] {attempt}/{attempts} 실패 ({last}), {attempt:.0f}초 뒤 다시")
+            time.sleep(1.0 * attempt)
+    raise RuntimeError(f"{who} 합성 실패 ({last}). 목소리 일관성을 위해 한 씬만 다른 엔진으로 대체하지 않았어요.")
+
+
 EDGE_ATTEMPTS = 5          # Edge-TTS는 간헐 403/429가 있어 충분히 재시도 (다른 엔진으로 넘기면 씬마다 목소리가 달라짐)
 
 
@@ -428,10 +553,10 @@ def generate_speech(
     pitch: str = DEFAULT_PITCH,
     force: bool = False,
     keep_commas: bool = False,
-    engine: str = "edge",
+    engine: Optional[str] = None,
 ) -> str:
     """
-    Edge-TTS를 이용해 고품질 한국어 나레이션 오디오 파일(MP3)을 생성합니다.
+    한국어 나레이션 오디오 파일(MP3)을 생성합니다. 엔진: azure(기본, 공식 API) / openai(백업) / edge(키 없을 때) / gtts(마지막 수단). engine=None이면 default_engine().
     
     Args:
         text: 나레이션 대사
@@ -447,7 +572,8 @@ def generate_speech(
         logger.info(f"[TTS Cache Hit] {output_path}")
         return output_path
 
-    # 성우 보이스 자동 매핑
+    engine = (engine or default_engine()).strip().lower()
+    # 성우 보이스 자동 매핑 (Azure 공식 API도 Edge와 같은 ko-KR-SunHiNeural / InJoonNeural 이름을 쓴다)
     voice = resolve_edge_voice(voice_actor)
     cleaned = clean_tts_text(text, keep_commas=keep_commas)
     if not cleaned:
@@ -463,8 +589,17 @@ def generate_speech(
     print(f"[TTS] [오디오 설정] Rate={rate}, Pitch={pitch} -> 대상 파일: {output_path}")
     print(f"[TTS] ========================================================")
 
+    if engine == "azure":
+        if not azure_configured():
+            raise RuntimeError("Azure Speech 키·지역이 없어요 (환경변수 AZURE_SPEECH_KEY, AZURE_SPEECH_REGION)")
+        return _synthesize_with_retries("Azure Speech", AZURE_ATTEMPTS, lambda: _azure_synthesize(cleaned, voice, rate, pitch, output_path), output_path)
+    if engine == "openai":
+        if not openai_configured():
+            raise RuntimeError("OpenAI 키가 없어요 (환경변수 OPENAI_API_KEY)")
+        return _synthesize_with_retries("OpenAI TTS", OPENAI_ATTEMPTS, lambda: _openai_synthesize(cleaned, voice, rate, output_path), output_path)
+
     if engine == "gtts":
-        # 백업 성우: 마이크로소프트가 막혔을 때 모든 씬을 같은 엔진(gTTS)으로 만들기 위해 Edge를 건너뛰고 바로 합성 (목소리 일관성 유지)
+        # 마지막 수단 성우: 마이크로소프트·OpenAI가 모두 안 될 때 모든 씬을 같은 엔진(gTTS)으로 만들기 위해 Edge를 건너뛰고 바로 합성 (목소리 일관성 유지)
         try:
             from gtts import gTTS
             gTTS(text=cleaned, lang="ko", slow=False).save(output_path)

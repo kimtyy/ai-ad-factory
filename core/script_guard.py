@@ -700,13 +700,25 @@ def menu_switch_issues(lines: List[str], core_concept: str = "", line_tags: Opti
     return issues
 
 
+_DEICTIC_HOOK = re.compile(r"이\s*(비주얼|맛|메뉴|조합|모습|한\s*(상|접시|판|그릇|잔|입))")
+
+
+def _related_words(tag: str) -> set:
+    from core.food_profiles import related_words
+    out: set = set()
+    for part in (tag or "").split(" / "):
+        out |= related_words(part)
+    return out
+
+
 _PHOTO_STOP = {"사진", "접시", "그릇", "테이블", "탁자", "놓여", "놓인", "있는", "담긴", "모습", "클로즈업", "위에", "나란히", "가득", "여러", "함께", "손님", "배경", "화면", "전체"}
 
 
-def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]]) -> Dict[int, str]:
+def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]], hook_first: bool = False) -> Dict[int, str]:
     """
     문장마다 '그 순간 화면에 나오는 사진 속 피사체(line_tags[i])'를 직접 말하는지. 피사체의 낱말(어미·조사를 뗀 말)이 문장에 하나도 없으면
-    → {줄 번호: 고칠 방향}. 사진 속 화채·먹태 장면에서 성우가 맥주 거품 이야기만 하는 사진-대본 불일치를 막는다
+    → {줄 번호: 고칠 방향}. 사진 속 화채·먹태 장면에서 성우가 맥주 거품 이야기만 하는 사진-대본 불일치를 막는다.
+    hook_first=True면 첫 줄(훅)은 메뉴 이름 없이 컨셉의 상황을 말해도 되고, 다른 사진의 메뉴만 말하지 않으면 통과 (줄 하나씩 검사할 때는 첫 줄일 때만 True)
     """
     out: Dict[int, str] = {}
     for i, t in enumerate(lines):
@@ -716,6 +728,13 @@ def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]]) -> Di
         keys = {k for k in (content_stems(tag) | set(re.findall(r"[가-힣A-Za-z]{2,}", tag))) if k not in _PHOTO_STOP and len(k) >= 2}
         if not keys:
             continue
+        if i == 0 and hook_first:
+            # 훅은 컨셉의 상황을 먼저 짚는 줄이라 메뉴 이름이 없어도 된다: '이 비주얼이면…'처럼 화면을 가리키거나, 다른 사진의 메뉴를 말하지만 않으면 통과
+            if _DEICTIC_HOOK.search(t):
+                continue
+            other = next((w for w in DISH_WORDS if w in re.sub(r"\s+", "", t) and w not in re.sub(r"\s+", "", tag)), None)
+            if not other:
+                continue
         sent = re.sub(r"\s+", "", t)
         tag_n = re.sub(r"\s+", "", tag)
         parts = [x.strip() for x in tag.split(" / ") if x.strip()]
@@ -731,6 +750,8 @@ def photo_subject_issues(lines: List[str], line_tags: Optional[List[str]]) -> Di
             continue
         if any(k in sent for k in keys) or any(len(w) >= 2 and w in tag_n for w in content_stems(t)):
             continue
+        if any(w in sent for w in _related_words(tag)):
+            continue                                              # 메뉴 이름 대신 그 음식의 연관어(빙수 → 살얼음·사르르)로 말해도 같은 사진
         out[i] = f"이 문장이 나오는 화면은 '{tag}' → 문장이 이 사진 속 피사체를 직접 말해야 해요 (다른 사진 이야기 금지)"
     return out
 
@@ -798,6 +819,25 @@ def unique_fact_issues(lines: List[str], usp: str = "", need: int = 2) -> Dict[i
     return {1: "입력된 특장점의 고유 명사(반찬·재료·손질/숙성 방식·리뷰 문구)를 2개 이상 구체적으로 넣기 (추상적 맛 표현 대신)"}
 
 
+_LISTING_LINE = re.compile(r"^[가-힣A-Za-z0-9 ]{2,14}[,，]\s*[^,，]{2,18}[!.]?$")
+
+
+def listing_issues(lines: List[str], line_tags: Optional[List[str]] = None) -> Dict[int, str]:
+    """'{메뉴}, 노릇하고 고소한 풍미!'처럼 메뉴 이름 + 형용사 한 덩어리뿐인 줄이 2개 이상 → 이야기 없이 메뉴를 나열한 대본 ({줄 번호: 고칠 방향}).
+    훅(첫 줄)은 제외. 1컨셉 1메시지의 상황과 이어지는 문장으로 다시 쓰게 한다"""
+    hits = []
+    for i, t in enumerate(lines):
+        if i == 0 or not (t or "").strip():
+            continue
+        tag = (line_tags[i] if line_tags and i < len(line_tags) else "") or ""
+        m = _LISTING_LINE.match(t.strip())
+        if m and (not tag.strip() or re.sub(r"\s+", "", t.split(",")[0].split("，")[0]) in re.sub(r"\s+", "", tag)):
+            hits.append(i)
+    if len(hits) < 2:
+        return {}
+    return {i: "메뉴 이름 + 형용사만 나열(이야기 없음) → 앞 줄의 상황을 받아 '그 상황에서 이 메뉴가 어울리는 이유'를 한 문장으로 이어 쓰기 (메뉴 이름은 문장 안에 자연스럽게)" for i in hits[:2]}
+
+
 def script_violation_finder(lines: List[str], core_concept: str = "", hook: str = "", rhythm: Optional[bool] = None,
                             usp: str = "", lock_topic: bool = False, line_tags: Optional[List[str]] = None, evidence: str = "",
                             business_name: str = "", region: str = "", context_kind: str = ""):
@@ -833,7 +873,7 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
             if w:
                 flagged.setdefault(lines[i], f"이 업종 손님의 실제 방문 맥락과 어긋나는 말('{w}') → 저녁 먹고 2차·퇴근 후 1차처럼 실제로 찾는 순간으로 쓰기")
     if line_tags and any((x or "").strip() for x in line_tags):
-        for i, msg in photo_subject_issues(lines, line_tags).items():
+        for i, msg in photo_subject_issues(lines, line_tags, hook_first=True).items():
             flagged.setdefault(lines[i], msg)
     if lock_topic:
         for i, msg in hook_situation_issues(lines, region).items():
@@ -843,6 +883,8 @@ def script_violation_finder(lines: List[str], core_concept: str = "", hook: str 
         for i, msg in topic_lock_issues(lines, core_concept, usp, line_tags).items():
             flagged.setdefault(lines[i], msg)
         for i, msg in menu_switch_issues(lines, core_concept, line_tags).items():
+            flagged.setdefault(lines[i], msg)
+        for i, msg in listing_issues(lines, line_tags).items():
             flagged.setdefault(lines[i], msg)
     if core_concept:
         for i, msg in concept_coverage_issues(lines, core_concept).items():
@@ -1179,6 +1221,7 @@ def diversify_exclamations(lines: List[str], reserved: str = "") -> Tuple[List[s
 # ---------------------------------------------------------------- 사진에 없는 공식 메뉴 금지 (No Photo = No Script Mention)
 _FOOD_HEADS = ("피자", "치킨", "빙수", "스테이크", "스테이키", "불고기", "먹태", "골뱅이", "오징어", "맥주", "냉면", "국수", "아구찜", "코다리", "만두", "묵사발",
                "감자튀김", "파스타", "볶음밥", "닭발", "화채", "쌀국수", "부대찌개", "소세지", "나쵸", "튀김", "새우", "두부", "계란찜", "하이볼", "소주", "막걸리")
+_GENERIC_DRINK_HEADS = {"맥주", "소주", "막걸리", "하이볼"}
 _MENU_GENERIC = {"무침", "세트", "메뉴", "기본", "스페셜", "모듬", "모둠", "대", "중", "소", "특", "한판", "한마리", "반마리", "인분", "추가", "사리", "음료", "주류"}
 
 
@@ -1211,6 +1254,9 @@ def find_unphotographed_menu(text: str, official_menus: Iterable[str], photo_tex
         kws = menu_keywords(menu)
         if not kws or any(k in pt for k in kws):
             continue                                             # 사진에 있는 메뉴 → 말해도 됨
+        whole = re.sub(r"[\(\[].*?[\)\]]", "", menu or "")
+        whole = re.sub(r"\s+", "", whole)
+        kws = [k for k in kws if k not in _GENERIC_DRINK_HEADS or k == whole]      # '눈꽃맥주' 메뉴가 없어도 '맥주 생각나죠'는 업종 이야기라 허용
         if any(k in t for k in kws):
             return menu
     return None

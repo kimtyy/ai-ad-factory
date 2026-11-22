@@ -106,8 +106,8 @@ try:
     sc8 = plan(PATHS, TAGMAP, RAP[:7], tempo="rap")
     check(len(sc8) == 8 and all(not s.get("media_group") or len(s["media_group"]) == 1 for s in sc8), f"랩형: 사진 8장 → 줄 8개 (사진을 쪼개 붙이지 않음): {len(sc8)}씬")
     bad = [i for i in range(7) if photo_subject_issues([sc8[i]["voiceover"]], [TAGS[i]])]
-    check(not bad and "설맥" in sc8[-1]["voiceover"] and "주말 외식" not in sc8[-1]["voiceover"] and sc8[-1]["voiceover"].startswith("오늘 밤 시원한 맥주 생각나면"),
-          f"랩형: 줄마다 그 사진의 피사체, 마지막은 '상호로 바로 오세요': {[s['voiceover'] for s in sc8[:2]]} … {sc8[-1]['voiceover']}")
+    check(not bad and "설맥" in sc8[-1]["voiceover"] and "주말 외식" not in sc8[-1]["voiceover"] and sc8[-1]["voiceover"].endswith("바로 오세요!") and len(sc8[-1]["voiceover"]) <= 24,
+          f"랩형: 줄마다 그 사진의 피사체, 마지막은 '상호로 바로 오세요'(24자 이내): {[s['voiceover'] for s in sc8[:2]]} … {sc8[-1]['voiceover']}")
     check(all(len(s["voiceover"]) <= 26 for s in sc8[:-1]) and all(abs(s["duration_sec"] - 2.0) < 0.01 for s in sc8) and abs(sum(s["duration_sec"] for s in sc8) - 16.0) < 0.5,
           f"랩형: 줄당 26자 이내·2초, 합계 {sum(s['duration_sec'] for s in sc8):.1f}초 (16~18초 템포, 30초로 늘어지지 않음)")
     # 사진-대본 불일치(설맥 영상 결함): 화채·먹태 화면에서 맥주 거품 이야기만
@@ -146,7 +146,8 @@ try:
     check(photo_subject_issues([snack], [scb[2].get("photo_tag") or " / ".join(TAGS[1:5])]) == {}, "비트형: 안주 문장이 4컷 피사체와 모두 맞음")
     # 안주 문장이 일부 안주만 말하거나 엉뚱하면 4컷을 모두 호명하는 안전 문구로 교체
     off = ow.photo_fallback_line(" / ".join(["골뱅이소면 한 접시", "과일 화채", "먹태", "반건조 오징어"]))
-    check(all(w in off for w in ("골뱅이", "화채", "먹태", "오징어")) and "안주 라인업" in off, f"안전 문구도 4컷 안주를 순서대로 호명: {off}")
+    _o = [off.find(w) for w in ("골뱅이", "화채", "먹태", "오징어")]
+    check(all(x >= 0 for x in _o) and _o == sorted(_o), f"안전 문구도 4컷 안주를 순서대로 호명: {off}")
     sc5 = plan(PATHS[:5], dict(zip(PATHS[:5], TAGS[:5])), BEAT + ["x"], tempo="beat")
     check(len(sc5) == 5 and all(not s.get("media_group") or len(s["media_group"]) == 1 for s in sc5), f"사진 5장 이하는 비트형도 1장 = 1문장 ({len(sc5)})")
     scb10 = plan(p10, t10, BEAT, tempo="beat")
