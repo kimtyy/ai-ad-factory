@@ -151,29 +151,93 @@ async function fetchNaverPlaceMenu(storeName) {
     if (!apolloMatch) return { placeId: pid, menus: [] };
 
     const state = JSON.parse(apolloMatch[1]);
-    const menus = [];
+    const groupOf = new Map();
+
+    for (const [key, val] of Object.entries(state)) {
+      if (!val || typeof val !== 'object') continue;
+      const t = String(val.__typename || key.split(':')[0]);
+      if (t.includes('Menu') && (t.includes('Group') || t.includes('Category'))) {
+        for (const ref of val.menus || []) {
+          if (ref && ref.__ref && !groupOf.has(ref.__ref)) {
+            groupOf.set(ref.__ref, String(val.name || ''));
+          }
+        }
+      }
+    }
+
+    const tier1 = [];
+    const tier2 = [];
+    const tier3 = [];
+    const seen = new Set();
+    let orderIndex = 0;
 
     for (const [key, val] of Object.entries(state)) {
       if (!val || typeof val !== 'object') continue;
       const typeName = String(val.__typename || key.split(':')[0]);
-      if (typeName.includes('Menu') && !typeName.includes('Group') && val.name) {
-        let price = '';
-        if (typeof val.price === 'string' || typeof val.price === 'number') {
-          price = String(val.price);
-        } else if (val.price && typeof val.price === 'object') {
-          price = val.price.displayText || val.price.price || '';
-        }
-        if (price && !price.endsWith('원') && !isNaN(Number(price))) {
-          price = Number(price).toLocaleString('ko-KR') + '원';
-        }
+      if (!typeName.includes('Menu') || typeName.includes('Group') || typeName.includes('Category') || !val.name) continue;
 
-        menus.push({
-          name: cleanHtml(val.name),
-          price: cleanHtml(price),
-          desc: cleanHtml(val.desc || val.description || ''),
-          isPopular: Boolean(val.isPopular || val.isSignature || val.recommend || menus.length < 2),
-        });
+      const rawName = cleanHtml(val.name).replace(/[(\[（].*?[)\]）]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (rawName.length < 2 || seen.has(rawName)) continue;
+      seen.add(rawName);
+
+      let price = '';
+      if (typeof val.price === 'string' || typeof val.price === 'number') {
+        price = String(val.price);
+      } else if (val.price && typeof val.price === 'object') {
+        price = val.price.displayText || val.price.price || '';
       }
+      if (price && !price.endsWith('원') && !isNaN(Number(price))) {
+        price = Number(price).toLocaleString('ko-KR') + '원';
+      }
+
+      const group = groupOf.get(key) || '';
+      const isPopular = Boolean(
+        val.isPopular ||
+        val.isSignature ||
+        val.recommend ||
+        val.isRecommended ||
+        val.isRepresentative ||
+        /대표|시그니처|SIGNATURE|BEST|인기|추천/i.test(group)
+      );
+
+      const item = {
+        name: rawName,
+        price: cleanHtml(price),
+        desc: cleanHtml(val.desc || val.description || ''),
+        isPopular,
+        order: orderIndex++,
+      };
+
+      const isDelivery = /baemin|yogiyo|coupang|delivery/i.test(typeName) || /배달/i.test(group);
+      const isTakeout = /takeout|packaging|pickup/i.test(typeName) || /포장/i.test(group);
+
+      if (isDelivery) {
+        tier3.push(item);
+      } else if (isTakeout) {
+        tier2.push(item);
+      } else {
+        tier1.push(item);
+      }
+    }
+
+    const sortFn = (a, b) => {
+      if (a.isPopular && !b.isPopular) return -1;
+      if (!a.isPopular && b.isPopular) return 1;
+      return a.order - b.order;
+    };
+
+    tier1.sort(sortFn);
+    tier2.sort(sortFn);
+    tier3.sort(sortFn);
+
+    let menus = [];
+    if (tier1.length > 0 || tier2.length > 0) {
+      menus = [...tier1, ...tier2];
+      for (const d of tier3) {
+        menus.push({ ...d, isPopular: false });
+      }
+    } else {
+      menus = tier3;
     }
 
     return { placeId: pid, menus };
@@ -289,7 +353,12 @@ export default async function handler(req, res) {
       ];
     }
 
-    const recommendedMenu = menus[0]?.name || `${resolvedName} 대표 메뉴`;
+    // 주인공 추천 메뉴 (단순 음료·공기밥 제외, 인기/대표 우선)
+    const DRINK_RICE_REGEX = /^(콜라|사이다|환타|웰치스|음료수|탄산음료|공기밥|공깃밥|생수|물|토닉워터|레몬슬라이스|주류|소주|맥주|막걸리)(\s*\(.*\))?$/;
+    const candidates = menus.filter((m) => !DRINK_RICE_REGEX.test(m.name.trim()));
+    const menuPool = candidates.length > 0 ? candidates : menus;
+    const popMenu = menuPool.find((m) => m.isPopular);
+    const recommendedMenu = popMenu ? popMenu.name : (menuPool[0]?.name || `${resolvedName} 대표 메뉴`);
 
     // 3. 실제 손님 블로그 리뷰 기반 필살기 TOP 3 생성
     const topStrengths = [];

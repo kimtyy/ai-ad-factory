@@ -190,17 +190,20 @@ export default async function handler(req, res) {
     // 1. 정확한 placeId (선택한 지점의 상호+주소로 찾고, 주소가 안 맞는 동명 지점은 버린다)
     if (!placeId) placeId = await findPlaceId(trimmedName, givenAddress);
 
-    // 2. 병렬 수집: 플레이스 공식 홈·메뉴판 / 지역 검색 / 블로그 후기(지점 필터) / 유튜브
+    // 2. 홈 정보 우선 조회 (홈 정보의 keywords 를 메뉴판 파싱 가중치에 연동)
+    const home = placeId ? await fetchPlaceHome(placeId) : null;
+    const keywords = (home && home.keywords) || [];
+
+    // 3. 병렬 수집: 플레이스 공식 메뉴판 / 지역 검색 / 블로그 후기(지점 필터) / 유튜브
     const regionHint = regionTokens(givenAddress)[0] || '';
-    const [home, officialMenus, localItems, blogItems, youtubeResult] = await Promise.all([
-      placeId ? fetchPlaceHome(placeId) : Promise.resolve(null),
-      placeId ? fetchPlaceMenus(placeId) : Promise.resolve([]),
+    const [officialMenusRaw, localItems, blogItems, youtubeResult] = await Promise.all([
+      placeId ? fetchPlaceMenus(placeId, keywords) : Promise.resolve([]),
       searchLocal(`${trimmedName} ${regionHint}`.trim(), clientId, clientSecret, 5),
       fetchNaverBlog(trimmedName, givenAddress, clientId, clientSecret),
       fetchYouTubeVideos(trimmedName, youtubeApiKey),
     ]);
 
-    // 3. 매장명·주소·업종: 플레이스 공식 > 주소가 맞는 지역 검색 결과 > 입력값
+    // 4. 매장명·주소·업종: 플레이스 공식 > 주소가 맞는 지역 검색 결과 > 입력값
     let localItem = null;
     if (localItems.length > 0) {
       localItem = [...localItems].sort((a, b) => {
@@ -217,8 +220,9 @@ export default async function handler(req, res) {
       || '네이버 플레이스 등록 매장';
     const category = (home && home.category) || (localItem ? cleanHtml(localItem.category) : '일반음식점');
 
-    // 4. 메뉴판: 공식 메뉴가 없을 때만 안내용 임시 항목 (menusSource 로 구분)
-    let menus = officialMenus || [];
+    // 5. 메뉴판: 공식 메뉴가 없을 때만 안내용 임시 항목 (menusSource 로 구분)
+    let menus = officialMenusRaw || [];
+
     const menusSource = menus.length > 0 ? 'official' : 'fallback';
     if (menus.length === 0) {
       menus = [
@@ -228,7 +232,27 @@ export default async function handler(req, res) {
     } else {
       menus = menus.map((m, i) => ({ ...m, isPopular: Boolean(m.isPopular || i < 2) }));
     }
-    const recommendedMenu = (menusSource === 'official' && (menus.find((m) => m.isPopular) || menus[0]).name) || menus[0].name;
+
+    // 주인공 추천 메뉴 (AI 쇼츠 기획용) 선정
+    // 단순 음료·공기밥 등은 주인공 메뉴에서 제외
+    const DRINK_RICE_REGEX = /^(콜라|사이다|환타|웰치스|음료수|탄산음료|공기밥|공깃밥|생수|물|토닉워터|레몬슬라이스|주류|소주|맥주|막걸리)(\s*\(.*\))?$/;
+    const candidates = menus.filter((m) => !DRINK_RICE_REGEX.test(m.name.trim()));
+    const menuPool = candidates.length > 0 ? candidates : menus;
+
+    let recommendedMenu = '';
+    // 1순위: 사장님 등록 대표 키워드와 일치/포함되는 공식 메뉴
+    const matchedKwMenu = menuPool.find((m) => keywords.some((k) => m.name.includes(k) || k.includes(m.name)));
+    if (matchedKwMenu) {
+      recommendedMenu = matchedKwMenu.name;
+    } else if (keywords.length > 0 && keywords[0]) {
+      // 2순위: 배달 메뉴(쌀국수 등)만 있어 키워드 일치 메뉴가 없을 때, 사장님이 스마트플레이스에 직접 등록한 대표 키워드
+      recommendedMenu = keywords[0];
+    } else {
+      // 3순위: 인기/대표 메뉴 또는 첫 번째 메뉴
+      const popMenu = menuPool.find((m) => m.isPopular);
+      recommendedMenu = popMenu ? popMenu.name : (menuPool[0]?.name || `${resolvedName} 대표 메뉴`);
+    }
+
     const keywordMenu = home && home.keywords.find((k) => menus.some((m) => m.name.includes(k)));
     const topKeyword = keywordMenu || (home && home.keywords[0]) || '';
 

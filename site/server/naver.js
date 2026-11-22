@@ -111,39 +111,124 @@ function typeOf(key, val) {
   return String((val && val.__typename) || String(key).split(':')[0]);
 }
 
-export function parseMenus(state) {
-  const menus = [];
-  const seen = new Set();
+export function parseMenus(state, keywords = []) {
   const groupOf = new Map();
   for (const [key, val] of Object.entries(state || {})) {
     if (!val || typeof val !== 'object') continue;
     const t = typeOf(key, val);
-    if (t.includes('Menu') && t.includes('Group')) {
+    if (t.includes('Menu') && (t.includes('Group') || t.includes('Category'))) {
       for (const ref of val.menus || []) {
         if (ref && ref.__ref && !groupOf.has(ref.__ref)) groupOf.set(ref.__ref, String(val.name || ''));
       }
     }
   }
+
+  const tier1 = []; // 매장(홀) 공식 메뉴
+  const tier2 = []; // 포장 메뉴
+  const tier3 = []; // 배달 메뉴
+  const seen = new Set();
+
+  const kwList = Array.isArray(keywords) ? keywords.filter((k) => typeof k === 'string' && k.trim().length >= 2) : [];
+  const kwTokens = [];
+  for (const k of kwList) {
+    const cleanK = String(k).replace(/[^가-힣A-Za-z0-9]/g, '');
+    for (let i = 0; i <= cleanK.length - 2; i++) {
+      const sub = cleanK.slice(i, i + 2);
+      if (!kwTokens.includes(sub)) kwTokens.push(sub);
+    }
+  }
+
+  let orderIndex = 0;
   for (const [key, val] of Object.entries(state || {})) {
     if (!val || typeof val !== 'object') continue;
     const t = typeOf(key, val);
-    if (!t.includes('Menu') || t.includes('Group') || !val.name) continue;
-    const name = cleanHtml(val.name).replace(/[(\[（].*?[)\]）]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (name.length < 2 || seen.has(name)) continue;
-    seen.add(name);
+    if (!t.includes('Menu') || t.includes('Group') || t.includes('Category') || !val.name) continue;
+
+    const rawName = cleanHtml(val.name).replace(/[(\[（].*?[)\]）]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (rawName.length < 2 || seen.has(rawName)) continue;
+    seen.add(rawName);
+
     let price = '';
     if (typeof val.price === 'string' || typeof val.price === 'number') price = String(val.price);
     else if (val.price && typeof val.price === 'object') price = val.price.displayText || val.price.price || '';
     if (price && !price.endsWith('원') && !isNaN(Number(price))) price = Number(price).toLocaleString('ko-KR') + '원';
+
     const group = groupOf.get(key) || '';
-    menus.push({
-      name,
+    const isKeywordExact = kwList.some((k) => rawName.includes(k) || k.includes(rawName));
+    const isTokenMatch = kwTokens.some((tok) => rawName.includes(tok));
+    const isKeywordMatch = isKeywordExact || isTokenMatch;
+
+    const isPopular = Boolean(
+      val.recommend ||
+      val.isRecommended ||
+      val.isRepresentative ||
+      val.isSignature ||
+      /대표|시그니처|SIGNATURE|BEST|인기|추천/i.test(group) ||
+      isKeywordMatch
+    );
+
+    const item = {
+      name: rawName,
       price: cleanHtml(price),
       desc: cleanHtml(val.desc || val.description || ''),
-      isPopular: Boolean(val.recommend || val.isRecommended || val.isSignature || /대표|시그니처|SIGNATURE|BEST/i.test(group)),
-    });
+      isPopular,
+      order: orderIndex++,
+      isKeywordMatch,
+      isKeywordExact,
+    };
+
+    // Tier 분류
+    const isDelivery = /baemin|yogiyo|coupang|delivery/i.test(t) || /배달/i.test(group);
+    const isTakeout = /takeout|packaging|pickup/i.test(t) || /포장/i.test(group);
+
+    if (isDelivery) {
+      tier3.push(item);
+    } else if (isTakeout) {
+      tier2.push(item);
+    } else {
+      tier1.push(item);
+    }
   }
-  return menus;
+
+  // Tier 내부 정렬: 대표/인기(isPopular) 우선, 그 안에서 원래 순서 보존
+  const sortFn = (a, b) => {
+    if (a.isPopular && !b.isPopular) return -1;
+    if (!a.isPopular && b.isPopular) return 1;
+    return a.order - b.order;
+  };
+
+  tier1.sort(sortFn);
+  tier2.sort(sortFn);
+  tier3.sort(sortFn);
+
+  // 병합 전략: 1순위 홀 -> 2순위 포장 -> 3순위 배달
+  let merged = [];
+  if (tier1.length > 0 || tier2.length > 0) {
+    merged = [...tier1, ...tier2];
+    // 홀/포장이 있는 경우 배달 메뉴는 뒤에 붙이되 isPopular 강등 (홀 대표를 가리지 않도록)
+    for (const d of tier3) {
+      merged.push({ ...d, isPopular: false });
+    }
+  } else {
+    // 홀/포장 메뉴가 아예 없는 매장은 배달 메뉴를 온전히 사용하되:
+    // 키워드가 주어진 경우 배달 메뉴 자체의 '대표메뉴' 그룹명보다 사장님 등록 키워드 연관 메뉴를 최상단으로 우선!
+    const hasAnyKwMatch = tier3.some((d) => d.isKeywordMatch);
+    if (hasAnyKwMatch) {
+      tier3.forEach((d) => {
+        if (!d.isKeywordMatch) d.isPopular = false;
+      });
+    }
+    tier3.sort((a, b) => {
+      if (a.isKeywordExact && !b.isKeywordExact) return -1;
+      if (!a.isKeywordExact && b.isKeywordExact) return 1;
+      if (a.isKeywordMatch && !b.isKeywordMatch) return -1;
+      if (!a.isKeywordMatch && b.isKeywordMatch) return 1;
+      return sortFn(a, b);
+    });
+    merged = tier3;
+  }
+
+  return merged.map(({ isKeywordMatch, isKeywordExact, order, ...rest }) => rest);
 }
 
 // 홈 페이지: 매장 기본정보·대표 키워드·좌석·편의시설·방문자가 고른 키워드·이 매장에 연결된 블로그 후기
@@ -254,11 +339,11 @@ export async function fetchPlaceHome(placeId) {
   }
 }
 
-export async function fetchPlaceMenus(placeId) {
+export async function fetchPlaceMenus(placeId, keywords = []) {
   if (!/^\d{6,}$/.test(String(placeId || ''))) return [];
   try {
     const html = await getText(`https://m.place.naver.com/place/${placeId}/menu/list`, { 'User-Agent': UA, 'Accept-Language': 'ko-KR,ko;q=0.9' }, 8000);
-    return parseMenus(parseApolloState(html));
+    return parseMenus(parseApolloState(html), keywords);
   } catch (e) {
     console.warn('place menu error:', e.message);
     return [];

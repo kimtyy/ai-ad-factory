@@ -79,16 +79,62 @@ def parse_menu_page(html: str) -> Dict[str, Any]:
             if rk and rk not in group_of:
                 group_of[rk] = str(g.get("name") or "")
                 group_order[rk] = int(g.get("order") or 0)
+
+    tier1: List[Dict[str, Any]] = []
+    tier2: List[Dict[str, Any]] = []
+    tier3: List[Dict[str, Any]] = []
     seen = set()
+
     for key, it in sorted(items.items(), key=lambda kv: (group_order.get(kv[0], 99), kv[1].get("order") or 0)):
         name = normalize_menu_name(str(it.get("name") or ""))
         if len(name) < 2 or name in seen:
             continue
         seen.add(name)
         price = re.sub(r"[^\d]", "", str(it.get("price") or ""))
-        out["menus"].append({"name": name, "price": int(price) if price else 0, "desc": re.sub(r"\s+", " ", str(it.get("desc") or "")).strip()[:120],
-                             "group": group_of.get(key, ""), "rep": bool(it.get("recommend") or it.get("isRecommended") or it.get("isRepresentative")
-                                                                         or group_of.get(key, "") in ("대표메뉴", "대표 메뉴", "SIGNATURE", "시그니처"))})
+        group = group_of.get(key, "")
+        rep = bool(
+            it.get("recommend")
+            or it.get("isRecommended")
+            or it.get("isRepresentative")
+            or it.get("isSignature")
+            or it.get("isPopular")
+            or any(s in group for s in ("대표", "시그니처", "SIGNATURE", "BEST", "인기", "추천"))
+        )
+        item = {
+            "name": name,
+            "price": int(price) if price else 0,
+            "desc": re.sub(r"\s+", " ", str(it.get("desc") or "")).strip()[:120],
+            "group": group,
+            "rep": rep,
+            "order": (group_order.get(key, 99), it.get("order") or 0),
+        }
+
+        tname = str(it.get("__typename") or key.split(":")[0]).lower()
+        group_lower = group.lower()
+        is_delivery = any(w in tname for w in ("baemin", "yogiyo", "coupang", "delivery")) or "배달" in group_lower
+        is_takeout = any(w in tname for w in ("takeout", "packaging", "pickup")) or "포장" in group_lower
+
+        if is_delivery:
+            tier3.append(item)
+        elif is_takeout:
+            tier2.append(item)
+        else:
+            tier1.append(item)
+
+    tier1.sort(key=lambda x: (not x["rep"], x["order"]))
+    tier2.sort(key=lambda x: (not x["rep"], x["order"]))
+    tier3.sort(key=lambda x: (not x["rep"], x["order"]))
+
+    if tier1 or tier2:
+        merged = tier1 + tier2
+        for d in tier3:
+            d_copy = dict(d)
+            d_copy["rep"] = False
+            merged.append(d_copy)
+    else:
+        merged = tier3
+
+    out["menus"] = [{k: v for k, v in m.items() if k != "order"} for m in merged]
     km = re.search(r'"keywordList":\[(.*?)\]', html or "")
     if km:
         try:
@@ -385,10 +431,13 @@ def fetch_place_bundle(place_id: str, get: Optional[Callable[..., str]] = None) 
     keywords = page["keywords"] or ((home or {}).get("keywords") or [])
     if not (menus or keywords or home):
         return out
-    names = [m["name"] for m in menus]
+    names = []
     for k in keywords:
-        if k not in names:
+        if k and k not in names:
             names.append(k)
+    for m in menus:
+        if m["name"] not in names:
+            names.append(m["name"])
     out.update(menus=menus, keywords=keywords, names=names, place_id=pid, url=url, source="naver_place",
                place_name=(home or {}).get("name") or page.get("place_name", ""), home=home, official_summary=build_official_summary(home),
                photos=(home or {}).get("photos") or [], road_address=((home or {}).get("road_address") or (home or {}).get("address") or ""),
