@@ -7,6 +7,7 @@ interface LeadModalProps {
   onClose: () => void;
   storeName: string;
   planOptions: PlanOptions;
+  onChangeOptions: (newOptions: PlanOptions) => void;
   onSubmit: (lead: LeadSubmission) => Promise<void>;
   isCompleted: boolean;
   onResetAll: () => void;
@@ -17,6 +18,7 @@ export const LeadModal: FC<LeadModalProps> = ({
   onClose,
   storeName,
   planOptions,
+  onChangeOptions,
   onSubmit,
   isCompleted,
   onResetAll,
@@ -67,7 +69,13 @@ export const LeadModal: FC<LeadModalProps> = ({
         storeName,
         ownerName: ownerName.trim(),
         phoneNumber,
-        planOptions,
+        // selectedMenu·font·voice·bgm 과 함께 선택한 지점의 주소·placeId·사장님 메모를 저장 (작업실이 그대로 이어받는다)
+        planOptions: {
+          ...planOptions,
+          address: planOptions.address || '',
+          placeId: planOptions.placeId || '',
+          ownerMemo: (planOptions.ownerMemo || '').trim(),
+        },
         createdAt: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -180,6 +188,20 @@ export const LeadModal: FC<LeadModalProps> = ({
                 <p className="text-[10px] text-slate-400 mt-1">
                   * 영상 제작 완료 알림 및 영상 파일을 카카오톡으로 전송해 드립니다.
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  꼭 강조할 점 · 수정 요청 <span className="font-medium text-slate-400">(선택)</span>
+                </label>
+                <input
+                  type="text"
+                  value={planOptions.ownerMemo || ''}
+                  maxLength={80}
+                  onChange={(e) => onChangeOptions({ ...planOptions, ownerMemo: e.target.value })}
+                  placeholder="예: 단체석 30석 완비, 한우육회 메인 강조"
+                  className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 placeholder-slate-400 transition-all"
+                />
               </div>
 
               {/* 개인정보 수집 동의 */}

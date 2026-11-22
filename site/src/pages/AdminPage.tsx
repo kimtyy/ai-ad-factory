@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { FC, FormEvent } from 'react';
 import { LeadRecord } from '../types';
+import { buildStudioUrl } from '../utils/studioUrl';
 
 export const AdminPage: FC = () => {
   const [token, setToken] = useState<string | null>(null);
@@ -361,6 +362,14 @@ export const AdminPage: FC = () => {
                             {lead.planOptions?.bgm || 'BGM'}
                           </span>
                         </div>
+                        {lead.planOptions?.ownerMemo && (
+                          <div className="mt-1.5 px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-semibold max-w-xs">
+                            📝 사장님 메모: {lead.planOptions.ownerMemo}
+                          </div>
+                        )}
+                        {lead.planOptions?.address && (
+                          <div className="mt-1 text-[10px] text-slate-400 max-w-xs truncate">📍 {lead.planOptions.address}</div>
+                        )}
                       </td>
 
                       {/* 진행 상태 변경 드롭다운 */}
@@ -390,7 +399,7 @@ export const AdminPage: FC = () => {
                       {/* 작업실 열기 버튼 */}
                       <td className="py-3.5 px-4 text-right whitespace-nowrap">
                         <a
-                          href="https://shopstory-store.streamlit.app"
+                          href={buildStudioUrl(lead)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white text-xs font-bold shadow-xs active:scale-95 transition-all"

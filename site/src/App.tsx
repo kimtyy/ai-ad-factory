@@ -6,7 +6,7 @@ import { PlanBottomSheet } from './components/PlanBottomSheet';
 import { LeadModal } from './components/LeadModal';
 import { StickyCTA } from './components/StickyCTA';
 import { AdminPage } from './pages/AdminPage';
-import { StoreDiagnosticResult, PlanOptions, LeadSubmission } from './types';
+import { StoreDiagnosticResult, PlanOptions, LeadSubmission, StoreCandidate } from './types';
 import { diagnoseStore, submitLead } from './services/api';
 
 export default function App() {
@@ -28,6 +28,9 @@ export default function App() {
     font: '감성 명조 (AI 추천)',
     voice: '밝은 여성 (AI 추천)',
     bgm: 'AI 추천',
+    address: '',
+    placeId: '',
+    ownerMemo: '',
   });
 
   // UI 모달 / 바텀시트 상태
@@ -36,16 +39,20 @@ export default function App() {
   const [isLeadCompleted, setIsLeadCompleted] = useState(false);
 
   // 1. 매장 진단 실행
-  const handleSearch = async (query: string) => {
+  const handleSearch = async (query: string, candidate?: StoreCandidate) => {
     setIsLoading(true);
     setStoreName(query);
 
     try {
-      const result = await diagnoseStore(query);
+      // 선택한 지점의 주소를 함께 보내 같은 이름의 다른 지점 정보가 섞이지 않게 한다
+      const chosenAddress = candidate ? candidate.roadAddress || candidate.address : '';
+      const result = await diagnoseStore(query, { address: chosenAddress });
       setDiagnosticResult(result);
       setPlanOptions((prev) => ({
         ...prev,
         selectedMenu: result.aiPlan.recommendedMenu,
+        address: result.address && result.address !== '네이버 플레이스 등록 매장' ? result.address : chosenAddress,
+        placeId: result.placeId || '',
       }));
       // 화면 상단으로 부드럽게 스크롤
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -69,6 +76,9 @@ export default function App() {
       font: '감성 명조 (AI 추천)',
       voice: '밝은 여성 (AI 추천)',
       bgm: 'AI 추천',
+      address: '',
+      placeId: '',
+      ownerMemo: '',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -147,6 +157,7 @@ export default function App() {
           onClose={() => setIsLeadModalOpen(false)}
           storeName={diagnosticResult?.storeName || storeName}
           planOptions={planOptions}
+          onChangeOptions={setPlanOptions}
           onSubmit={handleLeadSubmit}
           isCompleted={isLeadCompleted}
           onResetAll={handleResetAll}

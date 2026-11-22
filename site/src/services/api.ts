@@ -1,7 +1,27 @@
-import { StoreDiagnosticResult, LeadSubmission } from '../types';
+import { StoreDiagnosticResult, LeadSubmission, StoreCandidate } from '../types';
 import { generateDynamicDiagnosis } from '../data/mockStores';
 
-export async function diagnoseStore(storeName: string): Promise<StoreDiagnosticResult> {
+// 상호명 입력 중 실제 매장 후보 (최대 5개). 실패하면 빈 목록 → 화면은 기존처럼 입력한 상호명으로 진단한다
+export async function searchStores(q: string, signal?: AbortSignal): Promise<StoreCandidate[]> {
+  const trimmed = q.trim();
+  if (trimmed.length < 2) return [];
+  try {
+    const res = await fetch(`/api/search-stores?q=${encodeURIComponent(trimmed)}`, { signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.items) ? (data.items as StoreCandidate[]) : [];
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'AbortError') {
+      console.warn('Backend /api/search-stores unavailable:', err);
+    }
+    return [];
+  }
+}
+
+export async function diagnoseStore(
+  storeName: string,
+  opts: { address?: string; placeId?: string } = {},
+): Promise<StoreDiagnosticResult> {
   const trimmed = storeName.trim();
   if (!trimmed) {
     throw new Error('상호명을 입력해 주세요.');
@@ -11,7 +31,7 @@ export async function diagnoseStore(storeName: string): Promise<StoreDiagnosticR
     const res = await fetch('/api/diagnose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storeName: trimmed }),
+      body: JSON.stringify({ storeName: trimmed, address: opts.address || '', placeId: opts.placeId || '' }),
     });
 
     if (res.ok) {

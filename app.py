@@ -262,6 +262,7 @@ if "job" not in st.session_state:
     # 폴더는 첫 저장 시점에 생성됨 (접속만 한 세션은 빈 폴더를 남기지 않음)
     st.session_state.job = JobContext.create(app="streamlit")
 
+PHOTO_CANDIDATES = 24          # 1단계 하단 갤러리에 보여줄 공식 홍보 이미지 후보 최대 개수 (예전 12장)
 UPLOAD_TYPES = ["jpg", "jpeg", "png", "webp", "heic", "heif", "mp4", "mov", "m4v"]      # 안드로이드·아이폰 갤러리 형식(HEIC·WebP)은 올릴 때 JPG로 바꿔 저장
 
 
@@ -442,6 +443,10 @@ def render_media_manager():
                             st.rerun()
         nonce = st.session_state.get("media_uploader_nonce", 0)
         curr_mode = st.session_state.get("production_mode", "owner")
+        _pid = st.session_state.get("lead_place_id") or st.session_state.get("place_id") or (st.session_state.get("official_menu_meta") or {}).get("place_id") or ""
+        if STORE_APP and not is_memory and re.fullmatch(r"\d{6,15}", str(_pid)):
+            st.link_button("📍 네이버 플레이스 사진 바로 열기 ↗", f"https://m.place.naver.com/place/{_pid}/photo", use_container_width=True,
+                           help="사진이 부족하면 플레이스에서 사진을 보고 내려받아 아래에서 올려 주세요")
         # 📱 모바일 전용 경량 업로더(커스텀 컴포넌트): 안드로이드 크롬 + Streamlit Cloud iframe에서는 기본 업로더(PUT /_stcore/upload_file)가 파일을 못 보내는 일이 있어,
         # 브라우저에서 사진을 줄여 컴포넌트 채널로 직접 보낸다. 같은 묶음(batch_id)은 rerun마다 다시 돌아오므로 한 번만 저장한다.
         from core.media.upload import decode_batch
@@ -687,6 +692,34 @@ if "style_init" not in st.session_state:
     st.session_state.style_init = True
     _apply_mode_style(pipeline_mode)
 
+# 📋 접수 리드 연동 (랜딩 /admin → [🎬 작업실 열기]): 주소 뒤 파라미터(store·address·place_id·menu·font·voice·bgm·memo)를 읽어
+# 상호·주소와 자막 폰트·성우·BGM 초기값을 장착한다. 아직 위젯이 그려지기 전이라 세션 값만 바꾸고, 네트워크 조회는 1단계 앞(_lead_autosync)에서 한 번만 한다.
+if STORE_APP:
+    from core.lead_link import lead_signature, parse_lead_params, style_from_lead
+    try:
+        _lead = parse_lead_params(st.query_params)
+    except Exception:
+        _lead = None
+    if _lead and st.session_state.get("lead_sig") != lead_signature(_lead):
+        _ss = st.session_state
+        _ss["lead_sig"], _ss["lead_params"], _ss["lead_sync_pending"] = lead_signature(_lead), _lead, True
+        _ss["store_kind"] = "shop"
+        _ss["owner_name"], _ss["owner_search_kw"] = _lead["store"], _lead["store"]
+        if _lead["address"]:
+            _ss["owner_address"] = _lead["address"]
+        _sty = style_from_lead(_lead)
+        _style = dict((_ss.get("style_by_mode") or {}).get("owner") or MODE_PRESETS["owner"])
+        if _sty["font"]:
+            _style["font"] = _sty["font"]
+        if _sty["audio"]:
+            _style["audio"] = _sty["audio"]
+        _ss.setdefault("style_by_mode", {})["owner"] = _style
+        _ss["audio_choice"], _ss["caption_font_choice"], _ss["caption_pos"] = _style["audio"], _style["font"], _style["pos"]
+        if _sty["actor"] and _sty["actor"] in VOICE_ACTOR_PROFILES:
+            _ss["lead_actor_pending"] = _sty["actor"]              # 성우 위젯 값은 아래 '첫 진입 성우 설정' 뒤에 장착
+        if _sty["bgm_mood"]:
+            _ss["bgm_on"], _ss["bgm_choice"] = True, bgm_mod.mood_choice(_sty["bgm_mood"])
+
 # [안전장치] 콜백 타이밍 외에도 모드 변경이 감지되면 즉시 캐시 초기화
 if "_prev_pipeline_mode" in st.session_state and st.session_state._prev_pipeline_mode != pipeline_mode:
     reset_mode_session_state(st.session_state._prev_pipeline_mode, pipeline_mode)
@@ -780,7 +813,8 @@ def _store_reset():
     ss.show_home = False
     reset_mode_session_state("owner", "owner")
     for _k in ("official_menu_text", "official_menu_meta", "owner_menu_text", "owner_review_text", "photo_tags", "photo_buckets", "engine_info",
-               "store_photo_candidates", "web_photo_paths", "place_results", "keep_photo_order", "use_unconfirmed_facts"):
+               "store_photo_candidates", "web_photo_paths", "place_results", "keep_photo_order", "use_unconfirmed_facts",
+               "lead_params", "lead_sync_note", "lead_place_id", "lead_sync_pending"):
         ss.pop(_k, None)
     if ss.get("store_kind") == "memory":
         _apply_memory_tone()
@@ -975,6 +1009,9 @@ if "script_style_radio" not in st.session_state or st.session_state.script_style
 if not st.session_state.get("voice_preset_seeded"):
     _apply_voice_preset()                                  # 첫 진입: 기본 화자 시점에 맞는 성우·말투로 시작
     st.session_state.voice_preset_seeded = True
+if st.session_state.get("lead_actor_pending") in VOICE_ACTOR_PROFILES:       # 접수 리드가 고른 성우는 위 기본 성우 설정 뒤에 덮어 장착
+    st.session_state.selected_actor = st.session_state.pop("lead_actor_pending")
+    st.session_state.voice_actor_select_box = VOICE_ACTOR_PROFILES[st.session_state.selected_actor]["name"]
 selected_script_style = st.session_state.script_style_radio
 st.session_state.script_style = selected_script_style
 
@@ -1625,7 +1662,7 @@ def _search_store_photos(name: str, address: str = "", quiet: bool = False):
     region = short_region(region_of(address)) if address else ""
     with st.spinner("🖼️ 매장 사진 후보를 찾는 중... (네이버 이미지 검색)"):
         res = _sp.search_store_images(name.strip(), region, os.getenv("NAVER_CLIENT_ID", ""), os.getenv("NAVER_CLIENT_SECRET", ""),
-                                      official_only=bool(st.session_state.get("official_only", True)))
+                                      official_only=bool(st.session_state.get("official_only", True)), max_items=PHOTO_CANDIDATES)
         if res["items"] and api_key:
             res["items"] = _sp.screen_candidates(res["items"], api_key)          # 사람·워터마크·글씨 사진은 자동 제외 표시
     for k in [k for k in st.session_state.keys() if str(k).startswith("webpick_")]:
@@ -1866,7 +1903,7 @@ def _use_selected_web_photos(checked: list, keep_gallery: bool = False):
 
 
 def _render_photo_gallery():
-    """수집된 후보 사진 최대 12장을 4열 갤러리로: 각 사진 밑 '✅ 사용' 체크(상위 8장 기본), 사람 얼굴·영수증·메뉴판 글자 사진은 체크 해제"""
+    """수집된 후보 사진 최대 24장을 4열 갤러리로: 각 사진 밑 '✅ 사용' 체크(상위 8장 기본), 사람 얼굴·영수증·메뉴판 글자 사진은 체크 해제"""
     cands = st.session_state.get("store_photo_candidates") or []
     if st.session_state.get("store_photo_msg"):
         st.info(st.session_state.store_photo_msg)
@@ -1919,7 +1956,7 @@ def _run_store_research(name: str, address: str = ""):
     if _om.get("names"):
         from core.naver_place_menu import menu_text_lines
         st.session_state.official_menu_text = menu_text_lines(_om)
-        st.session_state.official_menu_meta = {"url": _om.get("url", ""), "place_name": _om.get("place_name", ""), "source": _om.get("source", "")}
+        st.session_state.official_menu_meta = {"url": _om.get("url", ""), "place_name": _om.get("place_name", ""), "source": _om.get("source", ""), "place_id": _om.get("place_id", "")}
     else:
         st.session_state.official_menu_meta = {"url": "", "place_name": "", "source": "", "empty": True}
     if not st.session_state.get("owner_address", "").strip():
@@ -1933,7 +1970,60 @@ def _run_store_research(name: str, address: str = ""):
     pts = [p for p in facts_to_points(res.get("confirmed") or {}) if p and p not in existing]
     if pts:
         st.session_state.owner_usp = " / ".join([x for x in [existing] + pts if x])
-    _search_store_photos(name, st.session_state.get("owner_address", "") or address, quiet=True)      # 가게 정보와 함께 후보 사진 12장도 한 번에 수집
+    _search_store_photos(name, st.session_state.get("owner_address", "") or address, quiet=True)      # 가게 정보와 함께 후보 사진 24장도 한 번에 수집
+
+
+def _lead_autosync():
+    """접수 리드로 열린 작업실: [가게 정보 가져오기]를 누르지 않아도 한 번 자동 조회해 1단계 입력칸을 채운다.
+    해당 place_id(없으면 상호+주소가 일치하는 지점)의 네이버 플레이스 공식정보만 쓴다 — 같은 이름의 다른 지점·다른 매장 글이 섞이지 않게.
+    Mock 모드·오프라인에서는 네트워크 없이 점주 메모·선택 메뉴만 반영한다."""
+    ss = st.session_state
+    lead = ss.get("lead_params")
+    if not lead or not ss.pop("lead_sync_pending", False):
+        return
+    from core import lead_link as LL
+    import core.naver_place_menu as NPM
+    from core.naver_local import business_type_for
+    offline = bool(mock_mode) or os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1"
+    pid, bundle = lead.get("place_id", ""), {}
+    if not offline:
+        with st.spinner("📋 접수된 매장의 네이버 플레이스 공식정보를 가져오는 중... (10초 안팎)"):
+            if not pid:
+                pid = NPM.resolve_place_id(lead["store"], lead.get("address", ""))
+            bundle = NPM.fetch_place_bundle(pid) if pid else {}
+    ss["lead_place_id"] = pid
+    home = bundle.get("home") if bundle.get("source") else None
+    if bundle.get("source"):
+        if not ss.get("owner_address", "").strip() and bundle.get("road_address"):
+            ss["owner_address"] = bundle["road_address"]
+        if bundle.get("category") and not ss.get("owner_type_touched"):
+            ss["owner_type"] = business_type_for(bundle["category"])
+        if bundle.get("names"):
+            ss["official_menu_text"] = NPM.menu_text_lines(bundle)
+            ss["official_menu_meta"] = {"url": bundle.get("url", ""), "place_name": bundle.get("place_name", ""), "source": "naver_place", "place_id": pid}
+        else:
+            ss["official_menu_meta"] = {"url": "", "place_name": "", "source": "", "empty": True}
+        reviews = LL.review_text_from_home(home)
+        if reviews and not ss.get("owner_review_text", "").strip():
+            ss["owner_review_text"] = reviews
+    ss["owner_usp"] = LL.compose_usp(official_summary=bundle.get("official_summary", "") if bundle.get("source") else "", memo=lead.get("memo", ""),
+                                     menu=lead.get("menu", ""), strengths=LL.voted_keywords(home))
+    n_photo = 0
+    if not offline:
+        _search_store_photos(lead["store"], ss.get("owner_address", "") or lead.get("address", ""), quiet=True)
+        found = list(ss.get("store_photo_candidates") or [])
+        seen = {it.get("link") for it in found}
+        mine = [{"title": lead["store"], "link": p["url"], "thumbnail": p["url"], "width": p.get("width", 0), "height": p.get("height", 0), "source": "official"}
+                for p in (bundle.get("photos") or []) if p.get("url") and p["url"] not in seen]
+        ss["store_photo_candidates"] = (mine + found)[:PHOTO_CANDIDATES]               # 사장님이 플레이스에 올린 공식 사진을 맨 앞에
+        n_photo = len(ss["store_photo_candidates"])
+    if offline:
+        ss["lead_sync_note"] = ("info", "Mock/오프라인 모드라 네이버 조회는 건너뛰고 점주 메모·선택 메뉴만 자랑 칸에 넣었어요.")
+    elif bundle.get("source"):
+        ss["lead_sync_note"] = ("ok", f"네이버 플레이스(place_id {pid}) 공식정보를 채웠어요 — 공식 메뉴 {len(bundle.get('menus') or [])}개 · 대표 키워드 {len(bundle.get('keywords') or [])}개 · 사진 후보 {n_photo}장. 틀린 곳은 고쳐 주세요.")
+    else:
+        ss["lead_sync_note"] = ("warn", "네이버 플레이스에서 주소가 일치하는 지점을 찾지 못해 공식정보는 가져오지 못했어요 (다른 지점 정보가 섞이지 않게 비워 뒀어요). "
+                                        "상호·주소를 확인하고 [🏪 가게 정보 가져오기]를 눌러 주세요.")
 
 
 # ==============================================================================
@@ -1988,6 +2078,15 @@ elif is_video_overlay_mode:
 if is_travel_mode:
     _render_stay_pipeline()
 
+if STORE_APP and is_owner_mode and not is_memory:
+    _lead_autosync()
+    if st.session_state.get("lead_params"):
+        from core.lead_link import banner_text
+        st.info(banner_text(st.session_state["lead_params"]))
+        _kind, _msg = st.session_state.get("lead_sync_note") or ("", "")
+        if _msg:
+            {"ok": st.success, "warn": st.warning}.get(_kind, st.caption)(_msg)
+
 # 사장님: 네이버 플레이스 링크·상호명 → 공식 지역 검색 API로 상호명·업종·주소·소개글 자동 주입
 if is_owner_mode and not is_memory:
     naver = NaverLocalSearch()
@@ -1998,7 +2097,7 @@ if is_owner_mode and not is_memory:
             place_q = st.text_input("플레이스 링크 또는 상호명", key="place_query", label_visibility="collapsed",
                                     placeholder="예: https://naver.me/xxxx 또는 성수 불판")
         with q2:
-            place_btn = st.button("🏪 가게 정보 가져오기", key="place_fetch", use_container_width=True, type="primary", help="가게 정보(상호·업종·주소·대표 메뉴)와 후보 사진 12장을 한 번에 가져와요")
+            place_btn = st.button("🏪 가게 정보 가져오기", key="place_fetch", use_container_width=True, type="primary", help="가게 정보(상호·업종·주소·대표 메뉴)와 후보 사진 24장을 한 번에 가져와요")
         if place_btn and place_q.strip():
             q = place_q.strip()
             link_mode = is_naver_link(q)
@@ -2069,6 +2168,7 @@ with edit_box:
         usp_desc = ""
         owner_search_kw = ""
     elif is_owner_mode:
+        # ① 상호명·업종 ② 주소 ③ 우리 가게 자랑(USP) ④ 공식 메뉴판 — 핵심만 기본 노출하고, 평소 거의 안 고치는 칸은 아래 아코디언 하나로 접는다
         o1, o2 = st.columns([1.2, 1])
         with o1:
             product_name = st.text_input("🏢 상호명 (영상에 그대로 노출)", key="owner_name", placeholder="예: 성수 불판 성수점")
@@ -2081,65 +2181,47 @@ with edit_box:
                 biz_keys, index=bt_idx, key="owner_type",
                 format_func=lambda k: str(BUSINESS_TYPES.get(k, {}).get("label", k or ""))
             )
-        o3, o4 = st.columns([1, 2])
-        with o3:
-            owner_search_kw = st.text_input("🔍 네이버 검색어", key="owner_search_kw", placeholder="기본값: 상호명 사용",
-                                            help="영상 엔딩에서 네이버 검색을 유도할 키워드입니다. 상호명이 기본값으로 들어갑니다.")
-        with o4:
-            usp_desc = st.text_input("✨ 우리 가게 자랑 (USP)", key="owner_usp",
-                                     placeholder="예: 성수역 2분 / 단체석 30명 / 숙성 삼겹살",
-                                     help="네이버 플레이스 소개글이 기본값으로 들어가며, 필요시 자유롭게 수정해 주세요.")
-        if len(re.findall(r"[가-힣A-Za-z0-9]{2,}", usp_desc or "")) < 4:
-            st.caption("💡 대본의 고유함은 여기 적은 사실에서 나와요. 반찬·메뉴 이름, 손질·숙성 방식, 손님 리뷰 문구, 숫자(가짓수·두께)를 "
-                       "구체적으로 적을수록 '어느 가게나 쓰는 문구' 대신 우리 가게만의 대본이 나옵니다. (적지 않은 사실은 지어내지 않아요)")
-        with st.expander("📋 메뉴판·손님 리뷰 글 붙여넣기 (선택) — 대본이 우리 가게 고유 메뉴·리뷰 단어로 쓰여요", expanded=False):
-            st.caption("상호명으로 자동 수집한 결과 위에 더 보탤 때 쓰세요. 사장님이 보시는 메뉴판 글, 스마트플레이스의 영수증 리뷰를 "
-                       "그대로 복사해 붙여 넣으면 ① 독특한 메뉴명(눈꽃버섯 갈비탕처럼 수식어가 붙은 것) ② 리뷰에서 형용사를 빼고 2번 이상 반복된 "
-                       "명사만 뽑아 대본에 써요. 붙여 넣은 글에 없는 말은 지어내지 않아요.")
-            st.text_area("메뉴판 글", key="owner_menu_text", height=110, placeholder="예: 눈꽃버섯 갈비탕 15,000원 / 굴돌솥비빔밥 12,000원 … (한 줄에 메뉴 하나)")
-            st.text_area("영수증 리뷰 글 (여러 개 붙여 넣기)", key="owner_review_text", height=140, placeholder="리뷰 문장을 그대로 붙여 넣어 주세요 (3~10개 정도면 충분해요)")
-        _mf = _merged_store_facts()
-        if _mf["special_menus"] or _mf["review_nouns"] or _mf["location_context"]:
-            st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_mf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
-                       + (", ".join(_mf["review_nouns"]) or "없음") + " · 방문 상황: " + (_mf["location_context"] or "없음"))
+        owner_address = st.text_input("📍 주소·지역", key="owner_address", placeholder="예: 서울 성동구 성수일로 (엔딩 카드에 표시)")
+        usp_desc = st.text_input("✨ 우리 가게 자랑 (USP)", key="owner_usp",
+                                 placeholder="예: 성수역 2분 / 단체석 30명 / 숙성 삼겹살 (메뉴·손질 방식·숫자를 구체적으로)")
         _meta = st.session_state.get("official_menu_meta") or {}
-        st.text_area("📋 네이버 플레이스 공식 메뉴판 (한 줄에 메뉴 하나 — 틀리면 고치고, 빠진 메뉴는 추가해 주세요)", key="official_menu_text", height=150,
-                     placeholder="[🏪 가게 정보 가져오기]를 누르면 네이버 플레이스에 등록된 메뉴가 여기 채워져요")
+        st.text_area("📋 네이버 플레이스 공식 메뉴판", key="official_menu_text", height=150,
+                     placeholder="[🏪 가게 정보 가져오기]를 누르면 등록된 메뉴가 채워져요 (한 줄에 메뉴 하나, 틀리면 고쳐 주세요)")
         _src = {"naver_place": "네이버 플레이스 메뉴판", "gemini": "웹 검색(Gemini)"}.get(_meta.get("source", ""), "")
         if _src:
-            st.caption(f"출처: {_src}" + (f" · [{_meta.get('place_name') or '플레이스'} 메뉴 페이지 열기]({_meta['url']})" if _meta.get("url") else "")
-                       + " — 이 목록에 있어도 이번에 올린 사진에 없는 메뉴는 대본·컨셉에 쓰지 않아요.")
+            st.caption(f"출처: {_src}" + (f" · [{_meta.get('place_name') or '플레이스'} 메뉴 페이지 열기]({_meta['url']})" if _meta.get("url") else ""))
         elif _meta.get("empty"):
-            st.caption("❔ 공식 메뉴판을 찾지 못했어요. 위 칸에 메뉴를 직접 적어 주시면 '사진에 없는 메뉴는 대본에서 제외' 기능이 켜져요.")
-        _sr_state = st.session_state.get("store_research") or {}
-        _unc = _sr_state.get("unconfirmed") or {}
-        if _sr_state:
-            _stp = _sr_state.get("steps") or {}
-            st.caption("🌐 자동 수집: " + " · ".join([
-                "네이버 지역 검색 " + ("✅" if _stp.get("naver_local") else "—"),
-                f"블로그 요약 {_stp.get('naver_blog', 0)}건",
-                "웹 검색(Gemini) " + ("✅ 출처 확인" if _stp.get("grounded") else ("✅ 요약만" if _stp.get("gemini") else "—")),
-            ]) + (f" · 주소: {st.session_state.get('research_addr_note')}" if st.session_state.get("research_addr_note") else ""))
-        if _unc.get("special_menus") or _unc.get("review_nouns") or _unc.get("location_context"):
-            st.checkbox("확인 못 한 검색 요약도 대본에 쓰기 (근거 링크·블로그에서 다시 확인되지 않은 AI 요약 항목)", key="use_unconfirmed_facts")
-            st.caption("❔ 미확인(출처 확인 전): " + (", ".join((_unc.get("special_menus") or []) + (_unc.get("review_nouns") or [])) or "없음")
-                       + (f" · 주변: {_unc.get('location_context')}" if _unc.get("location_context") else "")
-                       + " — 사실이 맞으면 위 체크를 켜거나 가게 자랑 칸에 직접 적어 주세요.")
-        o5, o6 = st.columns([2, 1], vertical_alignment="bottom")
-        with o5:
-            owner_address = st.text_input("📍 주소·지역 (선택, 엔딩 카드에 표시)", key="owner_address", placeholder="예: 서울 성동구 성수일로")
-        with o6:
-            st.button("🤖 사진으로 매장 특징 정리", key="store_points_btn", use_container_width=True, on_click=_fill_store_points,
-                      args=(api_key, mock_mode), help="올린 사진·영상을 보고 손님 눈길을 끌 특징을 자랑 칸에 보탭니다 (숫자·가격은 넣지 않음)")
-        if st.session_state.get("store_points_msg"):
-            st.caption(st.session_state.pop("store_points_msg"))
-        # 영문·숫자·기호가 섞인 상호는 TTS가 철자로 읽거나 엉킴 → 소리 나는 대로 적으면 나레이션에만 적용 (자막·워터마크는 원래 표기)
-        tricky_name = bool(re.search(r"[A-Za-z0-9&'·|]", product_name or ""))
-        st.text_input("🗣️ 상호명 읽는 법 (선택, 나레이션에만 적용)", key="owner_reading",
-                      placeholder="예: 세인트존스 호텔" if tricky_name else "예: 성수 불판 (영문·숫자가 섞인 상호일 때 적어 주세요)",
-                      help="자막·워터마크는 상호명 그대로, AI 성우만 이 발음으로 읽어요. 예: 'St. John's' → '세인트존스'")
-        if tricky_name and not st.session_state.get("owner_reading", "").strip():
-            st.caption("💡 상호명에 영문·숫자가 있어요. 성우가 철자로 읽을 수 있으니 '읽는 법'에 한글 발음을 적어 주시면 깔끔해요.")
+            st.caption("❔ 공식 메뉴판을 찾지 못했어요. 위 칸에 직접 적어 주세요.")
+        with st.expander("⚙️ 세부 설정 (검색어 · 발음 · 리뷰 원문)", expanded=False):
+            owner_search_kw = st.text_input("🔍 네이버 검색어", key="owner_search_kw", placeholder="기본값: 상호명")
+            # 영문·숫자·기호가 섞인 상호는 TTS가 철자로 읽거나 엉킴 → 소리 나는 대로 적으면 나레이션에만 적용 (자막·워터마크는 원래 표기)
+            tricky_name = bool(re.search(r"[A-Za-z0-9&'·|]", product_name or ""))
+            st.text_input("🗣️ 상호명 읽는 법 (나레이션에만 적용)", key="owner_reading",
+                          placeholder="예: 세인트존스 호텔" if tricky_name else "예: 성수 불판 (영문·숫자가 섞인 상호일 때)")
+            if tricky_name and not st.session_state.get("owner_reading", "").strip():
+                st.caption("💡 영문·숫자 상호는 읽는 법을 적어 주세요.")
+            st.text_area("📝 메뉴판 글 붙여넣기", key="owner_menu_text", height=100, placeholder="예: 눈꽃버섯 갈비탕 15,000원 / 굴돌솥비빔밥 12,000원 (한 줄에 메뉴 하나)")
+            st.text_area("📝 손님 리뷰 글 붙여넣기", key="owner_review_text", height=120, placeholder="리뷰 문장을 그대로 붙여 넣어 주세요 (3~10개)")
+            st.button("🤖 사진으로 매장 특징 정리", key="store_points_btn", use_container_width=True, on_click=_fill_store_points, args=(api_key, mock_mode))
+            if st.session_state.get("store_points_msg"):
+                st.caption(st.session_state.pop("store_points_msg"))
+            _mf = _merged_store_facts()
+            if _mf["special_menus"] or _mf["review_nouns"] or _mf["location_context"]:
+                st.success("🔎 뽑힌 고유 팩트 — 특이 메뉴: " + (", ".join(_mf["special_menus"]) or "없음") + " · 리뷰 반복 명사: "
+                           + (", ".join(_mf["review_nouns"]) or "없음") + " · 방문 상황: " + (_mf["location_context"] or "없음"))
+            _sr_state = st.session_state.get("store_research") or {}
+            _unc = _sr_state.get("unconfirmed") or {}
+            if _sr_state:
+                _stp = _sr_state.get("steps") or {}
+                st.caption("🌐 자동 수집: " + " · ".join([
+                    "네이버 지역 검색 " + ("✅" if _stp.get("naver_local") else "—"),
+                    f"블로그 요약 {_stp.get('naver_blog', 0)}건",
+                    "웹 검색(Gemini) " + ("✅ 출처 확인" if _stp.get("grounded") else ("✅ 요약만" if _stp.get("gemini") else "—")),
+                ]) + (f" · 주소: {st.session_state.get('research_addr_note')}" if st.session_state.get("research_addr_note") else ""))
+            if _unc.get("special_menus") or _unc.get("review_nouns") or _unc.get("location_context"):
+                st.checkbox("확인 못 한 검색 요약도 대본에 쓰기", key="use_unconfirmed_facts")
+                st.caption("❔ 미확인: " + (", ".join((_unc.get("special_menus") or []) + (_unc.get("review_nouns") or [])) or "없음")
+                           + (f" · 주변: {_unc.get('location_context')}" if _unc.get("location_context") else ""))
         owner_search_kw = owner_search_kw.strip() or product_name.strip()
     elif is_video_overlay_mode:
         # 촬영 영상 원본 직가공 쇼츠 전용 간이 옵션

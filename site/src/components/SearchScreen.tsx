@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FC, FormEvent } from 'react';
+import type { StoreCandidate } from '../types';
+import { searchStores } from '../services/api';
 
 interface SearchScreenProps {
-  onSearch: (storeName: string) => void;
+  onSearch: (storeName: string, candidate?: StoreCandidate) => void;
   isLoading: boolean;
 }
 
@@ -16,16 +18,73 @@ const POPULAR_EXAMPLES = [
 export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => {
   const [storeName, setStoreName] = useState('');
   const [loadingStep, setLoadingStep] = useState(0);
+  const [candidates, setCandidates] = useState<StoreCandidate[]>([]);
+  const [selected, setSelected] = useState<StoreCandidate | null>(null);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [hint, setHint] = useState('');
+  const justPicked = useRef(false);
+
+  // 상호명 2글자 이상 → 300ms 뒤 실제 매장 후보(같은 이름 여러 지점)를 보여줘서 사장님이 자기 지점을 직접 고르게 한다
+  useEffect(() => {
+    if (justPicked.current) {
+      justPicked.current = false;
+      return;
+    }
+    setSelected(null);
+    setHint('');
+    const q = storeName.trim();
+    if (q.length < 2 || isLoading) {
+      setCandidates([]);
+      setIsSuggesting(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIsSuggesting(true);
+    const timer = setTimeout(async () => {
+      const items = await searchStores(q, controller.signal);
+      if (!controller.signal.aborted) {
+        setCandidates(items);
+        setIsSuggesting(false);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeName]);
+
+  const pickCandidate = (c: StoreCandidate) => {
+    justPicked.current = true;
+    setStoreName(c.storeName);
+    setSelected(c);
+    setCandidates([]);
+    setHint('');
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!storeName.trim() || isLoading) return;
+    // 후보가 떠 있는데 고르지 않았으면 엉뚱한 지점이 진단되지 않도록 먼저 고르게 한다 (목록에 없으면 '입력한 이름으로 진단')
+    if (!selected && candidates.length > 0) {
+      setHint('아래 목록에서 사장님 매장(지점)을 선택해 주세요.');
+      return;
+    }
+    startLoadingAnimation();
+    onSearch(storeName.trim(), selected || undefined);
+  };
+
+  const diagnoseTypedName = () => {
+    if (!storeName.trim() || isLoading) return;
+    setCandidates([]);
     startLoadingAnimation();
     onSearch(storeName.trim());
   };
 
   const handleChipClick = (example: string) => {
+    justPicked.current = true;
     setStoreName(example);
+    setCandidates([]);
     startLoadingAnimation();
     onSearch(example);
   };
@@ -83,6 +142,55 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
               </button>
             )}
           </div>
+
+          {/* 선택한 지점 */}
+          {selected && !isLoading && (
+            <div className="flex items-start gap-2 p-3 rounded-2xl bg-[#EEF3F9] border border-[#D0DCEB] text-left">
+              <span className="text-emerald-600 text-sm mt-0.5">✓</span>
+              <div className="min-w-0">
+                <div className="text-[13px] font-bold text-[#0F2744] truncate">{selected.storeName}</div>
+                <div className="text-[11px] text-slate-500 truncate">{selected.roadAddress || selected.address}</div>
+              </div>
+            </div>
+          )}
+
+          {/* 실시간 매장 후보 (같은 이름의 다른 지점이 섞이지 않게 직접 선택) */}
+          {!selected && !isLoading && (candidates.length > 0 || isSuggesting) && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden text-left">
+              {isSuggesting && candidates.length === 0 && (
+                <div className="px-4 py-3 text-xs text-slate-400">매장을 찾는 중...</div>
+              )}
+              {candidates.map((c) => (
+                <button
+                  key={`${c.storeName}|${c.roadAddress || c.address}`}
+                  type="button"
+                  onClick={() => pickCandidate(c)}
+                  className="w-full px-4 py-3 text-left border-b last:border-b-0 border-slate-100 hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[14px] font-bold text-slate-900 truncate">{c.storeName}</span>
+                    {c.category && (
+                      <span className="shrink-0 text-[10px] font-semibold text-[#0F2744] bg-[#EEF3F9] px-1.5 py-0.5 rounded-full">
+                        {c.category.split('>').pop()?.trim()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5 truncate">{c.roadAddress || c.address}</div>
+                </button>
+              ))}
+              {candidates.length > 0 && (
+                <button
+                  type="button"
+                  onClick={diagnoseTypedName}
+                  className="w-full px-4 py-2.5 text-left text-[12px] font-semibold text-slate-500 hover:bg-slate-50 bg-slate-50/60"
+                >
+                  찾는 매장이 없어요 · 입력한 이름으로 진단
+                </button>
+              )}
+            </div>
+          )}
+
+          {hint && <p className="text-xs font-semibold text-red-500">⚠️ {hint}</p>}
 
           <button
             type="submit"

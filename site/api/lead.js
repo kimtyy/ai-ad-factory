@@ -29,17 +29,25 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: '상호명과 휴대폰 번호는 필수입니다.' });
   }
 
+  // planOptions 는 허용한 항목만, 길이를 제한해서 저장한다 (placeId 는 숫자만)
+  const po = planOptions && typeof planOptions === 'object' ? planOptions : {};
+  const text = (v, n) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
+  const cleanOptions = {
+    selectedMenu: text(po.selectedMenu, 60) || '대표 메뉴',
+    font: text(po.font, 30) || '감성 명조',
+    voice: text(po.voice, 30) || '밝은 여성',
+    bgm: text(po.bgm, 20) || 'AI 추천',
+    address: text(po.address, 120),
+    placeId: /^\d{6,}$/.test(String(po.placeId || '')) ? String(po.placeId) : '',
+    ownerMemo: text(po.ownerMemo, 100),
+  };
+
   const newLead = {
     id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     storeName: String(storeName).trim(),
     ownerName: String(ownerName || '사장님').trim(),
     phoneNumber: String(phoneNumber).trim(),
-    planOptions: planOptions || {
-      selectedMenu: '대표 메뉴',
-      font: '감성 명조',
-      voice: '밝은 여성',
-      bgm: 'AI 추천',
-    },
+    planOptions: cleanOptions,
     status: '접수대기',
     createdAt: createdAt || new Date().toISOString(),
   };

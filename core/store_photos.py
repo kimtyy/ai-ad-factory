@@ -80,9 +80,10 @@ def _fetch(query: str, cid: str, secret: str, filter_: str, timeout: int) -> Dic
     return {"items": [], "error": err}
 
 
-def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6, suffix: str = "대표메뉴", official_only: bool = True) -> Dict[str, Any]:
+def search_store_images(name: str, region: str = "", client_id: str = "", client_secret: str = "", timeout: int = 6, suffix: str = "대표메뉴", official_only: bool = True,
+                        max_items: int = MAX_CANDIDATES) -> Dict[str, Any]:
     """
-    상호명으로 사진 후보 → {"items": [{title, link, thumbnail, width, height}] (최대 12), "error": 안내문}.
+    상호명으로 사진 후보 → {"items": [{title, link, thumbnail, width, height}] (최대 max_items, 기본 12), "error": 안내문}.
     제목에 상호 핵심 어절이 있고 가로·세로 400px 이상인 것만. 결과가 8장 미만이면 검색어·필터를 바꿔 더 찾는다
     """
     name = (name or "").strip()
@@ -113,7 +114,7 @@ def search_store_images(name: str, region: str = "", client_id: str = "", client
 
     loc = f"{region} {name}".strip() if region and region not in name else name
     for query, filter_ in ((loc, "large"), (f"{name} {suffix}", "large"), (loc, "all"), (f"{name} {suffix}", "all")):
-        if len(out) >= DEFAULT_CHECKED:
+        if len(out) >= max(DEFAULT_CHECKED, max_items):
             break
         collect(query, filter_)
         if error == NOT_ENABLED_HINT:
@@ -125,7 +126,7 @@ def search_store_images(name: str, region: str = "", client_id: str = "", client
     if not ranked and dropped:
         err = (f"찾은 사진 {dropped}장이 모두 개인 블로거 사진이라 제외했어요. '🛡️ 공식 홍보 이미지만 수집'을 끄면 블로그 사진도 후보에 나오지만 "
                "저작권·초상권 위험이 커요. 직접 올리는 걸 권장해요.")
-    return {"items": ranked[:MAX_CANDIDATES], "error": err, "blog_dropped": dropped}
+    return {"items": ranked[:max(1, int(max_items))], "error": err, "blog_dropped": dropped}
 
 
 def _get_image_bytes(url: str, timeout: int) -> Optional[bytes]:

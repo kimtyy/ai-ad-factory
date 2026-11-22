@@ -225,8 +225,23 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
           </div>
         </div>
 
+        {/* 5. 꼭 강조할 점 · 수정 요청 (선택, 비워 둬도 신청 가능) */}
+        <div className="mt-6">
+          <label className="block text-xs font-bold text-slate-800 mb-2">
+            ✍️ 꼭 강조할 점 · 수정 요청 <span className="font-medium text-slate-400">(선택)</span>
+          </label>
+          <input
+            type="text"
+            value={options.ownerMemo || ''}
+            maxLength={80}
+            onChange={(e) => onChangeOptions({ ...options, ownerMemo: e.target.value })}
+            placeholder="예: 단체석 30석 완비, 한우육회 메인 강조"
+            className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 placeholder-slate-400 transition-all"
+          />
+        </div>
+
         {/* 확인 버튼 */}
-        <div className="mt-8 pt-4 border-t border-slate-100">
+        <div className="mt-6 pt-4 border-t border-slate-100">
           <button
             onClick={onClose}
             className="w-full h-13 py-3.5 rounded-2xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"

@@ -126,16 +126,24 @@ def _gemini_menu(name: str, region: str, api_key: str) -> List[str]:
 
 
 def collect_official_menu(name: str, region: str = "", *, get: Optional[Callable[..., str]] = None, api_key: str = "",
-                          gemini_fn: Optional[Callable[[str, str], List[str]]] = None) -> Dict[str, Any]:
+                          gemini_fn: Optional[Callable[[str, str], List[str]]] = None, place_id: str = "") -> Dict[str, Any]:
     """
     상호명(+지역) → {"names": [공식 메뉴 이름...], "menus": [...], "keywords": [...], "place_id","url","place_name","source": "naver_place"|"gemini"|"", "error"}
     names에는 메뉴판 메뉴 + 사장님이 등록한 대표 키워드(예: 눈꽃맥주)를 중복 없이 담는다.
+    place_id를 알면(랜딩페이지에서 고른 지점) 검색 없이 그 매장의 공식 메뉴판만 읽는다 — 같은 이름의 다른 지점이 섞이지 않는다.
     """
     out: Dict[str, Any] = {"names": [], "menus": [], "keywords": [], "place_id": "", "url": "", "place_name": "", "source": "", "error": ""}
     name, region = (name or "").strip(), (region or "").strip()
-    if not name or os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1":
+    if os.getenv("STORE_RESEARCH_DISABLE", "").strip() == "1" or not (name or place_id):
         return out
     get = get or _http_get
+    if place_id:
+        bundle = fetch_place_bundle(place_id, get=get)
+        if bundle["source"]:
+            return bundle
+        out["error"] = bundle.get("error", "")
+        if not name:
+            return out
     first = re.sub(r"[^가-힣A-Za-z0-9]", "", name.split()[0]) if name.split() else name
     best: Optional[Dict[str, Any]] = None
     try:
@@ -196,4 +204,193 @@ def parse_menu_text(text: str) -> List[str]:
         t = normalize_menu_name(t)
         if 2 <= len(t) <= 24 and t not in out:
             out.append(t)
+    return out
+
+
+# ---------------------------------------------------------------- place_id 기반 공식정보 (랜딩페이지 site/server/naver.js 와 같은 규칙)
+HOME_URL = "https://m.place.naver.com/place/{pid}/home"
+GENERIC_MENU_URL = "https://m.place.naver.com/place/{pid}/menu/list"
+PHOTO_PAGE_URL = "https://m.place.naver.com/place/{pid}/photo"            # 업종(restaurant 등)을 몰라도 네이버가 알맞은 주소로 넘겨준다
+_PLACE_ID = re.compile(r"^\d{6,15}$")
+_REGION_SUFFIX = re.compile(r"(특별시|광역시|특별자치시|특별자치도|도|시|군|구|면|읍|동|리)$")
+_PROVINCES = {"경기", "서울", "인천", "부산", "대구", "광주", "대전", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"}
+
+
+def _apollo_state(html: str) -> Dict[str, Any]:
+    m = _APOLLO.search(html or "")
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(1))
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _clean_text(s: Any) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", str(s or ""))).strip()
+
+
+def region_tokens(address: str) -> List[str]:
+    """주소 → 지역 핵심어 ('경기 가평군 조종면 …' → ['가평', '조종', ...]). 광역 이름(경기·서울…)은 변별력이 없어 뺀다"""
+    out: List[str] = []
+    for w in re.findall(r"[가-힣]{2,}", address or ""):
+        t = _REGION_SUFFIX.sub("", w)
+        if len(t) >= 2 and t not in out and t not in _PROVINCES:
+            out.append(t)
+    return out[:6]
+
+
+def address_score(candidate_addr: str, want_addr: str) -> float:
+    want = region_tokens(want_addr)
+    if not want:
+        return 0.0
+    return sum(1 for t in want if t in (candidate_addr or "")) / len(want)
+
+
+def _name_key(s: str) -> str:
+    return re.sub(r"[^가-힣A-Za-z0-9]", "", s or "").lower()
+
+
+def name_score(a: str, b: str) -> float:
+    x, y = _name_key(a), _name_key(b)
+    if not x or not y:
+        return 0.0
+    if x == y:
+        return 1.0
+    if x in y or y in x:
+        return 0.8
+    return 0.4 if x[:2] and x[:2] in y else 0.0
+
+
+def parse_place_home(html: str, expect_id: str = "") -> Optional[Dict[str, Any]]:
+    """플레이스 홈 페이지 → 매장 기본정보·대표 키워드·좌석·편의시설·방문자가 고른 키워드·이 매장에 연결된 블로그 후기·사장님 공식 사진. 못 읽으면 None"""
+    state = _apollo_state(html)
+    if not state:
+        return None
+    base_key = next((k for k in state if k.startswith("PlaceDetailBase:") and (not expect_id or k == f"PlaceDetailBase:{expect_id}")), None)
+    base = state.get(base_key) if base_key else None
+    if not isinstance(base, dict):
+        return None
+    keywords: List[str] = []
+    km = re.search(r'"keywordList":\[(.*?)\]', html or "")
+    if km:
+        try:
+            keywords = [x.strip() for x in json.loads("[" + km.group(1) + "]") if isinstance(x, str) and len(x.strip()) >= 2][:8]
+        except ValueError:
+            keywords = []
+    seats: List[str] = []
+    reviews: List[Dict[str, str]] = []
+    voted: List[Dict[str, Any]] = []
+    photos: List[Dict[str, Any]] = []
+    for key, val in state.items():
+        if not isinstance(val, dict):
+            continue
+        tname = str(val.get("__typename") or key.split(":")[0])
+        if tname == "RestaurantSeatItems" and val.get("name"):
+            seats.append(_clean_text(val.get("name")) + (f" {_clean_text(val.get('description'))}" if val.get("description") else ""))
+        elif tname == "FsasReview" and val.get("type") == "blog" and val.get("title"):
+            reviews.append({"title": _clean_text(val.get("title")), "contents": _clean_text(val.get("contents")), "url": str(val.get("url") or "")})
+        elif tname == "VisitorReviewStatsResult":
+            details = ((val.get("analysis") or {}).get("votedKeyword") or {}).get("details")
+            if isinstance(details, list):
+                voted = sorted(({"keyword": _clean_text(d.get("displayName")), "count": int(d.get("count") or 0)}
+                                for d in details if isinstance(d, dict) and d.get("displayName") and d.get("count")), key=lambda d: -d["count"])[:5]
+        elif tname == "PlaceDetailTopPhotoItem" and val.get("originalUrl") and val.get("mediaSource") == "business" and (val.get("mediaFormat") in (None, "image")):
+            photos.append({"url": str(val["originalUrl"]), "width": int(val.get("width") or 0), "height": int(val.get("height") or 0)})
+    conv = base.get("conveniences")
+    return {
+        "place_id": str(base.get("id") or expect_id or ""), "name": _clean_text(base.get("name")), "category": _clean_text(base.get("category")),
+        "road_address": _clean_text(base.get("roadAddress")), "address": _clean_text(base.get("address")),
+        "conveniences": [_clean_text(c) for c in conv if _clean_text(c)] if isinstance(conv, list) else [],
+        "keywords": keywords, "seats": seats[:4], "voted": voted, "reviews": reviews[:5], "photos": photos[:24],
+    }
+
+
+def build_official_summary(home: Optional[Dict[str, Any]]) -> str:
+    """플레이스에 실제로 적힌 항목만 이어 붙인 '공식 매장 특징' 한 덩어리 (없는 항목은 건너뜀 — 지어내지 않음)"""
+    if not home:
+        return ""
+    parts: List[str] = []
+    if home.get("category"):
+        parts.append(home["category"].replace(",", "·"))
+    if home.get("keywords"):
+        parts.append("대표 키워드: " + ", ".join(home["keywords"][:5]))
+    if home.get("seats"):
+        parts.append("좌석: " + ", ".join(home["seats"]))
+    if home.get("conveniences"):
+        parts.append("편의시설: " + ", ".join(home["conveniences"][:6]))
+    if home.get("voted"):
+        parts.append("방문자가 꼽은 점: " + ", ".join(f"{v['keyword']}({v['count']})" for v in home["voted"][:3]))
+    return " / ".join(parts)
+
+
+def fetch_place_home(place_id: str, get: Optional[Callable[..., str]] = None) -> Optional[Dict[str, Any]]:
+    if not _PLACE_ID.match(str(place_id or "")):
+        return None
+    try:
+        return parse_place_home((get or _http_get)(HOME_URL.format(pid=place_id)), str(place_id))
+    except Exception as e:
+        logger.warning(f"플레이스 홈 수집 실패 {place_id}: {type(e).__name__}")
+        return None
+
+
+def resolve_place_id(name: str, address: str = "", get: Optional[Callable[..., str]] = None) -> str:
+    """상호명+주소로 정확한 place_id: 검색 후보마다 플레이스 주소를 읽어 주소가 맞는 곳만 고른다 (같은 이름의 다른 지점이 섞이지 않게).
+    주소를 모르면 검색 1순위, 주소가 맞는 곳이 없으면 '' (엉뚱한 지점보다 못 찾는 편이 낫다)"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    get = get or _http_get
+    tokens = [t for t in region_tokens(address) if t not in name]
+    query = " ".join([name] + tokens[:2])
+    try:
+        ids = [pid for _cat, pid in find_place_ids(query, get=get, limit=4)]
+    except Exception as e:
+        logger.warning(f"플레이스 검색 실패: {type(e).__name__}")
+        return ""
+    if not ids:
+        return ""
+    if not address:
+        return ids[0]
+    best, best_score = "", 0.0
+    for pid in ids:
+        home = fetch_place_home(pid, get=get)
+        if not home:
+            continue
+        score = max(address_score(home["road_address"], address), address_score(home["address"], address)) * 2 + name_score(home["name"], name)
+        if score > best_score:
+            best, best_score = pid, score
+    return best if best_score >= 1.2 else ""
+
+
+def fetch_place_bundle(place_id: str, get: Optional[Callable[..., str]] = None) -> Dict[str, Any]:
+    """place_id → 공식 메뉴판 + 홈 정보를 한 번에. collect_official_menu 와 같은 모양({"names","menus","keywords","place_id","url","place_name","source"})에
+    "home"(홈 정보)·"official_summary"·"photos"를 더한다. 못 읽은 부분은 빈 값 (예외 없음)"""
+    out: Dict[str, Any] = {"names": [], "menus": [], "keywords": [], "place_id": "", "url": "", "place_name": "", "source": "", "error": "",
+                           "home": None, "official_summary": "", "photos": [], "road_address": "", "category": ""}
+    pid = str(place_id or "")
+    if not _PLACE_ID.match(pid):
+        out["error"] = "place_id 형식 오류"
+        return out
+    get = get or _http_get
+    home = fetch_place_home(pid, get=get)
+    page: Dict[str, Any] = {"menus": [], "keywords": [], "place_name": ""}
+    url = GENERIC_MENU_URL.format(pid=pid)
+    try:
+        page = parse_menu_page(get(url))
+    except Exception as e:
+        out["error"] = type(e).__name__
+    menus = page["menus"]
+    keywords = page["keywords"] or ((home or {}).get("keywords") or [])
+    if not (menus or keywords or home):
+        return out
+    names = [m["name"] for m in menus]
+    for k in keywords:
+        if k not in names:
+            names.append(k)
+    out.update(menus=menus, keywords=keywords, names=names, place_id=pid, url=url, source="naver_place",
+               place_name=(home or {}).get("name") or page.get("place_name", ""), home=home, official_summary=build_official_summary(home),
+               photos=(home or {}).get("photos") or [], road_address=((home or {}).get("road_address") or (home or {}).get("address") or ""),
+               category=(home or {}).get("category", ""))
     return out

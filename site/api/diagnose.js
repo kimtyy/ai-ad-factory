@@ -1,186 +1,51 @@
 // site/api/diagnose.js
-// 네이버 지역 검색 API + 블로그 검색 API + 네이버 플레이스 공식 메뉴판 + 유튜브 실제 영상 검색
+// 매장 진단: 네이버 플레이스 공식정보(placeId 기준) + 지역 검색 + 블로그 검색 + 유튜브 실제 영상 검색
+// POST {storeName, address?, placeId?}  또는  GET ?store=&address=&place_id=   (작업실 app_store.py 와 같은 결과를 받는다)
+import {
+  cleanHtml, searchLocal, addressScore, nameScore, regionTokens,
+  findPlaceId, fetchPlaceHome, fetchPlaceMenus, buildOfficialSummary,
+} from '../server/naver.js';
 
-const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
-
-function cleanHtml(str) {
-  if (!str) return '';
-  return str
-    .replace(/<[^>]+>/g, '')
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#39;/g, "'")
-    .trim();
+// 2. 네이버 블로그 검색 (NCP 우선 -> OpenAPI 폴백). 같은 이름의 다른 지점 글이 섞이지 않도록 상호·지역 키워드로 걸러낸다
+function brandToken(storeName) {
+  const w = String(storeName || '').split(/\s+/).find((x) => x.replace(/[^가-힣A-Za-z0-9]/g, '').length >= 2) || '';
+  return w.replace(/[^가-힣A-Za-z0-9]/g, '');
 }
 
-// 1. 네이버 지역 검색 (NCP 우선 -> OpenAPI 폴백)
-async function fetchNaverLocal(storeName, clientId, clientSecret) {
-  if (!clientId || !clientSecret) return null;
-
-  // 시도 1: NAVER Cloud Platform (NAVER API HUB)
-  try {
-    const res = await fetch(
-      `https://naverapihub.apigw.ntruss.com/search/v1/local?query=${encodeURIComponent(storeName)}&display=5`,
-      {
-        headers: {
-          'X-NCP-APIGW-API-KEY-ID': clientId,
-          'X-NCP-APIGW-API-KEY': clientSecret,
-        },
-      }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        return data.items[0];
-      }
-    }
-  } catch (e) {
-    console.warn('NCP Local fetch error:', e.message);
-  }
-
-  // 시도 2: Legacy Developers OpenAPI
-  try {
-    const res = await fetch(
-      `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(storeName)}&display=5`,
-      {
-        headers: {
-          'X-Naver-Client-Id': clientId,
-          'X-Naver-Client-Secret': clientSecret,
-        },
-      }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        return data.items[0];
-      }
-    }
-  } catch (e) {
-    console.warn('OpenAPI Local fetch error:', e.message);
-  }
-
-  return null;
+function filterBlogsForStore(items, storeName, address) {
+  const brand = brandToken(storeName);
+  const tokens = regionTokens(address);
+  return (items || []).filter((it) => {
+    const text = `${cleanHtml(it.title)} ${cleanHtml(it.description)}`.replace(/\s/g, '');
+    if (brand && !text.includes(brand)) return false;
+    if (tokens.length > 0 && !tokens.some((t) => text.includes(t))) return false;      // 다른 지역 지점의 글 제외
+    return true;
+  });
 }
 
-// 2. 네이버 블로그 검색 (NCP 우선 -> OpenAPI 폴백)
-async function fetchNaverBlog(storeName, clientId, clientSecret) {
+async function fetchNaverBlog(storeName, address, clientId, clientSecret) {
   if (!clientId || !clientSecret) return [];
 
-  const query = `${storeName} 솔직후기 맛집`;
-
-  // 시도 1: NAVER Cloud Platform
-  try {
-    const res = await fetch(
-      `https://naverapihub.apigw.ntruss.com/search/v1/blog?query=${encodeURIComponent(query)}&display=8`,
-      {
-        headers: {
-          'X-NCP-APIGW-API-KEY-ID': clientId,
-          'X-NCP-APIGW-API-KEY': clientSecret,
-        },
-      }
-    );
-    if (res.ok) {
+  const region = regionTokens(address)[0] || '';
+  const query = `${storeName} ${region} 솔직후기`.replace(/\s+/g, ' ').trim();
+  const q = encodeURIComponent(query);
+  const tries = [
+    [`https://naverapihub.apigw.ntruss.com/search/v1/blog?query=${q}&display=15`,
+      { 'X-NCP-APIGW-API-KEY-ID': clientId, 'X-NCP-APIGW-API-KEY': clientSecret }],
+    [`https://openapi.naver.com/v1/search/blog.json?query=${q}&display=15`,
+      { 'X-Naver-Client-Id': clientId, 'X-Naver-Client-Secret': clientSecret }],
+  ];
+  for (const [url, headers] of tries) {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(6000) });
+      if (!res.ok) continue;
       const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        return data.items;
-      }
+      if (data.items && data.items.length > 0) return filterBlogsForStore(data.items, storeName, address);
+    } catch (e) {
+      console.warn('Blog fetch error:', e.message);
     }
-  } catch (e) {
-    console.warn('NCP Blog fetch error:', e.message);
   }
-
-  // 시도 2: Legacy Developers OpenAPI
-  try {
-    const res = await fetch(
-      `https://openapi.naver.com/v1/search/blog.json?query=${encodeURIComponent(query)}&display=8`,
-      {
-        headers: {
-          'X-Naver-Client-Id': clientId,
-          'X-Naver-Client-Secret': clientSecret,
-        },
-      }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && data.items.length > 0) {
-        return data.items;
-      }
-    }
-  } catch (e) {
-    console.warn('OpenAPI Blog fetch error:', e.message);
-  }
-
   return [];
-}
-
-// 3. 네이버 플레이스 공식 메뉴판 수집 (m.place.naver.com Apollo state)
-async function fetchNaverPlaceMenu(storeName) {
-  try {
-    const searchUrl = `https://m.search.naver.com/search.naver?query=${encodeURIComponent(storeName)}`;
-    const searchRes = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': UA,
-        'Accept-Language': 'ko-KR,ko;q=0.9',
-      },
-    });
-
-    if (!searchRes.ok) return { placeId: null, menus: [] };
-    const html = await searchRes.text();
-
-    const placeMatch = html.match(/place\.naver\.com\/(restaurant|cafe|place|bar|hairshop|beauty|accommodation)\/(\d{6,})/);
-    if (!placeMatch) return { placeId: null, menus: [] };
-
-    const cat = placeMatch[1];
-    const pid = placeMatch[2];
-
-    const menuUrl = `https://m.place.naver.com/${cat}/${pid}/menu/list`;
-    const menuRes = await fetch(menuUrl, {
-      headers: {
-        'User-Agent': UA,
-        'Accept-Language': 'ko-KR,ko;q=0.9',
-      },
-    });
-
-    if (!menuRes.ok) return { placeId: pid, menus: [] };
-    const menuHtml = await menuRes.text();
-
-    const apolloMatch = menuHtml.match(/__APOLLO_STATE__\s*=\s*(\{.*?\});\s*\n/);
-    if (!apolloMatch) return { placeId: pid, menus: [] };
-
-    const state = JSON.parse(apolloMatch[1]);
-    const menus = [];
-
-    for (const [key, val] of Object.entries(state)) {
-      if (!val || typeof val !== 'object') continue;
-      const typeName = String(val.__typename || key.split(':')[0]);
-      if (typeName.includes('Menu') && !typeName.includes('Group') && val.name) {
-        let price = '';
-        if (typeof val.price === 'string' || typeof val.price === 'number') {
-          price = String(val.price);
-        } else if (val.price && typeof val.price === 'object') {
-          price = val.price.displayText || val.price.price || '';
-        }
-        if (price && !price.endsWith('원') && !isNaN(Number(price))) {
-          price = Number(price).toLocaleString('ko-KR') + '원';
-        }
-
-        menus.push({
-          name: cleanHtml(val.name),
-          price: cleanHtml(price),
-          desc: cleanHtml(val.desc || val.description || ''),
-          isPopular: Boolean(val.isPopular || val.isSignature || val.recommend || menus.length < 2),
-        });
-      }
-    }
-
-    return { placeId: pid, menus };
-  } catch (err) {
-    console.warn('Place menu fetch error:', err.message);
-    return { placeId: null, menus: [] };
-  }
 }
 
 // 4. 유튜브 실제 검색 연동 (shortsCount & 대표 영상 제목)
@@ -230,144 +95,162 @@ async function fetchYouTubeVideos(storeName, apiKey) {
   return { count: 0, sampleTitle: '' };
 }
 
+function snippet(text, n) {
+  const t = cleanHtml(text);
+  return t.length > n ? `${t.slice(0, n)}...` : t;
+}
+
+// 실제 데이터(플레이스 방문자 선택 키워드·이 매장에 연결된 후기·지점 필터를 통과한 블로그 후기)로 필살기 TOP 3를 만든다.
+// 근거가 하나도 없을 때만 일반 문구를 쓰고 isFallback 으로 표시한다 (작업실 앱은 그 항목을 쓰지 않는다).
+function buildStrengths({ resolvedName, home, blogItems }) {
+  const reviews = [];
+  for (const r of (home && home.reviews) || []) reviews.push({ title: r.title, text: r.contents });
+  for (const b of blogItems || []) reviews.push({ title: cleanHtml(b.title), text: cleanHtml(b.description) });
+  const voted = (home && home.voted) || [];
+
+  const out = [];
+  for (let i = 0; i < 3; i += 1) {
+    const v = voted[i];
+    const r = reviews[i];
+    if (v) {
+      out.push({
+        rank: i + 1,
+        title: `방문자들이 꼽은 "${v.keyword}"`,
+        description: r ? snippet(r.title, 60) : '네이버 플레이스 방문자 리뷰 키워드',
+        mentionRate: `${v.count}명 선택`,
+        sampleReview: r ? `“${snippet(r.text, 110)}”` : '',
+        isFallback: false,
+      });
+    } else if (r) {
+      out.push({
+        rank: i + 1,
+        title: `손님 후기: ${snippet(r.title, 36)}`,
+        description: snippet(r.title, 60),
+        mentionRate: '손님 솔직 후기',
+        sampleReview: `“${snippet(r.text, 110)}”`,
+        isFallback: false,
+      });
+    }
+  }
+  const real = out.length;
+  const generic = [
+    { title: `${resolvedName}의 시그니처 대표 메뉴`, description: '네이버 플레이스에 등록된 핵심 메뉴', mentionRate: '대표 메뉴', sampleReview: '' },
+    { title: '정갈하고 푸짐한 상차림 구성', description: '손님들이 부담 없이 즐길 수 있는 구성', mentionRate: '확인 필요', sampleReview: '' },
+    { title: '친절한 응대와 쾌적한 매장 환경', description: '가족 외식 및 모임 장소로 추천', mentionRate: '확인 필요', sampleReview: '' },
+  ];
+  for (let i = real; i < 3; i += 1) out.push({ rank: i + 1, ...generic[i], isFallback: true });
+
+  const source = real === 0 ? 'fallback' : (voted.length > 0 ? 'official' : 'blog');
+  return { strengths: out, source };
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-  if (req.method !== 'POST') {
+  if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  let body = req.body;
-  if (typeof body === 'string') {
-    try {
-      body = JSON.parse(body);
-    } catch (e) {
-      body = {};
+  let input = {};
+  if (req.method === 'GET') {
+    const q = req.query || {};
+    input = { storeName: q.store || q.storeName, address: q.address, placeId: q.place_id || q.placeId };
+  } else {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        body = {};
+      }
     }
+    input = body || {};
   }
 
-  const { storeName } = body || {};
-  if (!storeName || !storeName.trim()) {
+  const trimmedName = String(input.storeName || '').trim().slice(0, 60);
+  if (!trimmedName) {
     return res.status(400).json({ error: '상호명을 입력해 주세요.' });
   }
+  const givenAddress = String(input.address || '').trim().slice(0, 120);
+  let placeId = /^\d{6,}$/.test(String(input.placeId || '')) ? String(input.placeId) : '';
 
-  const trimmedName = storeName.trim();
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
   const youtubeApiKey = process.env.YOUTUBE_API_KEY;
 
   try {
-    // 병렬로 네이버 지역정보, 블로그 리뷰, 플레이스 메뉴판, 유튜브 영상 수집
-    const [localItem, blogItems, placeResult, youtubeResult] = await Promise.all([
-      fetchNaverLocal(trimmedName, clientId, clientSecret),
-      fetchNaverBlog(trimmedName, clientId, clientSecret),
-      fetchNaverPlaceMenu(trimmedName),
+    // 1. 정확한 placeId (선택한 지점의 상호+주소로 찾고, 주소가 안 맞는 동명 지점은 버린다)
+    if (!placeId) placeId = await findPlaceId(trimmedName, givenAddress);
+
+    // 2. 병렬 수집: 플레이스 공식 홈·메뉴판 / 지역 검색 / 블로그 후기(지점 필터) / 유튜브
+    const regionHint = regionTokens(givenAddress)[0] || '';
+    const [home, officialMenus, localItems, blogItems, youtubeResult] = await Promise.all([
+      placeId ? fetchPlaceHome(placeId) : Promise.resolve(null),
+      placeId ? fetchPlaceMenus(placeId) : Promise.resolve([]),
+      searchLocal(`${trimmedName} ${regionHint}`.trim(), clientId, clientSecret, 5),
+      fetchNaverBlog(trimmedName, givenAddress, clientId, clientSecret),
       fetchYouTubeVideos(trimmedName, youtubeApiKey),
     ]);
 
-    // 1. 매장명 및 주소, 업종 결정
-    const resolvedName = localItem ? cleanHtml(localItem.title) : trimmedName;
-    const address = localItem
-      ? (localItem.roadAddress || localItem.address || '네이버 플레이스 등록 매장')
-      : '네이버 플레이스 등록 매장';
-    const category = localItem ? cleanHtml(localItem.category) : '일반음식점';
+    // 3. 매장명·주소·업종: 플레이스 공식 > 주소가 맞는 지역 검색 결과 > 입력값
+    let localItem = null;
+    if (localItems.length > 0) {
+      localItem = [...localItems].sort((a, b) => {
+        const sa = addressScore(`${a.roadAddress} ${a.address}`, givenAddress) * 2 + nameScore(cleanHtml(a.title), trimmedName);
+        const sb = addressScore(`${b.roadAddress} ${b.address}`, givenAddress) * 2 + nameScore(cleanHtml(b.title), trimmedName);
+        return sb - sa;
+      })[0];
+      if (givenAddress && addressScore(`${localItem.roadAddress} ${localItem.address}`, givenAddress) === 0) localItem = null;
+    }
+    const resolvedName = (home && home.name) || (localItem ? cleanHtml(localItem.title) : trimmedName);
+    const address = (home && (home.roadAddress || home.address))
+      || (localItem && (localItem.roadAddress || localItem.address))
+      || givenAddress
+      || '네이버 플레이스 등록 매장';
+    const category = (home && home.category) || (localItem ? cleanHtml(localItem.category) : '일반음식점');
 
-    // 2. 실제 메뉴판 목록 확정
-    let menus = placeResult.menus || [];
+    // 4. 메뉴판: 공식 메뉴가 없을 때만 안내용 임시 항목 (menusSource 로 구분)
+    let menus = officialMenus || [];
+    const menusSource = menus.length > 0 ? 'official' : 'fallback';
     if (menus.length === 0) {
       menus = [
         { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },
         { name: '스페셜 단품 요리', price: '인기', isPopular: true, desc: '정성껏 조리하는 메인 메뉴' },
       ];
-    }
-
-    const recommendedMenu = menus[0]?.name || `${resolvedName} 대표 메뉴`;
-
-    // 3. 실제 손님 블로그 리뷰 기반 필살기 TOP 3 생성
-    const topStrengths = [];
-    if (blogItems && blogItems.length >= 3) {
-      const b0 = cleanHtml(blogItems[0].description);
-      const b1 = cleanHtml(blogItems[1].description);
-      const b2 = cleanHtml(blogItems[2].description);
-
-      topStrengths.push({
-        rank: 1,
-        title: `손님이 직접 꼽은 ${recommendedMenu}의 깊은 맛과 퀄리티`,
-        description: cleanHtml(blogItems[0].title).slice(0, 60),
-        mentionRate: '손님 솔직 후기',
-        sampleReview: `“${b0.slice(0, 110)}...”`,
-      });
-      topStrengths.push({
-        rank: 2,
-        title: '푸짐한 상차림과 정갈하고 신선한 밑반찬 구성',
-        description: cleanHtml(blogItems[1].title).slice(0, 60),
-        mentionRate: '방문자 추천',
-        sampleReview: `“${b1.slice(0, 110)}...”`,
-      });
-      topStrengths.push({
-        rank: 3,
-        title: '가족 외식 및 모임하기 좋은 쾌적한 매장 공간',
-        description: cleanHtml(blogItems[2].title).slice(0, 60),
-        mentionRate: '재방문 만족',
-        sampleReview: `“${b2.slice(0, 110)}...”`,
-      });
-    } else if (blogItems && blogItems.length > 0) {
-      topStrengths.push({
-        rank: 1,
-        title: `손님이 극찬한 대표 메뉴: ${recommendedMenu}`,
-        description: cleanHtml(blogItems[0].title).slice(0, 60),
-        mentionRate: '블로그 리뷰 확인',
-        sampleReview: `“${cleanHtml(blogItems[0].description).slice(0, 110)}...”`,
-      });
-      topStrengths.push({
-        rank: 2,
-        title: '손맛 가득한 정성스러운 밑반찬과 요리',
-        description: '자극적이지 않고 정갈한 구성으로 손님 만족도 높음',
-        mentionRate: '실제 방문자 평',
-        sampleReview: '“음식 하나하나 정성이 느껴지고 직원분들도 친절하셔서 기분 좋게 식사했습니다.”',
-      });
-      topStrengths.push({
-        rank: 3,
-        title: '쾌적한 분위기와 편리한 접근성',
-        description: '단체 모임이나 가족 식사 장소로 제격인 공간',
-        mentionRate: '모임 추천',
-        sampleReview: '“매장도 청결하고 주차나 좌석이 편해서 가족들과 자주 찾게 될 것 같아요.”',
-      });
     } else {
-      topStrengths.push({
-        rank: 1,
-        title: `${resolvedName}의 시그니처 대표 메뉴`,
-        description: '네이버 플레이스에 등록된 핵심 메뉴와 식재료 퀄리티',
-        mentionRate: '대표 메뉴',
-        sampleReview: '“대표 메뉴가 정말 맛있고 정갈해서 믿고 방문할 수 있는 곳입니다.”',
-      });
-      topStrengths.push({
-        rank: 2,
-        title: '정갈하고 푸짐한 상차림 구성',
-        description: '손님들이 부담 없이 즐길 수 있는 가성비와 맛',
-        mentionRate: '만족도 높음',
-        sampleReview: '“음식 양도 넉넉하고 반찬들도 깔끔해서 아주 만족스러웠습니다.”',
-      });
-      topStrengths.push({
-        rank: 3,
-        title: '친절한 응대와 쾌적한 매장 환경',
-        description: '가족 외식 및 모임 장소로 지인에게 추천하고 싶은 곳',
-        mentionRate: '재방문율 우수',
-        sampleReview: '“사장님이 너무 친절하셔서 식사하는 내내 편안했습니다.”',
-      });
+      menus = menus.map((m, i) => ({ ...m, isPopular: Boolean(m.isPopular || i < 2) }));
     }
+    const recommendedMenu = (menusSource === 'official' && (menus.find((m) => m.isPopular) || menus[0]).name) || menus[0].name;
+    const keywordMenu = home && home.keywords.find((k) => menus.some((m) => m.name.includes(k)));
+    const topKeyword = keywordMenu || (home && home.keywords[0]) || '';
+
+    // 5. 필살기 TOP 3 + 후기 요약
+    const { strengths: topStrengths, source: strengthsSource } = buildStrengths({ resolvedName, home, blogItems });
+    const reviewSummary = [
+      ...((home && home.reviews) || []).map((r) => `${r.title}: ${snippet(r.contents, 120)}`),
+      ...(blogItems || []).map((b) => `${cleanHtml(b.title)}: ${snippet(b.description, 120)}`),
+    ].slice(0, 5).join('\n');
 
     const hookCopy = `${resolvedName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${recommendedMenu} 실물 영접 🔥`;
+    const officialSummary = buildOfficialSummary(home);
 
     return res.status(200).json({
       storeName: resolvedName,
       category,
       address,
-      summary: `${resolvedName}의 네이버 플레이스 및 최신 손님 리뷰를 실시간으로 분석한 결과입니다.`,
+      placeId: placeId || '',
+      officialSummary,
+      officialKeywords: (home && home.keywords) || [],
+      reviewSummary,
+      menusSource,
+      strengthsSource,
+      summary: placeId
+        ? `${resolvedName}의 네이버 플레이스 공식정보와 최신 손님 후기를 분석한 결과입니다.`
+        : `${resolvedName}의 네이버 지역 정보와 손님 후기를 분석한 결과입니다.`,
       topStrengths,
       scoreCard: {
-        menuCount: menus.length,
+        menuCount: menusSource === 'official' ? menus.length : 0,
         hasPhotos: true,
         shortsCount: youtubeResult.count,
         sampleVideoTitle: youtubeResult.sampleTitle,
@@ -375,7 +258,7 @@ export default async function handler(req, res) {
       aiPlan: {
         recommendedMenu,
         hookCopy,
-        conceptPitch: `첫 3초 동안 ${recommendedMenu}의 클로즈업 비주얼과 사운드를 강조해 손님의 침샘을 자극하고 방문을 유도합니다.`,
+        conceptPitch: `첫 3초 동안 ${recommendedMenu}의 클로즈업 비주얼과 사운드를 강조해 손님의 침샘을 자극하고 방문을 유도합니다.${topKeyword ? ` 사장님이 대표 키워드로 등록한 '${topKeyword}'도 함께 보여드려요.` : ''}`,
       },
       menus,
     });

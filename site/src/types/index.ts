@@ -5,10 +5,25 @@ export interface MenuItem {
   isPopular?: boolean;
 }
 
+// 상호명 입력 중 보여주는 실제 매장 후보 (네이버 지역 검색)
+export interface StoreCandidate {
+  storeName: string;
+  category: string;
+  roadAddress: string;
+  address: string;
+  link?: string;
+}
+
 export interface StoreDiagnosticResult {
   storeName: string;
   category: string;
   address: string;
+  placeId?: string; // 네이버 플레이스 ID (선택한 지점의 정확한 공식정보 기준)
+  officialSummary?: string; // 플레이스 공식 매장 특징 (대표 키워드·좌석·편의시설·방문자 선택 키워드)
+  officialKeywords?: string[];
+  reviewSummary?: string;
+  menusSource?: 'official' | 'fallback';
+  strengthsSource?: 'official' | 'blog' | 'fallback';
   summary: string;
   // 손님이 기억하는 필살기 TOP 3
   topStrengths: {
@@ -17,6 +32,7 @@ export interface StoreDiagnosticResult {
     description: string;
     mentionRate: string;
     sampleReview: string;
+    isFallback?: boolean;
   }[];
   // 홍보 성적표
   scoreCard: {
@@ -40,6 +56,9 @@ export interface PlanOptions {
   font: string;
   voice: string;
   bgm: string;
+  address?: string;
+  placeId?: string;
+  ownerMemo?: string; // 사장님이 꼭 강조하고 싶은 점·수정 요청 (선택 1줄)
 }
 
 export interface LeadSubmission {
