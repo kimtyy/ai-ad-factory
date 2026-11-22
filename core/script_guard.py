@@ -237,6 +237,16 @@ BANNED_STYLE_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"즐기실\s*수\s*있", "'즐기실 수 있어요' 설명조"),
     (r"[가-힣]실\s*수\s*있", "'~하실 수 있어요' 존대 설명조"),
     (r"[가-힣]히\s*(이에요|예요)\s*[.!?~]*$", "부사+'예요' 비문 ('확실히예요')"),
+    # 숏폼 광고 전문 카피라이터 규칙: 건조한 AI 설명체 및 상투적 폴백 문구 엄격 금지
+    (r"테이블마다\s*(자리가|편하게|넉넉|앉)", "건조한 AI 설명문 '테이블마다 자리가 넉넉해 편하게 앉아요'"),
+    (r"한\s*입이면\s*끝", "상투적 클리셰 '한 입이면 끝!'"),
+    (r"확실한\s*맛과\s*독보적\s*매력", "상투적 템플릿 문구 '확실한 맛과 독보적 매력'"),
+    (r"손님\s*극찬\s*시그니처", "상투적 템플릿 문구 '손님 극찬 시그니처'"),
+    (r"이게\s*이유(예요|에요)", "상투적 템플릿 문구 '이게 이유예요'"),
+    (r"직접\s*보면\s*알아요", "상투적 템플릿 문구 '직접 보면 알아요'"),
+    (r"그래서\s*찾는\s*집(이에요|에요)", "상투적 템플릿 문구 '그래서 찾는 집이에요'"),
+    (r"남녀노소\s*누구나", "진부한 상투어 '남녀노소 누구나'"),
+    (r"\d+\s*명부터\s*\d+\s*명|\d+\s*명까지", "사진에 없는 인원수 과장·날조 ('10명부터 30명까지' 등)"),
 )
 
 
@@ -999,15 +1009,19 @@ def is_hook_echo(hook: str, text: str, core_concept: str = "") -> bool:
     return bool(hook and text and repeated_line_issues([text], hook))
 
 
-_CONCEPT_FALLBACKS = ("{c}, 이게 이유예요.", "{c}, 직접 보면 알아요.", "{c}, 그래서 찾는 집이에요.")
+_CONCEPT_FALLBACKS = ("{c}, 한 번 맛보면 잊을 수 없죠.", "{c}, 보기만 해도 침샘을 자극해요.", "{c}, 놓칠 수 없는 특별함이 있어요.")
 
 
 def concept_fallback_line(core_concept: str, index: int = 0) -> str:
-    """LLM 대사를 모두 버려야 할 때 쓰는 최후의 안전 문구. 컨셉 문구를 그대로 살려 조용히 일반 대본으로 바뀌는 것을 막는다."""
+    """LLM 대사를 모두 버려야 할 때 쓰는 안전 문구. 상투적 설명문 대신 자연스러운 구어체로 반환한다."""
     c = (core_concept or "").strip().rstrip(".!? ")
     if not c:
         return ""
-    return _CONCEPT_FALLBACKS[index % len(_CONCEPT_FALLBACKS)].format(c=c)
+    # "손님 극찬 시그니처 ... 의 확실한 맛과 독보적 매력" 같은 잔여 템플릿 정리
+    clean_c = re.sub(r"^(손님\s*극찬\s*시그니처\s*|대표\s*시그니처\s*)", "", c)
+    clean_c = re.sub(r"의\s*(확실한\s*맛과\s*독보적\s*매력|독보적인\s*비주얼과\s*맛)$", "", clean_c).strip()
+    clean_c = clean_c or c
+    return _CONCEPT_FALLBACKS[index % len(_CONCEPT_FALLBACKS)].format(c=clean_c)
 
 
 # ---------------------------------------------------------------- 6. 화면과 무관한 주제 난입

@@ -91,16 +91,33 @@ def _image_b64(img) -> str:
 
 
 def parse_json_text(text: str) -> Any:
-    """응답 텍스트 → JSON (코드 블록 표시·앞뒤 설명이 섞여도 첫 JSON 객체/배열을 찾아 파싱)"""
+    """응답 텍스트 → JSON (코드 블록 표시·앞뒤 설명·후행 쉼표가 섞여도 첫 JSON 객체/배열을 찾아 안전하게 파싱)"""
     t = (text or "").strip()
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
+    m_block = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", t)
+    if m_block:
+        candidate = m_block.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            t = candidate
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t).strip()
     try:
         return json.loads(t)
     except json.JSONDecodeError:
+        cleaned = re.sub(r",\s*([\]}])", r"\1", t)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
         m = re.search(r"[\[{]", t)
         if not m:
             raise
-        return json.JSONDecoder().raw_decode(t[m.start():])[0]
+        sub = t[m.start():]
+        try:
+            return json.JSONDecoder().raw_decode(sub)[0]
+        except json.JSONDecodeError:
+            cleaned_sub = re.sub(r",\s*([\]}])", r"\1", sub)
+            return json.JSONDecoder().raw_decode(cleaned_sub)[0]
 
 
 # ---------------------------------------------------------------- 엔진별 호출

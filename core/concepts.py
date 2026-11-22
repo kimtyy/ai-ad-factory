@@ -54,8 +54,8 @@ def apply_lead_menu(concepts: List[Dict[str, str]], lead_menu: str) -> List[Dict
     c0 = out[0]
     c0["id"] = "lead_menu_focus"
     c0["badge"] = f"🍽️ [점주 선택] {menu}"
-    c0["headline"] = f"{menu}, 아직 안 드셔보셨어요?"
-    c0["core_concept"] = f"손님 극찬 시그니처 '{menu}'의 확실한 맛과 독보적 매력"
-    c0["description"] = f"점주님이 선택하신 대표 메뉴 '{menu}'를 주인공으로 손님의 시선을 사로잡는 실속형 1컨셉"
+    c0["headline"] = f"{menu}, 이 비주얼 보면 오늘 바로 가고 싶어질 걸요?"
+    c0["core_concept"] = f"대표 시그니처 '{menu}'의 독보적인 비주얼과 맛"
+    c0["description"] = f"점주님이 선택하신 대표 메뉴 '{menu}'를 주인공으로 손님의 침샘과 시선을 사로잡는 실속형 1컨셉"
     out[0] = c0
     return out
