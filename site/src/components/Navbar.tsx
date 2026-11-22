@@ -21,7 +21,7 @@ export const Navbar: FC<NavbarProps> = ({ onReset }) => {
                 샵스토리
               </span>
               <span className="text-[10px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-1.5 py-0.5 rounded-full">
-                무료 진단
+                AI 정밀 진단
               </span>
             </div>
           </div>

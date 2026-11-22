@@ -18,7 +18,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
   const currentMenu = planOptions.selectedMenu || result.aiPlan.recommendedMenu;
   const isDefaultMenu = !planOptions.selectedMenu || planOptions.selectedMenu === result.aiPlan.recommendedMenu;
 
-  // 주인공 메뉴 변경 시 3초 훅(Hook) 카피 안의 메뉴명 실시간 동기화
+  // 주인공 메뉴 변경 시 3초 훅(Hook) 카피 안의 메뉴명 실시간 동기화 (주류/음료 자연스러움 분기)
   const dynamicHookCopy = (() => {
     if (isDefaultMenu) {
       return result.aiPlan.hookCopy;
@@ -27,7 +27,20 @@ export const ReportScreen: FC<ReportScreenProps> = ({
     if (defaultMenu && result.aiPlan.hookCopy.includes(defaultMenu)) {
       return result.aiPlan.hookCopy.split(defaultMenu).join(currentMenu);
     }
-    return `${result.storeName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${currentMenu} 실물 영접 🔥`;
+    const text = `${currentMenu} ${result.category}`.toLowerCase();
+    if (/(맥주|생맥|눈꽃맥주|얼음맥주|하이볼|소주|막걸리|와인|사케|칵테일|호프|주점|펍|포차|이자카야)/.test(text)) {
+      return `${result.storeName} 오시면 첫 잔은 무조건 이거죠! 한 모금에 속이 뻥 뚫리는 ${currentMenu} 실물 영접 🍺`;
+    }
+    if (/(빙수|눈꽃빙수|팥빙수|아이스크림|파르페|스무디|에이드|주스|커피|라떼|아메리카노|카페|디저트)/.test(text)) {
+      return `${result.storeName} 가면 이건 무조건 맛봐야죠! 시원하게 입맛 당기는 ${currentMenu} 실물 영접 🍧`;
+    }
+    if (/(갈비|삼겹살|목살|소고기|한우|곱창|막창|구이|불고기|스테이크|숯불)/.test(text)) {
+      return `${result.storeName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${currentMenu} 실물 영접 🔥`;
+    }
+    if (/(찌개|탕|국밥|전골|라면|우동|짬뽕)/.test(text)) {
+      return `${result.storeName} 가면 이건 무조건 시켜야죠! 속까지 뜨끈하게 확 풀리는 ${currentMenu} 실물 영접 🍲`;
+    }
+    return `${result.storeName} 가면 이건 무조건 시켜야죠! 손님들 극찬 쏟아지는 ${currentMenu} 실물 영접 🔥`;
   })();
 
   return (
@@ -114,6 +127,45 @@ export const ReportScreen: FC<ReportScreenProps> = ({
               </div>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* 와 본 손님 vs 아직 안 와 본 손님 브릿지 카드 */}
+      <div className="bg-gradient-to-br from-[#0F2744] to-[#1E3A5F] text-white rounded-3xl p-5 shadow-md">
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-white/15 text-white/90 border border-white/20">
+            손님 심리 분석
+          </span>
+        </div>
+        <h4 className="text-[18px] font-black leading-snug mb-3.5">
+          그런데 이 필살기,<br />
+          <span className="text-amber-300">와 본 손님</span>만 알고 있습니다
+        </h4>
+
+        <div className="grid grid-cols-2 gap-2.5 mb-3.5 text-xs">
+          <div className="bg-white/10 rounded-2xl p-3 border border-white/10">
+            <div className="font-bold text-emerald-300 flex items-center gap-1 mb-1">
+              <span>✅</span> 와 본 손님
+            </div>
+            <p className="text-[11px] text-white/80 leading-relaxed">
+              리뷰에 칭찬 가득,<br />
+              "진작 올 걸" 단골 확정
+            </p>
+          </div>
+          <div className="bg-white/10 rounded-2xl p-3 border border-white/10">
+            <div className="font-bold text-amber-300 flex items-center gap-1 mb-1">
+              <span>❓</span> 아직 안 와 본 손님
+            </div>
+            <p className="text-[11px] text-white/80 leading-relaxed">
+              간판·별점만 대충 보고<br />
+              그냥 스쳐 지나침
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl p-3 text-center text-[#0F2744] font-extrabold text-xs shadow-xs leading-relaxed">
+          💬 텍스트 리뷰 수십 개를 읽는 것보다<br />
+          <strong className="text-[#C92A2A]">3초 쇼츠 한 편</strong>이 훨씬 빠릅니다
         </div>
       </div>
 
@@ -299,6 +351,107 @@ export const ReportScreen: FC<ReportScreenProps> = ({
           <span>⚙️ 숏폼 기획 (메뉴·자막·목소리·BGM) 수정하기</span>
           <span className="text-slate-400">&gt;</span>
         </button>
+      </div>
+
+      {/* 4. 실제 완성 쇼츠 미리보기 (9:16 세로 카드) */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+        <div className="mb-3">
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2 py-0.5 rounded-full">
+              실제 제작 사례
+            </span>
+          </div>
+          <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight">
+            샵스토리 완성 영상은 이 정도 퀄리티로 나옵니다
+          </h3>
+          <p className="text-xs text-slate-500 mt-1">
+            별도 촬영 방문 없이, 사장님 매장 사진과 리뷰만으로 제작된 실제 숏폼입니다.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 pt-2">
+          <div className="space-y-1.5">
+            <div className="w-full aspect-[9/16] rounded-2xl overflow-hidden bg-slate-900 shadow-md border border-slate-200">
+              <iframe
+                src="https://www.youtube.com/embed/6G1JpEvY2iw"
+                title="샵스토리 제작 쇼츠 샘플 1"
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+            <p className="text-[11px] font-bold text-slate-700 text-center truncate">
+              🎬 설맥 가평현리점 쇼츠
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <div className="w-full aspect-[9/16] rounded-2xl overflow-hidden bg-slate-900 shadow-md border border-slate-200">
+              <iframe
+                src="https://www.youtube.com/embed/U8FELXcHHIg"
+                title="샵스토리 제작 쇼츠 샘플 2"
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+            <p className="text-[11px] font-bold text-slate-700 text-center truncate">
+              🎬 효정명인갈비 쇼츠
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. 제작 사양 & 안심 보장 카드 */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+        <div className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#0F2744]" />
+          <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight">
+            제작 사양 & 안심 보장
+          </h3>
+        </div>
+
+        {/* 제작 사양 2x2 그리드 */}
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+            <div className="text-slate-400 text-[10px] font-semibold mb-0.5">화질 규격</div>
+            <div className="font-extrabold text-slate-800 text-[13px]">🎬 풀HD (1080×1920)</div>
+          </div>
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+            <div className="text-slate-400 text-[10px] font-semibold mb-0.5">화면 비율</div>
+            <div className="font-extrabold text-slate-800 text-[13px]">📱 9:16 세로형 쇼츠</div>
+          </div>
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+            <div className="text-slate-400 text-[10px] font-semibold mb-0.5">배포 채널</div>
+            <div className="font-extrabold text-slate-800 text-[13px]">🚀 4대 채널 패키지</div>
+            <div className="text-[10px] text-slate-500">유튜브·릴스·클립·틱톡</div>
+          </div>
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+            <div className="text-slate-400 text-[10px] font-semibold mb-0.5">매장 유입</div>
+            <div className="font-extrabold text-slate-800 text-[13px]">📍 네이버 플레이스 연동</div>
+            <div className="text-[10px] text-slate-500">엔딩 검색창 그래픽</div>
+          </div>
+        </div>
+
+        {/* 안심 보장 3줄 */}
+        <div className="p-4 rounded-2xl bg-[#EEF3F9] border border-[#D0DCEB] text-xs text-slate-700 space-y-2.5">
+          <div className="font-bold text-[#0F2744] flex items-center gap-1.5 text-[13px]">
+            <span>🛡️</span> 샵스토리의 3대 안심 보장
+          </div>
+          <ul className="space-y-2 text-[12px] leading-relaxed">
+            <li className="flex items-start gap-2">
+              <span className="text-[#0F2744] font-bold shrink-0">✓</span>
+              <span><strong>추가 촬영 불필요:</strong> 사장님이 직접 촬영하실 필요 없이 기존 매장·리뷰 자료로 제작합니다.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-[#0F2744] font-bold shrink-0">✓</span>
+              <span><strong>무상 수정 지원:</strong> 영상 전달 후 7일간 자막·목소리·배경음악 수정을 지원합니다.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-[#0F2744] font-bold shrink-0">✓</span>
+              <span><strong>원스톱 업로드 패키지:</strong> 매장 계정 자산으로 바로 올릴 수 있는 제목·해시태그·장소 태그까지 함께 제공합니다.</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   );

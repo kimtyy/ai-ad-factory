@@ -120,7 +120,7 @@ export default function App() {
         <footer className="px-5 py-8 text-center text-xs text-slate-400 space-y-2 border-t border-slate-200/60 mt-auto">
           <div className="font-bold text-slate-600">샵스토리 (ShopStory)</div>
           <p className="leading-relaxed">
-            AI 기반 소상공인 매장 무료 진단 및 숏폼 홍보 영상 자동 제작 솔루션
+            AI 기반 소상공인 매장 정밀 진단 및 숏폼 홍보 영상 자동 제작 솔루션
           </p>
           <div className="text-[11px] text-slate-400">
             상호: 허브스마트 | 대표: 김태영 | 문의: kimtyy@gmail.com<br />

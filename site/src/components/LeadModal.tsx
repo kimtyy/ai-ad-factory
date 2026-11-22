@@ -108,14 +108,14 @@ export const LeadModal: FC<LeadModalProps> = ({
             {/* 헤더 */}
             <div className="mb-4">
               <span className="text-[11px] font-bold text-[#0F2744] bg-[#EEF3F9] border border-[#D0DCEB] px-2.5 py-0.5 rounded-full inline-block mb-1.5">
-                무료 숏폼 샘플 제작 신청
+                쇼츠 제작 신청
               </span>
               <h3 className="text-[20px] font-extrabold text-slate-900 leading-snug">
                 사장님 매장 맞춤 영상,<br />
-                무료 샘플을 받아보세요
+                쇼츠 제작을 신청하세요
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                기획하신 내용 그대로 1분 만에 샘플 영상을 제작해 카카오톡으로 보내드립니다.
+                기획하신 내용 그대로 전문 스튜디오에서 영상을 제작해 카카오톡으로 안내드립니다.
               </p>
             </div>
 
@@ -213,7 +213,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                   className="mt-0.5 w-4 h-4 text-[#0F2744] rounded border-slate-300 focus:ring-0"
                 />
                 <span className="text-[11px] text-slate-500 leading-tight">
-                  [필수] 매장 진단 리포트 발송 및 무료 영상 샘플 안내를 위한 개인정보 수집·이용에 동의합니다.
+                  [필수] 매장 진단 리포트 발송 및 쇼츠 제작 안내를 위한 개인정보 수집·이용에 동의합니다.
                 </span>
               </label>
 
@@ -231,7 +231,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                     <span>접수 처리 중...</span>
                   </div>
                 ) : (
-                  <span>🚀 무료 샘플 영상 제작 신청하기</span>
+                  <span>🎬 쇼츠 제작 신청하기</span>
                 )}
               </button>
             </form>
@@ -269,7 +269,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                 onClick={onResetAll}
                 className="w-full h-12 rounded-2xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
               >
-                다른 매장도 무료 진단해보기
+                다른 매장 정밀 진단해보기
               </button>
               <button
                 onClick={onClose}

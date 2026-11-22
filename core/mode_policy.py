@@ -192,13 +192,13 @@ RAP_POLICY = replace(
     OWNER_POLICY, name_ko="매장 1컷 1카피 랩형", min_chars=6, target_chars=16, max_chars=24, min_scene_sec=1.6, max_scene_sec=2.9, default_scene_sec=2.0,
     tts_rate="+18%", xfade_sec=0.12, tail_sec=0.05, caption_chunk_chars=0, semantic_chunks=False, silent_scene_sec=2.0,
 )
-RAP_TOP_POLICY = replace(RAP_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+RAP_TOP_POLICY = replace(RAP_POLICY, center_y=0.27, landscape_fg_center_y=0.52)
 
 # 🎉 모임·행사·추억: 컷당 2.5초 고정 템포 (최대 23컷 × 2.5초 = 57.5초, 쇼츠 59초 한도 안). 컷 길이 = 진행 2.5초 + 전환 겹침 0.12초, 낭독이 길어져도 상한 3.4초
 MEMORY_POLICY = replace(
     RAP_POLICY, name_ko="모임·행사·추억 컷당 2.5초", max_chars=20, min_scene_sec=2.62, max_scene_sec=3.4, default_scene_sec=2.5, silent_scene_sec=2.47,
 )
-MEMORY_TOP_POLICY = replace(MEMORY_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+MEMORY_TOP_POLICY = replace(MEMORY_POLICY, center_y=0.27, landscape_fg_center_y=0.52)
 
 
 def owner_tempo() -> str:
@@ -206,7 +206,7 @@ def owner_tempo() -> str:
     return "rap" if os.getenv("OWNER_TEMPO", "").strip().lower() == "rap" else "beat"
 
 
-STAY_TOP_POLICY = replace(STAY_POLICY, center_y=0.24)             # 상단 여백 옵션 (사장님 모드와 같은 24%)
+STAY_TOP_POLICY = replace(STAY_POLICY, center_y=0.27)             # 상단 여백 옵션 (사장님 모드와 같은 27%)
 
 
 # =================================================================
@@ -244,7 +244,7 @@ SHOP_POLICY = replace(
     max_scene_sec=4.6, default_scene_sec=3.6, tts_rate="+10%", xfade_sec=0.25, tail_sec=0.20, caption_font_ratio=0.064,
     caption_stroke_ratio=0.0075, center_y=0.55, bold_impact=True, caption_max_width=0.76, caption_chunk_chars=18, semantic_chunks=True,
 )
-SHOP_TOP_POLICY = replace(SHOP_POLICY, center_y=0.24)            # 상단 여백 옵션 (사장님·숙소 모드와 같은 24%)
+SHOP_TOP_POLICY = replace(SHOP_POLICY, center_y=0.27)            # 상단 여백 옵션 (사장님·숙소 모드와 같은 27%)
 
 
 def commerce_shop_style() -> bool:
@@ -351,11 +351,11 @@ def intro_cover_enabled() -> bool:
 INTRO_COVER_SEC = 0.5
 
 
-# 사장님 모드 '상단 여백' 자막: 음식 사진을 가리지 않게 위쪽 24%, 가로 사진은 중심을 52%로 내려 상단 블러 여백에 자막이 들어가게
-OWNER_TOP_POLICY = replace(OWNER_POLICY, center_y=0.24, landscape_fg_center_y=0.52)
+# 사장님 모드 '상단 여백' 자막: 음식 사진을 가리지 않게 위쪽 27%, 가로 사진은 중심을 52%로 내려 상단 블러 여백에 자막이 들어가게 (상호 배지 하단과 여백 확보)
+OWNER_TOP_POLICY = replace(OWNER_POLICY, center_y=0.27, landscape_fg_center_y=0.52)
 CAPTION_POS_OPTIONS = {
     "mid": "🎯 중단 안전영역 (55% - 유튜브 하단 UI 위, 기본값)",
-    "top": "⬆️ 상단 여백영역 (24% - 음식 사진 100% 노출)",
+    "top": "⬆️ 상단 여백영역 (27% - 음식 사진 100% 노출 · 상호 배지 여백 확보)",
 }
 
 

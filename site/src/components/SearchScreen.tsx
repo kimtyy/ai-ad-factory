@@ -211,7 +211,7 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
               </div>
             ) : (
               <>
-                <span>🔍 무료 매장 진단하기</span>
+                <span>🔍 우리 매장 정밀 진단하기</span>
               </>
             )}
           </button>
@@ -275,7 +275,7 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
 
       {/* 하단 안심 안내 문구 */}
       <div className="mt-10 p-4 rounded-2xl bg-slate-100/70 text-slate-500 text-xs leading-relaxed max-w-sm">
-        🔒 별도의 회원가입 없이 누구나 무료로 매장 진단 리포트를 받아보실 수 있습니다.
+        🔒 별도의 회원가입 없이 누구나 즉시 매장 정밀 진단 리포트를 확인하실 수 있습니다.
       </div>
     </div>
   );

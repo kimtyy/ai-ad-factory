@@ -151,6 +151,26 @@ function buildStrengths({ resolvedName, home, blogItems }) {
   return { strengths: out, source };
 }
 
+function buildHookCopy(storeName, menuName, category = '') {
+  const sName = storeName || '우리 매장';
+  const menu = menuName || '대표 메뉴';
+  const text = `${menu} ${category}`.toLowerCase();
+
+  if (/(맥주|생맥|눈꽃맥주|얼음맥주|하이볼|소주|막걸리|와인|사케|칵테일|호프|주점|펍|포차|이자카야)/.test(text)) {
+    return `${sName} 오시면 첫 잔은 무조건 이거죠! 한 모금에 속이 뻥 뚫리는 ${menu} 실물 영접 🍺`;
+  }
+  if (/(빙수|눈꽃빙수|팥빙수|아이스크림|파르페|스무디|에이드|주스|커피|라떼|아메리카노|카페|디저트)/.test(text)) {
+    return `${sName} 가면 이건 무조건 맛봐야죠! 시원하게 입맛 당기는 ${menu} 실물 영접 🍧`;
+  }
+  if (/(갈비|삼겹살|목살|소고기|한우|곱창|막창|구이|불고기|스테이크|숯불)/.test(text)) {
+    return `${sName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${menu} 실물 영접 🔥`;
+  }
+  if (/(찌개|탕|국밥|전골|라면|우동|짬뽕)/.test(text)) {
+    return `${sName} 가면 이건 무조건 시켜야죠! 속까지 뜨끈하게 확 풀리는 ${menu} 실물 영접 🍲`;
+  }
+  return `${sName} 가면 이건 무조건 시켜야죠! 손님들 극찬 쏟아지는 ${menu} 실물 영접 🔥`;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -263,7 +283,7 @@ export default async function handler(req, res) {
       ...(blogItems || []).map((b) => `${cleanHtml(b.title)}: ${snippet(b.description, 120)}`),
     ].slice(0, 5).join('\n');
 
-    const hookCopy = `${resolvedName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${recommendedMenu} 실물 영접 🔥`;
+    const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category);
     const officialSummary = buildOfficialSummary(home);
 
     return res.status(200).json({

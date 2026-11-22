@@ -291,7 +291,7 @@ export const AdminPage: FC = () => {
             <div className="text-4xl mb-3">📭</div>
             <h3 className="text-base font-bold text-slate-800">아직 접수된 리드가 없습니다</h3>
             <p className="text-xs text-slate-400 mt-1 mb-4">
-              점주님이 무료 진단 후 연락처를 남기면 이곳에 실시간으로 표시됩니다.
+              점주님이 매장 정밀 진단 후 연락처를 남기면 이곳에 실시간으로 표시됩니다.
             </p>
             <a
               href="https://shopstory-store.streamlit.app"
