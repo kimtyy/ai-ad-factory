@@ -31,9 +31,9 @@ async function fetchNaverBlog(storeName, address, clientId, clientSecret) {
   const q = encodeURIComponent(query);
   const tries = [
     [`https://naverapihub.apigw.ntruss.com/search/v1/blog?query=${q}&display=15`,
-      { 'X-NCP-APIGW-API-KEY-ID': clientId, 'X-NCP-APIGW-API-KEY': clientSecret }],
+    { 'X-NCP-APIGW-API-KEY-ID': clientId, 'X-NCP-APIGW-API-KEY': clientSecret }],
     [`https://openapi.naver.com/v1/search/blog.json?query=${q}&display=15`,
-      { 'X-Naver-Client-Id': clientId, 'X-Naver-Client-Secret': clientSecret }],
+    { 'X-Naver-Client-Id': clientId, 'X-Naver-Client-Secret': clientSecret }],
   ];
   for (const [url, headers] of tries) {
     try {
@@ -89,7 +89,7 @@ async function fetchYouTubeVideos(storeName, apiKey) {
       const filtered = titleMatches
         .map(m => m[1])
         .filter(t => t && !t.includes('YouTube') && !t.includes('홈') && !t.includes('동영상') && !REAL_ESTATE_VIDEO_REGEX.test(t));
-      
+
       return {
         count: filtered.length,
         sampleTitle: filtered.length > 0 ? cleanHtml(filtered[0]) : '',

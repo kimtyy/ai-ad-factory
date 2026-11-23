@@ -165,7 +165,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
 
         <div className="bg-white rounded-2xl p-3 text-center text-[#0F2744] font-extrabold text-xs shadow-xs leading-relaxed">
           💬 텍스트 리뷰 수십 개를 읽는 것보다<br />
-          <strong className="text-[#C92A2A]">3초 쇼츠 한 편</strong>이 훨씬 빠릅니다
+          <strong className="text-[#0F2744]">눈으로 보는 쇼츠 한 편</strong>이 훨씬 빠릅니다
         </div>
       </div>
 

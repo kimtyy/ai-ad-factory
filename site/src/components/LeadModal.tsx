@@ -94,7 +94,7 @@ export const LeadModal: FC<LeadModalProps> = ({
       />
 
       {/* 모달 카드 */}
-      <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="relative w-full max-w-sm max-h-[92vh] overflow-y-auto bg-white rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 duration-200">
         {!isCompleted ? (
           <div>
             {/* 닫기 버튼 */}
@@ -220,7 +220,7 @@ export const LeadModal: FC<LeadModalProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full h-13 mt-4 rounded-2xl bg-gradient-to-r from-[#0F2744] to-[#1E3A5F] hover:from-[#1E3A5F] hover:to-[#2A4D7A] text-white font-extrabold text-[15px] shadow-lg shadow-[#0F2744]/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                className="w-full min-h-[52px] py-4 mt-4 rounded-2xl bg-gradient-to-r from-[#0F2744] to-[#1E3A5F] hover:from-[#1E3A5F] hover:to-[#2A4D7A] text-white font-extrabold text-[15px] shadow-lg shadow-[#0F2744]/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shrink-0"
               >
                 {isSubmitting ? (
                   <div className="flex items-center gap-2">
@@ -266,16 +266,16 @@ export const LeadModal: FC<LeadModalProps> = ({
 
             <div className="pt-2 space-y-2">
               <button
-                onClick={onResetAll}
+                onClick={onClose}
                 className="w-full h-12 rounded-2xl bg-[#0F2744] hover:bg-[#1E3A5F] text-white font-bold text-sm shadow-md transition-all active:scale-[0.98]"
               >
-                다른 매장 정밀 진단해보기
+                확인 (리포트로 돌아가기)
               </button>
               <button
-                onClick={onClose}
-                className="w-full h-10 rounded-xl bg-white text-slate-500 font-semibold text-xs hover:bg-slate-50 transition-colors"
+                onClick={onResetAll}
+                className="w-full h-9 rounded-xl bg-white text-slate-400 hover:text-slate-600 font-medium text-xs transition-colors"
               >
-                닫기
+                다른 매장 진단하기
               </button>
             </div>
           </div>
