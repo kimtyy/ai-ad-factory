@@ -124,6 +124,24 @@ def invalidate_scene_derivatives(job, s_num: int) -> None:
 _EXTRA_MOTIONS = ("pan left", "zoom out", "pan right", "pan down", "zoom in")
 
 
+def _norm_path(path: Any) -> str:
+    return os.path.normcase(os.path.abspath(str(path))) if path else ""
+
+
+def scene_ai_disclosure(spec: "JobSpec", scene: Dict[str, Any], img: Optional[str] = None) -> bool:
+    """이 씬에 AI 연출 고지 배지를 찍을지. 화면에서 체크한 값은 AI 모션 영상 파일 경로를 키로 저장돼 있다(spec.ai_disclosure_map).
+    영상 씬은 image_path가 비고 영상이 scene['media']['path']에 있으므로, 씬의 대표 컷·같은 문장의 추가 컷(extra_media)의 모든 원본 경로로 찾는다"""
+    if scene.get("ai_disclosure"):
+        return True
+    flagged = {_norm_path(k) for k, v in (getattr(spec, "ai_disclosure_map", None) or {}).items() if v}
+    if not flagged:
+        return False
+    paths = [img, scene.get("image_path"), scene.get("source_path"), (scene.get("media") or {}).get("path")]
+    for em in scene.get("extra_media") or []:
+        paths += [em.get("source_path"), em.get("image_path"), (em.get("media") or {}).get("path")]
+    return any(_norm_path(x) in flagged for x in paths if x)
+
+
 def _extra_cut_videos(gen, scene: dict, s_num: int, real_media: bool, force: bool) -> List[str]:
     """한 문장 안에서 이어지는 추가 컷(extra_media) 클립: 대표 컷과 다른 모션으로 각각 만들어 경로 목록 반환 (없으면 빈 목록)"""
     out: List[str] = []
@@ -756,7 +774,7 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         import gc
         gc.collect()                                          # 씬마다 쓴 이미지·프레임 버퍼를 바로 반환 (클라우드 1GB 한도)
         vo = (scene.get("voiceover") or scene.get("subtitle") or scene.get("caption") or "").strip()
-        disc = bool(scene.get("ai_disclosure") or (getattr(spec, "ai_disclosure_map", None) and spec.ai_disclosure_map.get(img)))
+        disc = scene_ai_disclosure(spec, scene, img)
         manifest.append({**scene, "scene_index": s_num, "scene_number": s_num, "image_path": img, "audio_path": audio,
                          "video_path": video, "extra_videos": extra_videos, "voiceover": vo, "subtitle": vo, "caption": vo,
                          "ai_disclosure": disc})

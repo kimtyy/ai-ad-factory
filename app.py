@@ -486,19 +486,32 @@ def render_media_manager():
             st.rerun()               # 위 목록(썸네일 미리보기)에 방금 올린 사진이 바로 보이도록
 
 
+def _checked_place_candidates() -> list:
+    """1단계 갤러리에서 체크돼 있지만 아직 '영상 소스에 넣기'를 누르지 않은 플레이스 자동 수집 후보 [(후보 번호, 항목)] — 갤러리와 같은 기본 체크 규칙"""
+    ss = st.session_state
+    cands = ss.get("store_photo_candidates") or []
+    if not cands:
+        return []
+    from core.store_photos import DEFAULT_CHECKED
+    ok_idx = [i for i, it in enumerate(cands) if not it.get("flag") and it.get("source") != "blog"]
+    default_on = set(ok_idx[:DEFAULT_CHECKED])
+    return [(i, it) for i, it in enumerate(cands) if not it.get("flag") and ss.get(f"webpick_{i}", i in default_on)]
+
+
 def render_ai_motion_section():
     """
-    작업실 1단계: 사진 1장을 AI 모션 영상(MP4)으로 변환
-    - Google GenAI (Veo) 기반
-    - 음식 시즐감 / 맛있게 먹는 먹방 / 시네마틱 무빙 / 직접 입력
-    - 9:16 모션 비디오 생성 후 씬 목록에서 해당 정지 사진을 MP4로 자동 교체
-    - 원본 복구 지원
+    작업실 1단계: 사진 1장을 AI 모션 영상(MP4)으로 변환 (매장 홍보 전용)
+    - Google GenAI (Veo) 기반. 음식 시즐감 / 맛있게 먹는 먹방 / 시네마틱 무빙 / 직접 입력
+    - 변환 대상: ① 영상 소스 목록의 사진 ② 플레이스에서 자동 수집돼 체크만 된(아직 영상 소스에 안 넣은) 후보 사진
+    - 9:16 모션 비디오를 만들면 목록의 그 사진을 MP4로 교체(후보는 목록 맨 뒤에 추가), 이미 기획된 스토리보드도 새 목록 기준으로 다시 배정. 원본 복구 지원
     """
     ss = st.session_state
     ss.setdefault("ai_motion_backups", {})
     ss.setdefault("ai_disclosure_map", {})
     paths = [p for p in ss.get("uploaded_paths", []) if os.path.exists(p)]
-    img_candidates = [(i, p) for i, p in enumerate(paths) if not is_video_file(p)]
+    targets = [{"kind": "photo", "idx": i, "path": p, "label": f"컷 {i + 1}: {os.path.basename(p)}"} for i, p in enumerate(paths) if not is_video_file(p)]
+    for ci, it in _checked_place_candidates():
+        targets.append({"kind": "cand", "idx": ci, "item": it, "label": f"🏪 플레이스 사진 {ci + 1} (아직 영상 소스에 안 넣음){' · ' + it['title'][:14] if it.get('title') else ''}"})
     converted_items = [(p, orig) for p, orig in ss.ai_motion_backups.items() if p in paths and os.path.exists(orig)]
 
     with st.expander("🎬 사진 1장을 AI 모션 영상(MP4)으로 변환", expanded=False):
@@ -507,25 +520,23 @@ def render_ai_motion_section():
             "(Google AI Studio 유료 결제 계정의 GEMINI_API_KEY 사용)"
         )
 
-        if not img_candidates and not converted_items:
-            st.info("ℹ️ 현재 등록된 사진이 없습니다. 위에서 사진을 먼저 업로드해 주세요.")
+        if not targets and not converted_items:
+            st.info("ℹ️ 변환할 사진이 없습니다. 위에서 사진을 올리거나, [가게 정보 가져오기]로 찾은 사진을 체크해 주세요.")
             return
 
         col1, col2 = st.columns([1.2, 1])
+        target = None
         with col1:
-            if img_candidates:
-                options = [f"컷 {i+1}: {os.path.basename(p)}" for i, p in img_candidates]
+            if targets:
                 sel_idx = st.selectbox(
                     "🖼️ 변환할 사진 선택",
-                    range(len(img_candidates)),
-                    format_func=lambda idx: options[idx],
+                    range(len(targets)),
+                    format_func=lambda idx: targets[idx]["label"],
                     key="ai_motion_target_idx"
                 )
-                target_real_idx, target_path = img_candidates[sel_idx]
+                target = targets[min(int(sel_idx), len(targets) - 1)]
             else:
                 st.info("모든 사진이 이미 비디오로 변환되었거나 비디오 파일입니다.")
-                target_path = None
-                target_real_idx = None
 
             from core.ai_motion import MOTION_PRESETS, generate_ai_motion_clip, AiMotionError
             preset_keys = list(MOTION_PRESETS.keys())
@@ -556,12 +567,18 @@ def render_ai_motion_section():
             )
 
         with col2:
-            if target_path and os.path.exists(target_path):
-                thumb, _ = _media_thumb(target_path)
-                if thumb:
-                    st.image(thumb, caption="선택된 원본 사진", use_container_width=True)
+            if target:
+                try:
+                    if target["kind"] == "photo" and os.path.exists(target["path"]):
+                        thumb, _ = _media_thumb(target["path"])
+                    else:
+                        thumb = (target.get("item") or {}).get("thumbnail") or (target.get("item") or {}).get("link")
+                    if thumb:
+                        st.image(thumb, caption="선택된 원본 사진", use_container_width=True)
+                except Exception:
+                    st.caption("(미리보기를 불러오지 못했어요)")
 
-        if target_path:
+        if target:
             gen_btn = st.button(
                 "✨ AI 모션 클립 생성하기",
                 type="primary",
@@ -569,10 +586,16 @@ def render_ai_motion_section():
                 key="btn_generate_ai_motion"
             )
             if gen_btn:
-                with st.spinner("🎬 Google AI로 사진을 움직이는 9:16 모션 비디오로 변환 중입니다 (약 30~60초 소요)..."):
+                with st.spinner("🎬 Google AI로 사진을 움직이는 9:16 모션 비디오로 변환 중입니다 (약 30~90초 소요)..."):
                     try:
+                        src_path = target.get("path")
+                        if target["kind"] == "cand":
+                            import core.store_photos as _sp
+                            src_path = _sp.download_store_image(target["item"], current_job().uploads_dir)
+                            if not src_path:
+                                raise AiMotionError("플레이스 사진을 내려받지 못했어요. 다른 사진을 고르거나 직접 올려 주세요.")
                         res = generate_ai_motion_clip(
-                            image_path=target_path,
+                            image_path=src_path,
                             preset=sel_preset,
                             custom_prompt=custom_prompt,
                             ai_disclosure=disclosure_checked,
@@ -581,9 +604,16 @@ def render_ai_motion_section():
                             mock=mock_mode
                         )
                         vpath = res["video_path"]
-                        ss.ai_motion_backups[vpath] = target_path
+                        new_paths = list(paths)
+                        if target["kind"] == "photo":
+                            new_paths[target["idx"]] = vpath                              # 그 자리의 사진을 AI 영상으로 교체
+                        else:
+                            if len(new_paths) >= MAX_MEDIA:
+                                raise AiMotionError(f"영상 소스가 가득 찼어요 (최대 {MAX_MEDIA}개). 목록에서 하나를 빼고 다시 시도해 주세요.")
+                            new_paths.append(vpath)                                       # 아직 목록에 없던 플레이스 사진 → 영상으로 목록 맨 뒤에 추가
+                        ss.ai_motion_backups[vpath] = src_path
                         ss.ai_disclosure_map[vpath] = res["ai_disclosure"]
-                        ss.uploaded_paths[target_real_idx] = vpath
+                        _media_changed(new_paths)                                         # 이미 기획된 스토리보드도 새 목록 기준으로 다시 배정
                         ss["last_motion_video"] = vpath
                         st.toast("AI 모션 비디오 변환 완료! 씬 사진이 교체되었습니다.", icon="🎬")
                         st.rerun()
@@ -602,7 +632,10 @@ def render_ai_motion_section():
             if orig_p and os.path.exists(orig_p) and last_vid in ss.uploaded_paths:
                 if st.button("↩️ 원본 정지 사진으로 되돌리기", key="btn_revert_ai_motion"):
                     idx = ss.uploaded_paths.index(last_vid)
-                    ss.uploaded_paths[idx] = orig_p
+                    new_paths = list(ss.uploaded_paths)
+                    new_paths[idx] = orig_p
+                    ss.ai_disclosure_map.pop(last_vid, None)
+                    _media_changed(new_paths)
                     st.toast("원본 사진으로 복구되었습니다.", icon="↩️")
                     st.rerun()
 
@@ -2555,7 +2588,8 @@ with edit_box:
             _render_photo_gallery()                 # 자동 수집 후보 사진 12장 (체크로 고르고 영상 소스에 넣기)
             st.markdown("**📤 내 폰·PC 사진 및 직접 찍은 영상(JPG/PNG/MP4/MOV) 추가 업로드** — 자동 사진과 섞어 쓰거나 내 사진·영상만으로도 만들 수 있어요")
         render_media_manager()
-        render_ai_motion_section()
+        if is_owner_mode and not is_memory:
+            render_ai_motion_section()               # 매장 홍보 전용 (모임·행사는 실제 인물, 쇼핑·도서는 'AI로 상품 이미지를 만들지 않아요' 원칙)
 
 # ==============================================================================
 # [광고의 핵심] 메인 화면: 시각 팩트 기반 전 업종 AI 떡상 1컨셉 제안 & 선택 엔진

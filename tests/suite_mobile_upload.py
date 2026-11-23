@@ -70,7 +70,7 @@ def _count_images(node):
     return n
 
 
-_imgs = _count_images(at.main)
+_imgs = _count_images(at.main) - sum(_count_images(e) for e in at.expander if "AI 모션" in e.label)      # AI 모션 변환 카드 안의 '선택된 원본 사진' 미리보기는 영상 소스 썸네일이 아님
 check(_imgs == 2 and len(at.session_state["uploaded_paths"]) == 2, f"목록에 썸네일 미리보기가 바로 표시 (이미지 {_imgs}개)")
 
 # 같은 업로더 상태에서 다시 실행해도 중복 추가·재안내 없음 (일부만 올라온 상태에서 위젯이 초기화되지 않음)

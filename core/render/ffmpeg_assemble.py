@@ -239,7 +239,9 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 st_layer.alpha_composite(static_layers["disc"])
             if item.get("ai_disclosure"):
                 if "ai_disc" not in static_layers:
-                    static_layers["ai_disc"] = comp.render_ai_disclosure(W, H)
+                    # 상호 배지(brand)가 좌측 상단이면 같은 자리라 겹친다 → AI 연출 배지는 그 아래로
+                    below_brand = bool(brand and getattr(brand, "position", "") == "top_left" and (getattr(brand, "show_label", True) or getattr(brand, "logo_path", None)))
+                    static_layers["ai_disc"] = comp.render_ai_disclosure(W, H, y_frac=0.09 if below_brand else 0.05)
                 st_layer.alpha_composite(static_layers["ai_disc"])
             sp = os.path.join(work, f"s{idx}_static.png")
             st_layer.save(sp)

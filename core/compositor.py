@@ -680,8 +680,9 @@ class AdCompositor:
             y += line_h
         return layer
 
-    def render_ai_disclosure(self, width: int, height: int, text: str = "AI 연출 포함") -> Image.Image:
-        """공정위 지침 대응: AI 모션 영상 씬에 표시할 작은 반투명 배지 (좌측 상단 안쪽)"""
+    def render_ai_disclosure(self, width: int, height: int, text: str = "AI 연출 포함", y_frac: float = 0.05) -> Image.Image:
+        """공정위 지침 대응: AI 모션 영상 씬에 표시할 작은 반투명 배지 (좌측 상단 안쪽).
+        y_frac: 위에서부터의 위치(높이 대비). 상호 배지가 좌측 상단(0.045~0.08)에 있으면 겹치지 않게 그 아래(0.09)로 내려 그린다"""
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(layer)
         font_size = max(13, int(width * 0.024))
@@ -695,7 +696,7 @@ class AdCompositor:
         pad_x, pad_y = int(width * 0.016), int(width * 0.008)
         box_w, box_h = tw + pad_x * 2, th + pad_y * 2
         x0 = int(width * 0.05)
-        y0 = int(height * 0.05)
+        y0 = int(height * y_frac)
         draw.rounded_rectangle([x0, y0, x0 + box_w, y0 + box_h], radius=box_h // 2, fill=(0, 0, 0, 140))
         draw.text((x0 + pad_x - tb[0], y0 + pad_y - tb[1]), label, font=font, fill=(255, 255, 255, 220))
         return layer
