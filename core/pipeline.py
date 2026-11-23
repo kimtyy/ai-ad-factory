@@ -78,6 +78,7 @@ class JobSpec:
     photo_tags: Dict[str, str] = field(default_factory=dict)
     photo_buckets: Dict[str, int] = field(default_factory=dict)          # 사진 5단계 시각 정렬 버킷 {경로: 1~5}
     keep_photo_order: bool = False                                       # True면 올린 순서 그대로 (AI 자동 정렬·비전 분류 호출 생략)
+    ai_disclosure_map: Dict[str, bool] = field(default_factory=dict)     # 씬별 AI 모션 연출 고지 여부 {미디어경로: True/False}
     # 🎉 모임·행사·추억 쇼츠: name = 모임·행사 이름(선택), 사진·영상 N개(최대 10) = 컷 N개 = 카피 N줄 (core/planners/memory.py)
     memory: bool = False
     memory_tone: str = "lively"                                          # lively(유쾌) / warm(따뜻) / formal(기록·기념)
@@ -755,8 +756,10 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
         import gc
         gc.collect()                                          # 씬마다 쓴 이미지·프레임 버퍼를 바로 반환 (클라우드 1GB 한도)
         vo = (scene.get("voiceover") or scene.get("subtitle") or scene.get("caption") or "").strip()
+        disc = bool(scene.get("ai_disclosure") or (getattr(spec, "ai_disclosure_map", None) and spec.ai_disclosure_map.get(img)))
         manifest.append({**scene, "scene_index": s_num, "scene_number": s_num, "image_path": img, "audio_path": audio,
-                         "video_path": video, "extra_videos": extra_videos, "voiceover": vo, "subtitle": vo, "caption": vo})
+                         "video_path": video, "extra_videos": extra_videos, "voiceover": vo, "subtitle": vo, "caption": vo,
+                         "ai_disclosure": disc})
 
     step(75, "타임라인 조립, 자막·오버레이 렌더링 중...")
     importlib.reload(core.compositor)

@@ -680,6 +680,26 @@ class AdCompositor:
             y += line_h
         return layer
 
+    def render_ai_disclosure(self, width: int, height: int, text: str = "AI 연출 포함") -> Image.Image:
+        """공정위 지침 대응: AI 모션 영상 씬에 표시할 작은 반투명 배지 (좌측 상단 안쪽)"""
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        font_size = max(13, int(width * 0.024))
+        try:
+            font = ImageFont.truetype(self.font_path, font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        label = (text or "AI 연출 포함").strip()
+        tb = draw.textbbox((0, 0), label, font=font)
+        tw, th = tb[2] - tb[0], tb[3] - tb[1]
+        pad_x, pad_y = int(width * 0.016), int(width * 0.008)
+        box_w, box_h = tw + pad_x * 2, th + pad_y * 2
+        x0 = int(width * 0.05)
+        y0 = int(height * 0.05)
+        draw.rounded_rectangle([x0, y0, x0 + box_w, y0 + box_h], radius=box_h // 2, fill=(0, 0, 0, 140))
+        draw.text((x0 + pad_x - tb[0], y0 + pad_y - tb[1]), label, font=font, fill=(255, 255, 255, 220))
+        return layer
+
     def create_overlay_image(
         self,
         caption_text: Optional[str],

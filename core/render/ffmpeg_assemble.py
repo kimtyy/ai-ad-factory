@@ -200,7 +200,7 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 segs = [(s0, e0, c, None) for s0, e0, c in tl]
         # 자막(문장 덩어리)과 고정 요소(워터마크·제휴 표시·고정 바·라벨·인용 카드)를 나눠 만든다:
         # 씬과 씬이 디졸브로 겹치는 구간에서는 이전 자막이 먼저 꺼져(씬 끝 xfade 전) 앞뒤 자막이 겹쳐 보이지 않고, 고정 요소는 끊기지 않는다
-        has_static = bool(brand or disclosure or bars or label or quote or item.get("info_line"))
+        has_static = bool(brand or disclosure or bars or label or quote or item.get("info_line") or item.get("ai_disclosure"))
         cap_pngs, static_pngs = [], []
         for j, (s, e, cap, hk) in enumerate(segs):
             if not (cap or hk):
@@ -237,6 +237,10 @@ def assemble(comp, manifest: List[Dict[str, Any]], out_path: str, fps: int = 24,
                 if "disc" not in static_layers:
                     static_layers["disc"] = comp.render_disclosure(disclosure, W, H)
                 st_layer.alpha_composite(static_layers["disc"])
+            if item.get("ai_disclosure"):
+                if "ai_disc" not in static_layers:
+                    static_layers["ai_disc"] = comp.render_ai_disclosure(W, H)
+                st_layer.alpha_composite(static_layers["ai_disc"])
             sp = os.path.join(work, f"s{idx}_static.png")
             st_layer.save(sp)
             static_pngs.append((sp, 0.0, dur))

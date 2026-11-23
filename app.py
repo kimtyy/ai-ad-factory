@@ -486,6 +486,127 @@ def render_media_manager():
             st.rerun()               # 위 목록(썸네일 미리보기)에 방금 올린 사진이 바로 보이도록
 
 
+def render_ai_motion_section():
+    """
+    작업실 1단계: 사진 1장을 AI 모션 영상(MP4)으로 변환
+    - Google GenAI (Veo) 기반
+    - 음식 시즐감 / 맛있게 먹는 먹방 / 시네마틱 무빙 / 직접 입력
+    - 9:16 모션 비디오 생성 후 씬 목록에서 해당 정지 사진을 MP4로 자동 교체
+    - 원본 복구 지원
+    """
+    ss = st.session_state
+    ss.setdefault("ai_motion_backups", {})
+    ss.setdefault("ai_disclosure_map", {})
+    paths = [p for p in ss.get("uploaded_paths", []) if os.path.exists(p)]
+    img_candidates = [(i, p) for i, p in enumerate(paths) if not is_video_file(p)]
+    converted_items = [(p, orig) for p, orig in ss.ai_motion_backups.items() if p in paths and os.path.exists(orig)]
+
+    with st.expander("🎬 사진 1장을 AI 모션 영상(MP4)으로 변환", expanded=False):
+        st.caption(
+            "💡 음식 사진을 넣으면 김이 모락모락 나거나, 손님이 맛있게 먹는 9:16 세로형 모션 비디오로 변환합니다. "
+            "(Google AI Studio 유료 결제 계정의 GEMINI_API_KEY 사용)"
+        )
+
+        if not img_candidates and not converted_items:
+            st.info("ℹ️ 현재 등록된 사진이 없습니다. 위에서 사진을 먼저 업로드해 주세요.")
+            return
+
+        col1, col2 = st.columns([1.2, 1])
+        with col1:
+            if img_candidates:
+                options = [f"컷 {i+1}: {os.path.basename(p)}" for i, p in img_candidates]
+                sel_idx = st.selectbox(
+                    "🖼️ 변환할 사진 선택",
+                    range(len(img_candidates)),
+                    format_func=lambda idx: options[idx],
+                    key="ai_motion_target_idx"
+                )
+                target_real_idx, target_path = img_candidates[sel_idx]
+            else:
+                st.info("모든 사진이 이미 비디오로 변환되었거나 비디오 파일입니다.")
+                target_path = None
+                target_real_idx = None
+
+            from core.ai_motion import MOTION_PRESETS, generate_ai_motion_clip, AiMotionError
+            preset_keys = list(MOTION_PRESETS.keys())
+            preset_labels = [MOTION_PRESETS[k]["label"] for k in preset_keys]
+            sel_preset_label = st.radio(
+                "🎨 모션 스타일 프리셋",
+                preset_labels,
+                index=0,
+                key="ai_motion_preset_choice"
+            )
+            sel_preset = preset_keys[preset_labels.index(sel_preset_label)]
+
+            custom_prompt = ""
+            if sel_preset == "custom":
+                custom_prompt = st.text_input(
+                    "✍️ 모션 연출 지시문 (한국어/영어)",
+                    placeholder="예: 지글지글 끓는 뚝배기에서 김이 피어오르고 국물이 보글거리는 연출",
+                    key="ai_motion_custom_prompt"
+                )
+
+            # AI 연출 고지 옵션 (공정위 지침 대응: 먹방 연출 시 기본 체크)
+            default_disc = MOTION_PRESETS[sel_preset]["default_disclosure"]
+            disclosure_checked = st.checkbox(
+                "🛡️ 영상에 'AI 연출 영상' 작은 안내 표시 (공정위 권고)",
+                value=default_disc,
+                key=f"ai_motion_disc_{sel_preset}",
+                help="맛있게 먹는 먹방 연출 등 실제 인물 시식 연출 시에는 투명한 고지를 위해 기본 체크됩니다."
+            )
+
+        with col2:
+            if target_path and os.path.exists(target_path):
+                thumb, _ = _media_thumb(target_path)
+                if thumb:
+                    st.image(thumb, caption="선택된 원본 사진", use_container_width=True)
+
+        if target_path:
+            gen_btn = st.button(
+                "✨ AI 모션 클립 생성하기",
+                type="primary",
+                use_container_width=True,
+                key="btn_generate_ai_motion"
+            )
+            if gen_btn:
+                with st.spinner("🎬 Google AI로 사진을 움직이는 9:16 모션 비디오로 변환 중입니다 (약 30~60초 소요)..."):
+                    try:
+                        res = generate_ai_motion_clip(
+                            image_path=target_path,
+                            preset=sel_preset,
+                            custom_prompt=custom_prompt,
+                            ai_disclosure=disclosure_checked,
+                            output_dir=current_job().assets_dir,
+                            api_key=api_key,
+                            mock=mock_mode
+                        )
+                        vpath = res["video_path"]
+                        ss.ai_motion_backups[vpath] = target_path
+                        ss.ai_disclosure_map[vpath] = res["ai_disclosure"]
+                        ss.uploaded_paths[target_real_idx] = vpath
+                        ss["last_motion_video"] = vpath
+                        st.toast("AI 모션 비디오 변환 완료! 씬 사진이 교체되었습니다.", icon="🎬")
+                        st.rerun()
+                    except AiMotionError as ame:
+                        st.error(f"⚠️ {ame}")
+                    except Exception as e:
+                        st.error(f"⚠️ 영상 생성 실패: {e}")
+
+        # 최근 변환된 영상 미리보기 및 복구 UI
+        last_vid = ss.get("last_motion_video")
+        if last_vid and os.path.exists(last_vid):
+            st.divider()
+            st.markdown("**🎬 최근 생성된 AI 모션 클립 미리보기**")
+            st.video(last_vid)
+            orig_p = ss.ai_motion_backups.get(last_vid)
+            if orig_p and os.path.exists(orig_p) and last_vid in ss.uploaded_paths:
+                if st.button("↩️ 원본 정지 사진으로 되돌리기", key="btn_revert_ai_motion"):
+                    idx = ss.uploaded_paths.index(last_vid)
+                    ss.uploaded_paths[idx] = orig_p
+                    st.toast("원본 사진으로 복구되었습니다.", icon="↩️")
+                    st.rerun()
+
+
 def _ingest_uploads(files, paths: list, max_media: int, problems) -> None:
     """올라온 파일들(st.file_uploader의 UploadedFile 또는 컴포넌트의 UploadedBlob)을 검사·저장해 목록에 붙이고, 결과 안내를 session_state에 남긴다.
     받는 즉시 바이트를 읽어 작업 폴더에 저장하므로 갤러리를 갔다 와도 파일이 남는다. 지원하지 않거나 깨진 파일은 이유와 함께 경고한다 (조용히 버리지 않음)"""
@@ -2434,6 +2555,7 @@ with edit_box:
             _render_photo_gallery()                 # 자동 수집 후보 사진 12장 (체크로 고르고 영상 소스에 넣기)
             st.markdown("**📤 내 폰·PC 사진 및 직접 찍은 영상(JPG/PNG/MP4/MOV) 추가 업로드** — 자동 사진과 섞어 쓰거나 내 사진·영상만으로도 만들 수 있어요")
         render_media_manager()
+        render_ai_motion_section()
 
 # ==============================================================================
 # [광고의 핵심] 메인 화면: 시각 팩트 기반 전 업종 AI 떡상 1컨셉 제안 & 선택 엔진
@@ -2653,6 +2775,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         photo_tags=dict(ss.get("photo_tags") or {}) if (is_owner_mode and not is_memory) else {},
         photo_buckets=dict(ss.get("photo_buckets") or {}) if (is_owner_mode and not is_memory) else {},
         keep_photo_order=bool(ss.get("keep_photo_order")) if (is_owner_mode and not is_memory) else False,
+        ai_disclosure_map=dict(ss.get("ai_disclosure_map") or {}),
         memory=is_memory, memory_tone=ss.get("mem_tone", "lively"),
         tempo="rap",
         tone_instruction=selected_tone_instruction,
