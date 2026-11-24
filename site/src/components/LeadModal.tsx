@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FC, FormEvent, ChangeEvent } from 'react';
 import { PlanOptions, LeadSubmission } from '../types';
+import { getStoredRefCode } from '../utils/refTracker';
 
 interface LeadModalProps {
   isOpen: boolean;
@@ -70,6 +71,7 @@ export const LeadModal: FC<LeadModalProps> = ({
         storeName,
         ownerName: ownerName.trim(),
         phoneNumber,
+        refCode: getStoredRefCode(),
         // selectedMenu·font·voice·bgm 과 함께 선택한 지점의 주소·placeId·사장님 메모를 저장 (작업실이 그대로 이어받는다)
         planOptions: {
           ...planOptions,

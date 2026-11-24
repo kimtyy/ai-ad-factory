@@ -9,11 +9,13 @@ import { Footer } from './components/Footer';
 import { AdminPage } from './pages/AdminPage';
 import { StoreDiagnosticResult, PlanOptions, LeadSubmission, StoreCandidate } from './types';
 import { diagnoseStore, submitLead } from './services/api';
+import { initRefTracking } from './utils/refTracker';
 
 export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
+    initRefTracking();
     if (typeof window !== 'undefined') {
       setIsAdmin(window.location.pathname.startsWith('/admin'));
     }

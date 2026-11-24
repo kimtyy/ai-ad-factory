@@ -1,5 +1,7 @@
-// site/api/lead.js
+// api/lead.js
 // 리드 수집: Google Apps Script 웹훅(doPost) + 서버 캐시 보관
+
+import { resolveLeadCodes } from './agents-auth.js';
 
 // Vercel Serverless Function 런타임 간 공유를 위한 전역 메모리 캐시
 if (!global.__SHOPSTORY_LEADS__) {
@@ -23,7 +25,7 @@ export default async function handler(req, res) {
     }
   }
 
-  const { storeName, ownerName, phoneNumber, planOptions, createdAt } = body || {};
+  const { storeName, ownerName, phoneNumber, planOptions, createdAt, refCode } = body || {};
 
   if (!storeName || !phoneNumber) {
     return res.status(400).json({ error: '상호명과 휴대폰 번호는 필수입니다.' });
@@ -42,6 +44,8 @@ export default async function handler(req, res) {
     ownerMemo: text(po.ownerMemo, 100),
   };
 
+  const { refCode: finalRef, managerCode: finalMgr } = await resolveLeadCodes(refCode);
+
   const newLead = {
     id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     storeName: String(storeName).trim(),
@@ -49,6 +53,8 @@ export default async function handler(req, res) {
     phoneNumber: String(phoneNumber).trim(),
     planOptions: cleanOptions,
     status: '접수대기',
+    refCode: finalRef,
+    managerCode: finalMgr,
     createdAt: createdAt || new Date().toISOString(),
   };
 
@@ -102,6 +108,8 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           action: 'create_lead',
           ...newLead,
+          refCode: finalRef,
+          managerCode: finalMgr,
         }),
       });
     } catch (e) {

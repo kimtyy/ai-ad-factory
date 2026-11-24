@@ -194,5 +194,132 @@ check(r.lead.id !== skewId, '메뉴가 다른 신청은 별개 건');
 const dupAdmin = (await call(admin, { method: 'GET', query: { token: adminToken } }))[1].leads.filter((l) => l.phoneNumber === '010-7777-6666');
 check(dupAdmin.length === 2, `관리자 목록: 별개 신청 2건 유지 (${dupAdmin.length})`);
 
+// ---------------------------------------------------------------- 7. ?ref= 영업자 추적 & 3단계(super/manager/agent) 권한 분리 테스트
+global.__SHOPSTORY_MOCK_AGENTS__ = [
+  { code: 'team01', name: '김팀장', password: 'pass_team01', role: 'manager', manager_code: 'hq', active: 'Y' },
+  { code: 'agent01', name: '이영업', password: 'pass_agent01', role: 'agent', manager_code: 'team01', active: 'Y' },
+  { code: 'team02', name: '박팀장', password: 'pass_team02', role: 'manager', manager_code: 'hq', active: 'Y' },
+  { code: 'agent02', name: '최영업', password: 'pass_agent02', role: 'agent', manager_code: 'team02', active: 'Y' },
+  { code: 'agent_dormant', name: '휴면영업', password: 'pass_dormant', role: 'agent', manager_code: 'team01', active: 'N' },
+];
+
+// 7-1. ?ref= 파라미터 기반 리드 저장 & managerCode 자동 매핑
+[s, r] = await call(lead, {
+  method: 'POST',
+  body: {
+    storeName: '영업자01매장',
+    ownerName: '오너1',
+    phoneNumber: '010-8888-1111',
+    refCode: 'agent01',
+    planOptions: { selectedMenu: '시그니처' },
+  },
+});
+const leadAgent01 = r.lead;
+check(s === 200 && leadAgent01.refCode === 'agent01' && leadAgent01.managerCode === 'team01', 'ref=agent01 접수 시 refCode: agent01, managerCode: team01 자동 매핑');
+
+[s, r] = await call(lead, {
+  method: 'POST',
+  body: {
+    storeName: '영업자02매장',
+    ownerName: '오너2',
+    phoneNumber: '010-8888-2222',
+    refCode: 'agent02',
+    planOptions: { selectedMenu: '메인요리' },
+  },
+});
+const leadAgent02 = r.lead;
+check(s === 200 && leadAgent02.refCode === 'agent02' && leadAgent02.managerCode === 'team02', 'ref=agent02 접수 시 refCode: agent02, managerCode: team02 자동 매핑');
+
+[s, r] = await call(lead, {
+  method: 'POST',
+  body: {
+    storeName: '본사직속매장',
+    ownerName: '오너3',
+    phoneNumber: '010-8888-3333',
+    // refCode 미지정
+    planOptions: { selectedMenu: '기본메뉴' },
+  },
+});
+const leadHq = r.lead;
+check(s === 200 && leadHq.refCode === 'hq' && leadHq.managerCode === 'hq', 'refCode 없을 시 기본값 hq / hq 매핑');
+
+// 7-2. 3단계 로그인 인증 검증 (super, manager, agent)
+// (1) 수퍼관리자 (code 공란 or hq + master password)
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', code: '', password: 'shopstory2026!' } });
+const superToken = r.token;
+check(s === 200 && !!superToken && r.user.role === 'super' && r.user.code === 'hq', '수퍼관리자 로그인 성공 (role: super)');
+
+// (2) 중간관리자 (team01 + password)
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', code: 'team01', password: 'pass_team01' } });
+const managerToken = r.token;
+check(s === 200 && !!managerToken && r.user.role === 'manager' && r.user.code === 'team01', '중간관리자 로그인 성공 (role: manager)');
+
+// (3) 영업자 (agent01 + password)
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', code: 'agent01', password: 'pass_agent01' } });
+const agent01Token = r.token;
+check(s === 200 && !!agent01Token && r.user.role === 'agent' && r.user.code === 'agent01', '영업자 로그인 성공 (role: agent)');
+
+// (4) 틀린 비밀번호 or 비활성 영업자 로그인 차단
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', code: 'agent01', password: 'wrong_password' } });
+check(s === 401, '틀린 비밀번호 로그인 시 401 거부');
+
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', code: 'agent_dormant', password: 'pass_dormant' } });
+check(s === 401, '비활성(active: N) 영업자 로그인 시 401 거부');
+
+// 7-3. 서버측 원천 필터링 (GET /api/admin) 검증
+// (1) Super: 전체 리드 및 통계 집계 반환
+[s, r] = await call(admin, { method: 'GET', query: { token: superToken } });
+check(s === 200 && r.leads.some((l) => l.id === leadAgent01.id) && r.leads.some((l) => l.id === leadAgent02.id) && r.leads.some((l) => l.id === leadHq.id), 'Super는 전체 팀/영업자 리드 모두 조회');
+check(r.stats && r.stats.byAgent && r.stats.byAgent.agent01 >= 1 && r.stats.byAgent.agent02 >= 1, 'Super에게 영업자별 건수 집계 stats 제공');
+
+// (2) Manager(team01): 본인 직속 및 소속 팀원(agent01) 리드만 반환 (타 팀 agent02 리드 제외)
+[s, r] = await call(admin, { method: 'GET', query: { token: managerToken } });
+const mgrLeads = r.leads;
+check(s === 200 && mgrLeads.some((l) => l.id === leadAgent01.id), 'Manager(team01): 소속 영업자(agent01) 리드 포함');
+check(!mgrLeads.some((l) => l.id === leadAgent02.id), 'Manager(team01): 타 팀 소속(agent02) 리드 원천 차단');
+check(!mgrLeads.some((l) => l.id === leadHq.id), 'Manager(team01): 타 부서(hq) 직속 리드 원천 차단');
+
+// (3) Agent(agent01): 오직 본인(agent01) 리드만 반환
+[s, r] = await call(admin, { method: 'GET', query: { token: agent01Token } });
+const ag01Leads = r.leads;
+check(s === 200 && ag01Leads.every((l) => l.refCode === 'agent01'), 'Agent(agent01): 오직 본인 리드만 반환');
+check(!ag01Leads.some((l) => l.id === leadAgent02.id) && !ag01Leads.some((l) => l.id === leadHq.id), 'Agent(agent01): 타 영업자 및 타 팀 리드 원천 차단');
+
+// 7-4. 상태 변경 권한 (POST action='update_status') 검증
+// (1) Agent01이 타 영업자(agent02) 리드 상태 변경 시도 -> 403 Forbidden
+[s, r] = await call(admin, {
+  method: 'POST',
+  body: { action: 'update_status', token: agent01Token, leadId: leadAgent02.id, status: '제작완료' },
+});
+check(s === 403, 'Agent가 타인 리드 상태 변경 시 403 차단');
+
+// (2) Agent01이 본인(agent01) 리드 상태 변경 -> 200 OK
+[s, r] = await call(admin, {
+  method: 'POST',
+  body: { action: 'update_status', token: agent01Token, leadId: leadAgent01.id, status: '제작완료' },
+});
+check(s === 200 && r.success === true, 'Agent가 본인 리드 상태 변경 성공 (200 OK)');
+
+// (3) Manager(team01)가 타 팀(agent02) 리드 상태 변경 시도 -> 403 Forbidden
+[s, r] = await call(admin, {
+  method: 'POST',
+  body: { action: 'update_status', token: managerToken, leadId: leadAgent02.id, status: '제작완료' },
+});
+check(s === 403, 'Manager가 타 팀 리드 상태 변경 시 403 차단');
+
+// (4) Manager(team01)가 소속 팀(agent01) 리드 상태 변경 -> 200 OK
+[s, r] = await call(admin, {
+  method: 'POST',
+  body: { action: 'update_status', token: managerToken, leadId: leadAgent01.id, status: '상담완료' },
+});
+check(s === 200 && r.success === true, 'Manager가 소속 팀 리드 상태 변경 성공 (200 OK)');
+
+// (5) Super는 어떤 리드든 상태 변경 가능 -> 200 OK
+[s, r] = await call(admin, {
+  method: 'POST',
+  body: { action: 'update_status', token: superToken, leadId: leadAgent02.id, status: '제작완료' },
+});
+check(s === 200 && r.success === true, 'Super는 전체 리드 상태 변경 허용 (200 OK)');
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

@@ -69,10 +69,14 @@ export interface LeadSubmission {
   planOptions: PlanOptions;
   createdAt: string;
   status?: '접수대기' | '제작완료' | '상담완료';
+  refCode?: string;
+  managerCode?: string;
 }
 
 export interface LeadRecord extends LeadSubmission {
   id: string;
   status: '접수대기' | '제작완료' | '상담완료';
+  refCode?: string;
+  managerCode?: string;
 }
 
