@@ -29,17 +29,25 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: '상호명과 휴대폰 번호는 필수입니다.' });
   }
 
+  // planOptions 는 허용한 항목만, 길이를 제한해서 저장한다 (placeId 는 숫자만)
+  const po = planOptions && typeof planOptions === 'object' ? planOptions : {};
+  const text = (v, n) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, n);
+  const cleanOptions = {
+    selectedMenu: text(po.selectedMenu, 60) || '대표 메뉴',
+    font: text(po.font, 30) || '감성 명조',
+    voice: text(po.voice, 30) || '밝은 여성',
+    bgm: text(po.bgm, 20) || 'AI 추천',
+    address: text(po.address, 120),
+    placeId: /^\d{6,}$/.test(String(po.placeId || '')) ? String(po.placeId) : '',
+    ownerMemo: text(po.ownerMemo, 100),
+  };
+
   const newLead = {
     id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     storeName: String(storeName).trim(),
     ownerName: String(ownerName || '사장님').trim(),
     phoneNumber: String(phoneNumber).trim(),
-    planOptions: planOptions || {
-      selectedMenu: '대표 메뉴',
-      font: '감성 명조',
-      voice: '밝은 여성',
-      bgm: 'AI 추천',
-    },
+    planOptions: cleanOptions,
     status: '접수대기',
     createdAt: createdAt || new Date().toISOString(),
   };
@@ -49,19 +57,21 @@ export default async function handler(req, res) {
   const cleanOwner = String(ownerName || '사장님').trim().toLowerCase();
 
   // 중복 제출(더블클릭) 방지: 동일 신청 건이 30초 이내 중복 전송된 경우 기존 건 반환
+  if (!global.__SHOPSTORY_LEAD_RECEIVED__) global.__SHOPSTORY_LEAD_RECEIVED__ = {};
+  const received = global.__SHOPSTORY_LEAD_RECEIVED__;     // 리드 id → 서버 수신 시각 (클라이언트 시계 오차·조작과 무관하게 비교)
   const existingDup = global.__SHOPSTORY_LEADS__.find((l) => {
     const lPhone = String(l.phoneNumber || '').replace(/[^0-9]/g, '');
     const lStore = String(l.storeName || '').replace(/\s+/g, '').toLowerCase();
     const lOwner = String(l.ownerName || '').trim().toLowerCase();
     const lMemo = String(l.planOptions?.ownerMemo || '');
     const lMenu = String(l.planOptions?.selectedMenu || '');
-    const timeDiff = Math.abs(Date.now() - new Date(l.createdAt).getTime());
+    const timeDiff = Date.now() - (received[l.id] || 0);
     return (
       lPhone === cleanPhone &&
       lStore === cleanStore &&
       lOwner === cleanOwner &&
-      lMemo === (cleanOptions?.ownerMemo || '') &&
-      lMenu === (cleanOptions?.selectedMenu || '') &&
+      lMemo === cleanOptions.ownerMemo &&
+      lMenu === cleanOptions.selectedMenu &&
       timeDiff < 30 * 1000
     );
   });
@@ -77,6 +87,8 @@ export default async function handler(req, res) {
 
   // 메모리 보관
   global.__SHOPSTORY_LEADS__.unshift(newLead);
+  received[newLead.id] = Date.now();
+  for (const k of Object.keys(received)) if (Date.now() - received[k] > 10 * 60 * 1000) delete received[k];
 
   console.log('[새로운 리드 접수]', newLead);
 

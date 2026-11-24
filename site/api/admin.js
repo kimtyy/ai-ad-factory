@@ -20,7 +20,11 @@ function areLeadsDuplicate(a, b) {
   if (phoneA.length >= 8 && phoneB.length >= 8 && phoneA === phoneB) {
     const storeA = String(a.storeName || '').replace(/\s+/g, '').toLowerCase();
     const storeB = String(b.storeName || '').replace(/\s+/g, '').toLowerCase();
-    if (storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA)) {
+    if (storeA && storeB && (storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA))) {
+      // 양쪽 모두 선택 메뉴가 있고 서로 다르면 별개 신청 (같은 날 다른 메뉴로 다시 신청한 건을 합치지 않음)
+      const mA = String(a.planOptions?.selectedMenu || '').trim();
+      const mB = String(b.planOptions?.selectedMenu || '').trim();
+      if (mA && mB && mA !== mB) return false;
       const tA = new Date(a.createdAt).getTime();
       const tB = new Date(b.createdAt).getTime();
       if (!isNaN(tA) && !isNaN(tB)) {
@@ -44,7 +48,7 @@ function dedupeLeads(listA, listB) {
     if (idx === -1) {
       merged.push(item);
     } else {
-      merged[idx] = { ...merged[idx], ...item };
+      merged[idx] = { ...item, ...merged[idx] };      // 먼저 들어온(시트) 값이 우선 — 메모리의 옛 상태가 변경된 상태를 덮지 않게
     }
   }
   return merged.sort((a, b) => {

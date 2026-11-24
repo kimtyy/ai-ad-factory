@@ -1,4 +1,4 @@
-// api/recent-stores.js
+// site/api/recent-stores.js
 // 최근 진단된 매장 목록 API (실제 진단된 매장 최신순 최대 6개)
 
 export const SEED_STORES = [
@@ -25,16 +25,19 @@ export function addRecentStore(store) {
   }
 
   const cleanName = String(store.storeName).trim();
+  // 중복 매장 제거 (띄어쓰기 무시 비교)
   const filtered = global.__SHOPSTORY_RECENT_STORES__.filter(
     (s) => s.storeName.replace(/\s+/g, '') !== cleanName.replace(/\s+/g, '')
   );
 
+  // 최신 진단 매장을 맨 앞에 추가
   filtered.unshift({
     storeName: cleanName,
     category: String(store.category || '음식점').trim(),
     address: String(store.address || '').trim(),
   });
 
+  // 최대 6개 유지
   global.__SHOPSTORY_RECENT_STORES__ = filtered.slice(0, 6);
 }
 

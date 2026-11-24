@@ -181,5 +181,18 @@ check(s === 200 && Array.isArray(r.leads), '관리자 리드 목록 조회 성�
 const dupCount = r.leads.filter((l) => l.phoneNumber === '010-9999-8888').length;
 check(dupCount === 1, `동일 리드 중복 제거 확인 (결과: ${dupCount}개)`);
 
+// 6-3. 클라이언트 시계가 어긋나도(createdAt 1시간 전) 서버 수신 시각 기준으로 더블클릭 중복 차단
+const skew = { storeName: '시계오차매장', ownerName: '이사장', phoneNumber: '010-7777-6666', createdAt: new Date(Date.now() - 3600e3).toISOString() };
+[s, r] = await call(lead, { method: 'POST', body: skew });
+const skewId = r.lead.id;
+[s, r] = await call(lead, { method: 'POST', body: skew });
+check(r.lead.id === skewId, '클라이언트 시계 오차가 있어도 중복 접수 차단');
+// 6-4. 다른 메뉴 신청은 별개 건으로 접수
+[s, r] = await call(lead, { method: 'POST', body: { ...skew, planOptions: { selectedMenu: '다른메뉴' } } });
+check(r.lead.id !== skewId, '메뉴가 다른 신청은 별개 건');
+// 6-5. 서버 최초 접수 값(상태 등)이 메모리의 옛 값에 덮이지 않음 — 시트 없는 환경에서는 병합 순서만 확인
+const dupAdmin = (await call(admin, { method: 'GET', query: { token: adminToken } }))[1].leads.filter((l) => l.phoneNumber === '010-7777-6666');
+check(dupAdmin.length === 2, `관리자 목록: 별개 신청 2건 유지 (${dupAdmin.length})`);
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

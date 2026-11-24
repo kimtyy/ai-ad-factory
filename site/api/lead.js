@@ -57,13 +57,15 @@ export default async function handler(req, res) {
   const cleanOwner = String(ownerName || '사장님').trim().toLowerCase();
 
   // 중복 제출(더블클릭) 방지: 동일 신청 건이 30초 이내 중복 전송된 경우 기존 건 반환
+  if (!global.__SHOPSTORY_LEAD_RECEIVED__) global.__SHOPSTORY_LEAD_RECEIVED__ = {};
+  const received = global.__SHOPSTORY_LEAD_RECEIVED__;     // 리드 id → 서버 수신 시각 (클라이언트 시계 오차·조작과 무관하게 비교)
   const existingDup = global.__SHOPSTORY_LEADS__.find((l) => {
     const lPhone = String(l.phoneNumber || '').replace(/[^0-9]/g, '');
     const lStore = String(l.storeName || '').replace(/\s+/g, '').toLowerCase();
     const lOwner = String(l.ownerName || '').trim().toLowerCase();
     const lMemo = String(l.planOptions?.ownerMemo || '');
     const lMenu = String(l.planOptions?.selectedMenu || '');
-    const timeDiff = Math.abs(Date.now() - new Date(l.createdAt).getTime());
+    const timeDiff = Date.now() - (received[l.id] || 0);
     return (
       lPhone === cleanPhone &&
       lStore === cleanStore &&
@@ -85,6 +87,8 @@ export default async function handler(req, res) {
 
   // 메모리 보관
   global.__SHOPSTORY_LEADS__.unshift(newLead);
+  received[newLead.id] = Date.now();
+  for (const k of Object.keys(received)) if (Date.now() - received[k] > 10 * 60 * 1000) delete received[k];
 
   console.log('[새로운 리드 접수]', newLead);
 

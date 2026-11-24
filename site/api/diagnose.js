@@ -287,8 +287,9 @@ export default async function handler(req, res) {
     const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category);
     const officialSummary = buildOfficialSummary(home);
 
+    // 네이버에서 실제로 확인된 매장(플레이스 홈 또는 지역검색 결과)만 노출 — 아무 입력어나 오타가 '최근 진단 매장'에 올라가지 않게
     try {
-      addRecentStore({ storeName: resolvedName, category, address });
+      if (home || localItem) addRecentStore({ storeName: resolvedName, category, address });
     } catch (e) {
       // ignore
     }

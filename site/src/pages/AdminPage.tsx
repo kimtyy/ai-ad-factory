@@ -22,7 +22,11 @@ function areLeadsDuplicate(a: LeadRecord, b: LeadRecord): boolean {
     // 상호명 비교
     const storeA = cleanStore(a.storeName);
     const storeB = cleanStore(b.storeName);
-    const storeMatch = storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA);
+    const storeMatch = !!storeA && !!storeB && (storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA));
+    // 양쪽 모두 선택 메뉴가 있고 서로 다르면 별개 신청 (같은 날 다른 메뉴로 다시 신청한 건을 합치지 않음)
+    const mA = String(a.planOptions?.selectedMenu || '').trim();
+    const mB = String(b.planOptions?.selectedMenu || '').trim();
+    if (mA && mB && mA !== mB) return false;
 
     if (storeMatch) {
       // 시간차 확인 (동일일자이거나 60분 이내 신청이면 동일 건으로 판정)
