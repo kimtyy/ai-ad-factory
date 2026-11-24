@@ -321,5 +321,33 @@ check(s === 200 && r.success === true, 'Manager가 소속 팀 리드 상태 변�
 });
 check(s === 200 && r.success === true, 'Super는 전체 리드 상태 변경 허용 (200 OK)');
 
+// ---------------------------------------------------------------- 8. 토큰 위조·상태값·잘못된 ref·시트 해시 로그인
+{
+  const crypto = await import('node:crypto');
+  // 8-1. 서명 없는 구형 토큰(adm_아무거나)은 더 이상 super 권한을 주지 않는다
+  [s] = await call(admin, { method: 'GET', query: { token: 'adm_forged' } });
+  check(s === 401, '서명 없는 adm_ 토큰 위조 → 401');
+  // 8-2. 페이로드만 super 로 바꾼 토큰은 서명 불일치로 거부
+  const real = (await call(admin, { method: 'POST', body: { action: 'login', code: 'agent01', password: 'pass_agent01' } }))[1].token;
+  const [pl, sig] = real.slice(4).split('.');
+  const forgedPayload = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(pl, 'base64url').toString()), role: 'super' })).toString('base64url');
+  [s] = await call(admin, { method: 'GET', query: { token: `adm_${forgedPayload}.${sig}` } });
+  check(s === 401, '페이로드 변조(super 승격) 토큰 → 401');
+  // 8-3. 만료 없는 토큰·허용되지 않는 상태 값
+  [s] = await call(admin, { method: 'POST', body: { action: 'update_status', leadId: 'x', status: '임의값', token: real } });
+  check(s === 400, '허용되지 않는 상태 값 → 400');
+  // 8-4. 이상한 ref 로 접수해도 오류 없이 처리 (특수문자 제거 / 미등록 코드 보존 / 객체 입력)
+  for (const bad of ['<script>alert(1)</script>', '../../etc', { a: 1 }, '', 'x'.repeat(200)]) {
+    [s, r] = await call(lead, { method: 'POST', body: { storeName: `ref테스트${Math.random()}`, phoneNumber: '010-1212-3434', refCode: bad } });
+    check(s === 200 && /^[A-Za-z0-9_-]{0,32}$/.test(r.lead.refCode) && r.lead.managerCode === 'hq', `비정상 ref(${typeof bad === 'string' ? bad.slice(0, 12) : 'object'}) → 안전 처리 (${r.lead.refCode})`);
+  }
+  // 8-5. 시트가 해시만 내려줘도 로그인 가능, 틀린 비밀번호는 거부
+  global.__SHOPSTORY_MOCK_AGENTS__.push({ code: 'hashed01', name: '해시', passwordSha256: crypto.createHash('sha256').update('s3cret-pw').digest('hex'), role: 'agent', manager_code: 'hq', active: 'Y' });
+  [s] = await call(admin, { method: 'POST', body: { action: 'login', code: 'hashed01', password: 's3cret-pw' } });
+  check(s === 200, '해시 저장 계정 로그인 성공');
+  [s] = await call(admin, { method: 'POST', body: { action: 'login', code: 'hashed01', password: 'wrong' } });
+  check(s === 401, '해시 계정 틀린 비밀번호 거부');
+}
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

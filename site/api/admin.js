@@ -7,12 +7,16 @@ import {
   verifyAdminToken,
   canViewLead,
   canUpdateLead,
+  gasUrl,
+  gasKey,
 } from './agents-auth.js';
 
 // Vercel Serverless Function 런타임 간 공유를 위한 전역 메모리 캐시
 if (!global.__SHOPSTORY_LEADS__) {
   global.__SHOPSTORY_LEADS__ = [];
 }
+
+const ALLOWED_STATUS = ['접수대기', '제작완료', '상담완료'];
 
 function areLeadsDuplicate(a, b) {
   if (a.id && b.id && a.id === b.id) return true;
@@ -111,6 +115,10 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: '인증이 필요합니다.' });
       }
 
+      if (!ALLOWED_STATUS.includes(status)) {
+        return res.status(400).json({ error: '허용되지 않는 상태 값입니다.' });
+      }
+
       // 대상 리드 검색
       let targetLead = global.__SHOPSTORY_LEADS__.find((l) => l.id === leadId);
 
@@ -119,7 +127,7 @@ export default async function handler(req, res) {
         const webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
         if (webhookUrl) {
           try {
-            const gasRes = await fetch(`${webhookUrl}?action=get_leads`, {
+            const gasRes = await fetch(gasUrl(webhookUrl, 'get_leads'), {
               method: 'GET',
               headers: { Accept: 'application/json' },
             });
@@ -155,7 +163,7 @@ export default async function handler(req, res) {
           await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'update_status', leadId, status }),
+            body: JSON.stringify({ action: 'update_status', leadId, status, key: gasKey() }),
           });
         } catch (e) {
           console.warn('Google Sheets status sync error:', e.message);
@@ -181,7 +189,7 @@ export default async function handler(req, res) {
     const webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
     if (webhookUrl) {
       try {
-        const gasRes = await fetch(`${webhookUrl}?action=get_leads`, {
+        const gasRes = await fetch(gasUrl(webhookUrl, 'get_leads'), {
           method: 'GET',
           redirect: 'follow',
           headers: { Accept: 'application/json' },

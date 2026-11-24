@@ -9,6 +9,19 @@ function getSecret() {
   return process.env.ADMIN_JWT_SECRET || process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
 }
 
+/** 구글 시트 웹앱 호출용 공유 키 (Code.gs 스크립트 속성 API_KEY 와 같은 값). 없으면 시트 쪽이 모든 요청을 거부한다 */
+export function gasKey() {
+  return process.env.GAS_API_KEY || '';
+}
+
+export function gasUrl(base, action) {
+  return `${base}${base.includes('?') ? '&' : '?'}action=${action}&key=${encodeURIComponent(gasKey())}`;
+}
+
+function sha256Hex(s) {
+  return crypto.createHash('sha256').update(String(s), 'utf8').digest('hex');
+}
+
 function getAdminPassword() {
   return process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
 }
@@ -38,7 +51,7 @@ export async function getAgents(forceRefresh = false) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4000);
 
-      const res = await fetch(`${webhookUrl}?action=get_agents`, {
+      const res = await fetch(gasUrl(webhookUrl, 'get_agents'), {
         method: 'GET',
         redirect: 'follow',
         headers: { Accept: 'application/json' },
@@ -52,7 +65,8 @@ export async function getAgents(forceRefresh = false) {
           cache.agents = data.agents.map((a) => ({
             code: String(a.code || '').trim(),
             name: String(a.name || '').trim(),
-            password: String(a.password || '').trim(),
+            password: String(a.password || '').trim(),                       // (테스트용 모의 계정 전용) 시트는 해시만 내려준다
+            passwordSha256: String(a.password_sha256 || '').trim().toLowerCase(),
             role: String(a.role || 'agent').trim().toLowerCase(), // super, manager, agent
             manager_code: String(a.manager_code || 'hq').trim(),
             active: String(a.active || 'Y').trim().toUpperCase(),
@@ -105,7 +119,9 @@ export async function authenticateAgent(code, password) {
 
   if (matched) {
     // 본인 비밀번호 또는 마스터 비밀번호로 로그인 허용
-    if (matched.password === cleanPass || cleanPass === adminPassword) {
+    const ownOk = (matched.passwordSha256 && matched.passwordSha256 === sha256Hex(cleanPass))
+      || (matched.password && matched.password === cleanPass);
+    if (ownOk || cleanPass === adminPassword) {
       return {
         code: matched.code,
         name: matched.name || matched.code,
@@ -172,15 +188,8 @@ export function verifyAdminToken(token) {
   if (!token || typeof token !== 'string') return null;
   if (!token.startsWith('adm_')) return null;
 
-  // 구형 토큰 호환 (adm_... 형식에 점(.)이 없는 경우)
-  if (!token.includes('.')) {
-    return {
-      code: 'hq',
-      name: '총괄 관리자',
-      role: 'super',
-      managerCode: 'hq',
-    };
-  }
+  // 서명이 없는 구형 토큰('adm_' + 아무 문자열)은 위조가 가능하므로 받지 않는다
+  if (!token.includes('.')) return null;
 
   try {
     const secret = getSecret();
@@ -199,14 +208,14 @@ export function verifyAdminToken(token) {
 
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
 
-    if (payload.exp && Date.now() > payload.exp) {
+    if (!payload.exp || Date.now() > payload.exp) {
       return null; // 만료됨
     }
 
     return {
       code: payload.code || 'hq',
       name: payload.name || '관리자',
-      role: payload.role || 'agent',
+      role: ['super', 'manager', 'agent'].includes(payload.role) ? payload.role : 'agent',
       managerCode: payload.managerCode || 'hq',
     };
   } catch (e) {

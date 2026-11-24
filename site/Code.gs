@@ -14,7 +14,24 @@
  *    - 다음 사용자 권한으로 실행: "나 (내 계정)"
  *    - 액세스 권한이 있는 사용자: "모든 사용자 (Anyone)" ※ 중요: 익명 호출 허용
  * 5. [배포] 클릭 후 발급된 "웹 앱 URL"을 복사하여 Vercel 환경 변수 `GOOGLE_SHEETS_WEBHOOK_URL` 에 설정
+ * 6. ★ 보안: 웹앱이 익명 호출을 허용하므로 공유 키가 필수입니다.
+ *    - Apps Script [프로젝트 설정] > [스크립트 속성] 에 API_KEY = (길고 무작위한 문자열) 추가
+ *    - Vercel 환경 변수 `GAS_API_KEY` 에 같은 값 설정
+ *    - API_KEY 가 없거나 일치하지 않는 요청은 모두 거부됩니다 (리드 전화번호·영업자 정보 보호)
  */
+
+var NOTIFY_EMAIL = "kimtyy@gmail.com";
+
+/** 공유 키 검사 (스크립트 속성 API_KEY 미설정 시 전부 거부) */
+function isAuthorized(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty("API_KEY");
+  return !!expected && String(key || "") === expected;
+}
+
+function sha256Hex(text) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) { return ("0" + ((b < 0 ? b + 256 : b)).toString(16)).slice(-2); }).join("");
+}
 
 var SHEET_LEADS = "리드목록";
 var SHEET_AGENTS = "영업자목록";
@@ -79,6 +96,10 @@ function doGet(e) {
   try {
     var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "get_leads";
     
+    if (!isAuthorized(e && e.parameter && e.parameter.key)) {
+      return jsonResponse({ error: "unauthorized" }, 401);
+    }
+    
     if (action === "get_agents") {
       return jsonResponse(handleGetAgents());
     }
@@ -109,6 +130,10 @@ function doPost(e) {
       body = JSON.parse(e.postData.contents);
     }
     
+    if (!isAuthorized(body.key)) {
+      return jsonResponse({ error: "unauthorized" }, 401);
+    }
+    
     var action = body.action || "create_lead";
     
     if (action === "update_status") {
@@ -132,11 +157,11 @@ function handleGetAgents() {
   var sheet = getOrCreateSheet(SHEET_AGENTS, AGENTS_HEADERS);
   var lastRow = sheet.getLastRow();
   
-  // 데이터가 없으면 기본 관리자 및 샘플 템플릿 행 추가
+  // 데이터가 없으면 작성 예시 행만 추가 — 비활성(N)이고 비밀번호가 비어 있어 로그인에 쓸 수 없다.
+  // (알려진 기본 비밀번호의 샘플 계정을 활성 상태로 만들지 않는다. 총괄 관리자는 Vercel ADMIN_PASSWORD 로 로그인)
   if (lastRow <= 1) {
-    sheet.appendRow(["hq", "총괄 관리자", "shopstory2026!", "super", "hq", "Y", "본사 수퍼관리자"]);
-    sheet.appendRow(["team01", "김팀장", "pass1234", "manager", "hq", "Y", "영업1팀 매니저"]);
-    sheet.appendRow(["agent01", "이영업", "pass1234", "agent", "team01", "Y", "영업1팀 현장영업자"]);
+    sheet.appendRow(["team01", "(예시) 팀장", "", "manager", "hq", "N", "예시 — 비밀번호 입력 후 active=Y 로 바꾸면 활성화"]);
+    sheet.appendRow(["agent01", "(예시) 영업자", "", "agent", "team01", "N", "예시 — 비밀번호 입력 후 active=Y 로 바꾸면 활성화"]);
     lastRow = sheet.getLastRow();
   }
   
@@ -151,7 +176,7 @@ function handleGetAgents() {
     agents.push({
       code: code,
       name: String(row[1] || "").trim(),
-      password: String(row[2] || "").trim(),
+      password_sha256: row[2] ? sha256Hex(String(row[2]).trim()) : "",   // 평문 비밀번호는 시트 밖으로 내보내지 않는다
       role: String(row[3] || "agent").trim().toLowerCase(),
       manager_code: String(row[4] || "hq").trim(),
       active: String(row[5] || "Y").trim().toUpperCase()
@@ -275,6 +300,13 @@ function handleCreateLead(lead) {
     
     sheet.appendRow(rowData);
     
+    // 이메일 알림 — 실패해도 저장은 유지
+    try {
+      notifyNewLead(rowData);
+    } catch (mailErr) {
+      console.warn("Email notify failed: " + mailErr);
+    }
+    
     return {
       success: true,
       id: rowData[14],
@@ -283,6 +315,42 @@ function handleCreateLead(lead) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 신규 리드 이메일 알림 (상호·사장님·연락처·담당영업자·선택메뉴)
+ */
+function notifyNewLead(row) {
+  var refCode = String(row[4] || "hq");
+  var agentLabel = refCode;
+  try {
+    var agentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_AGENTS);
+    if (agentSheet && agentSheet.getLastRow() > 1) {
+      var agents = agentSheet.getRange(2, 1, agentSheet.getLastRow() - 1, 2).getValues();
+      for (var i = 0; i < agents.length; i++) {
+        if (String(agents[i][0]).trim().toLowerCase() === refCode.toLowerCase()) {
+          agentLabel = refCode + " (" + String(agents[i][1] || "").trim() + ")";
+          break;
+        }
+      }
+    }
+  } catch (ignore) {}
+  
+  var lines = [
+    "상호명: " + row[1],
+    "사장님: " + row[2],
+    "연락처: " + row[3],
+    "담당 영업자: " + agentLabel,
+    "선택 메뉴: " + row[7],
+    "매장 주소: " + row[11],
+    "사장님 메모: " + row[13],
+    "접수 시각: " + row[0]
+  ];
+  MailApp.sendEmail({
+    to: NOTIFY_EMAIL,
+    subject: "[샵스토리] 새 신청 접수 - " + row[1],
+    body: lines.join("\n")
+  });
 }
 
 /**

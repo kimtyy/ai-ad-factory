@@ -1,7 +1,7 @@
 // api/lead.js
 // 리드 수집: Google Apps Script 웹훅(doPost) + 서버 캐시 보관
 
-import { resolveLeadCodes } from './agents-auth.js';
+import { resolveLeadCodes, gasKey } from './agents-auth.js';
 
 // Vercel Serverless Function 런타임 간 공유를 위한 전역 메모리 캐시
 if (!global.__SHOPSTORY_LEADS__) {
@@ -110,6 +110,7 @@ export default async function handler(req, res) {
           ...newLead,
           refCode: finalRef,
           managerCode: finalMgr,
+          key: gasKey(),
         }),
       });
     } catch (e) {
