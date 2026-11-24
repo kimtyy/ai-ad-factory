@@ -86,19 +86,6 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
     onSearch(storeName.trim());
   };
 
-  const handleRecentStoreClick = (item: RecentStoreItem) => {
-    justPicked.current = true;
-    setStoreName(item.storeName);
-    setCandidates([]);
-    startLoadingAnimation();
-    onSearch(item.storeName, {
-      storeName: item.storeName,
-      address: item.address,
-      roadAddress: item.address,
-      category: item.category,
-    });
-  };
-
   const startLoadingAnimation = () => {
     setLoadingStep(1);
     setTimeout(() => setLoadingStep(2), 500);
@@ -271,24 +258,20 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
             <span>⏱️</span>
             <span>최근 진단된 매장</span>
           </h3>
-          <span className="text-[11px] text-slate-400 font-medium">클릭 시 바로 진단</span>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs divide-y divide-slate-100 overflow-hidden">
           {recentStores.slice(0, 6).map((item, idx) => (
-            <button
+            <div
               key={`${item.storeName}_${idx}`}
-              type="button"
-              onClick={() => handleRecentStoreClick(item)}
-              disabled={isLoading}
-              className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-slate-50 active:bg-slate-100/80 transition-colors group cursor-pointer disabled:opacity-50"
+              className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <span className="w-5 h-5 rounded-full bg-slate-100 group-hover:bg-[#EEF3F9] group-hover:text-[#0F2744] text-slate-500 font-bold text-[11px] flex items-center justify-center shrink-0 transition-colors">
+                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-500 font-bold text-[11px] flex items-center justify-center shrink-0">
                   {idx + 1}
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[13px] font-bold text-slate-800 group-hover:text-[#0F2744] truncate transition-colors">
+                  <div className="text-[13px] font-bold text-slate-800 truncate">
                     {item.storeName}
                   </div>
                   <div className="text-[11px] text-slate-400 truncate mt-0.5">
@@ -296,10 +279,7 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
                   </div>
                 </div>
               </div>
-              <span className="text-slate-300 group-hover:text-[#0F2744] group-hover:translate-x-0.5 text-xs font-bold transition-all shrink-0">
-                ›
-              </span>
-            </button>
+            </div>
           ))}
         </div>
       </div>
