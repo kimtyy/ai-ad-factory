@@ -113,6 +113,7 @@ def _fit_title(text: str, comp: Any, key: str, max_size_ratio: float = TITLE_SIZ
     size = int(width * max_size_ratio)
     target_w = int(width * max_w_ratio)
     min_size = int(width * min_size_ratio)
+    text = fonts.break_long_tokens(text, fonts.load(spec, min_size), target_w)         # 공백 없는 긴 이름이 가장 작은 크기에서도 넘으면 글자 수로 나눔 (좌우 잘림 방지)
     while True:
         font = fonts.load(spec, size)
         lines = _wrap(text, probe, font, target_w, max_lines=max_lines)
@@ -250,6 +251,7 @@ def render_thumbnail_navy_premium(comp: Any, frame: np.ndarray, main_text: str, 
     # 타이틀 줄바꿈 및 크기 피팅 (1~2줄, 최대 3줄)
     tsize = int(width * 0.076)
     min_tsize = int(width * 0.052)
+    title = fonts.break_long_tokens(title, fonts.load(spec, min_tsize), inner_text_w)       # 공백 없는 긴 이름은 글자 수로 나눠 카드 밖으로 안 나가게
     while True:
         tfont = fonts.load(spec, tsize)
         lines = _wrap(title, probe, tfont, inner_text_w, max_lines=2)
@@ -258,9 +260,18 @@ def render_thumbnail_navy_premium(comp: Any, frame: np.ndarray, main_text: str, 
             break
         tsize = int(tsize * 0.94)
 
-    sub_label = f"✦ {sub} ✦" if sub else "✦ SHOPSHOT SIGNATURE ✦"
+    # 소제목: 양옆 장식(◆)은 글꼴에 ✦ 글리프가 없어 □로 깨졌으므로 글자가 아니라 도형으로 그린다. 이름이 없으면 중립 문구(브랜드명·오타 문구 금지)
+    sub_label = sub or "SIGNATURE"
     sub_size = int(width * 0.036)
     sub_font = fonts.load(spec, sub_size)
+    deco_w = int(sub_size * 0.55)
+    deco_gap = int(sub_size * 0.45)
+    while _line_width(sub_font, sub_label) + 2 * (deco_w + deco_gap) > inner_text_w and sub_size > int(width * 0.024):      # 긴 소제목은 카드 폭에 맞춰 줄임
+        sub_size = int(sub_size * 0.94)
+        sub_font = fonts.load(spec, sub_size)
+        deco_w, deco_gap = int(sub_size * 0.55), int(sub_size * 0.45)
+    while _line_width(sub_font, sub_label) + 2 * (deco_w + deco_gap) > inner_text_w and len(sub_label) > 4:
+        sub_label = sub_label[:-2].rstrip() + "…"
 
     pad_y = int(width * 0.046)
     sub_h = int(sub_size * 1.25)
@@ -291,9 +302,15 @@ def render_thumbnail_navy_premium(comp: Any, frame: np.ndarray, main_text: str, 
 
     # 3) 상단 골드 소제목
     cur_y = card_y + pad_y
-    sub_x = (width - _line_width(sub_font, sub_label)) // 2
+    label_w = _line_width(sub_font, sub_label)
+    total_w = label_w + 2 * (deco_w + deco_gap)
+    sub_x = (width - total_w) // 2 + deco_w + deco_gap
     _draw_line(cd, sub_x, cur_y + int(sub_size * 0.92), sub_label, sub_font,
                fill=(245, 196, 81, 255))
+    mid_y = cur_y + int(sub_size * 0.52)
+    for dx in ((width - total_w) // 2 + deco_w // 2, (width + total_w) // 2 - deco_w // 2):        # 골드 다이아몬드(◆) 2개
+        r = max(3, deco_w // 2)
+        cd.polygon([(dx, mid_y - r), (dx + r, mid_y), (dx, mid_y + r), (dx - r, mid_y)], fill=(245, 196, 81, 255))
     cur_y += sub_h + gap1
 
     # 4) 골드 미세 구분선

@@ -191,6 +191,25 @@ def resolve(key: str, comp) -> Spec:
     return pop_font(comp.font_dir) or first_usable(SANS_SYSTEM) or sans
 
 
+def break_long_tokens(text: str, font, max_w: float, pad: float = 0.0) -> str:
+    """공백 없이 이어진 긴 한 덩어리('가평현리설맥눈꽃생맥주전문점본점')가 가장 작은 글자 크기에서도 max_w를 넘으면 글자 수 기준으로 균등하게 나눠
+    사이에 공백을 넣는다 (그대로 두면 좌우가 잘림). 어절이 여러 개인 일반 이름에는 영향이 없다. pad: 외곽선 등으로 늘어나는 폭"""
+    import math
+    out = []
+    for tok in (text or "").split(" "):
+        try:
+            w = float(font.getlength(tok)) + pad
+        except Exception:
+            w = 0.0
+        if not tok or w <= max_w:
+            out.append(tok)
+            continue
+        n = max(2, math.ceil(w / max(1.0, max_w)))
+        per = math.ceil(len(tok) / n)
+        out.append(" ".join(tok[i:i + per] for i in range(0, len(tok), per)))
+    return " ".join(out)
+
+
 def load(spec: Spec, size: int):
     try:
         return ImageFont.truetype(spec[0], size, index=spec[1])

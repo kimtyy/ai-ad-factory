@@ -384,6 +384,10 @@ class AdCompositor:
         probe = ImageDraw.Draw(layer)
         emoji_ratio = 0.95 if emoji else 0.0
         size = int(W * THUMB_FONT_RATIO)
+        # 공백 없는 긴 이름은 가장 작은 크기로도 폭을 넘어 좌우가 잘리므로 글자 수로 나눠 줄바꿈 후보를 만든다
+        from core.render.fonts import break_long_tokens
+        _min = int(W * 0.11)
+        text = break_long_tokens(text, self._font(_min), W * THUMB_TEXT_WIDTH - (int(_min * emoji_ratio) if emoji else 0), pad=2 * max(6, int(_min * 0.12)))
         while True:
             font = self._font(size)
             stroke = max(6, int(size * 0.12))
