@@ -3,6 +3,45 @@ import type { FC, FormEvent } from 'react';
 import { LeadRecord } from '../types';
 import { buildStudioUrl } from '../utils/studioUrl';
 
+function cleanDigits(s?: string): string {
+  return String(s || '').replace(/[^0-9]/g, '');
+}
+
+function cleanStore(s?: string): string {
+  return String(s || '').replace(/\s+/g, '').toLowerCase();
+}
+
+function areLeadsDuplicate(a: LeadRecord, b: LeadRecord): boolean {
+  // 1. 직접 ID 일치
+  if (a.id && b.id && a.id === b.id) return true;
+
+  // 2. 전화번호 정규화 비교
+  const phoneA = cleanDigits(a.phoneNumber);
+  const phoneB = cleanDigits(b.phoneNumber);
+  if (phoneA.length >= 8 && phoneB.length >= 8 && phoneA === phoneB) {
+    // 상호명 비교
+    const storeA = cleanStore(a.storeName);
+    const storeB = cleanStore(b.storeName);
+    const storeMatch = storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA);
+
+    if (storeMatch) {
+      // 시간차 확인 (동일일자이거나 60분 이내 신청이면 동일 건으로 판정)
+      const tA = new Date(a.createdAt).getTime();
+      const tB = new Date(b.createdAt).getTime();
+      if (!isNaN(tA) && !isNaN(tB)) {
+        if (Math.abs(tA - tB) < 60 * 60 * 1000) return true;
+        const dateA = new Date(tA).toISOString().slice(0, 10);
+        const dateB = new Date(tB).toISOString().slice(0, 10);
+        if (dateA === dateB) return true;
+      } else {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export const AdminPage: FC = () => {
   const [token, setToken] = useState<string | null>(null);
   const [password, setPassword] = useState('');
@@ -100,21 +139,32 @@ export const AdminPage: FC = () => {
       console.error('Local leads parse error', e);
     }
 
-    // ID 또는 전화번호+시간 기준으로 중복 제거 병합
-    const mergedMap = new Map<string, LeadRecord>();
-    for (const lead of serverLeads) {
-      mergedMap.set(lead.id || `${lead.phoneNumber}_${lead.createdAt}`, lead);
-    }
-    for (const lead of localLeads) {
-      const key = lead.id || `${lead.phoneNumber}_${lead.createdAt}`;
-      if (!mergedMap.has(key)) {
-        mergedMap.set(key, lead);
+    // 중복 제거 병합: ID 또는 (전화번호 + 상호명 + 근접시간) 기준으로 2줄 중복 표시 완전 제거
+    const merged: LeadRecord[] = [];
+
+    // 1) 서버 리드를 우선 등록
+    for (const sLead of serverLeads) {
+      const idx = merged.findIndex((m) => areLeadsDuplicate(m, sLead));
+      if (idx === -1) {
+        merged.push(sLead);
+      } else {
+        merged[idx] = { ...merged[idx], ...sLead };
       }
     }
 
-    const merged = Array.from(mergedMap.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    // 2) 로컬스토리지 리드 병합 (서버에 없는 신규 건만 추가)
+    for (const lLead of localLeads) {
+      const idx = merged.findIndex((m) => areLeadsDuplicate(m, lLead));
+      if (idx === -1) {
+        merged.push(lLead);
+      }
+    }
+
+    merged.sort((a, b) => {
+      const tA = new Date(a.createdAt).getTime() || 0;
+      const tB = new Date(b.createdAt).getTime() || 0;
+      return tB - tA;
+    });
 
     setLeads(merged);
     setIsLoading(false);

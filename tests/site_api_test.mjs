@@ -156,5 +156,30 @@ try {
   check(false, 'studioUrl.ts 불러오기 실패: ' + e.message);
 }
 
+// ---------------------------------------------------------------- 5. /api/recent-stores
+const recentStores = (await load('api/recent-stores.js')).default;
+[s, r] = await call(recentStores, { method: 'GET' });
+check(s === 200 && Array.isArray(r.stores) && r.stores.length >= 2, `최근 진단 매장 조회 성공 (${r.stores.length}개)`);
+check(r.stores.some((x) => x.storeName === '설맥 가평현리점') && r.stores.some((x) => x.storeName === '효정명인갈비'), '초기 시드 매장(설맥 가평현리점, 효정명인갈비) 포함');
+[s] = await call(recentStores, { method: 'POST' });
+check(s === 405, 'GET 외 메서드는 405');
+
+// ---------------------------------------------------------------- 6. 리드 중복 제출 방지 & /api/admin 중복 제거
+// 6-1. 동일 신청 더블클릭 중복 제출 방지
+[s, r] = await call(lead, { method: 'POST', body: { storeName: '중복테스트매장', ownerName: '김사장', phoneNumber: '010-9999-8888', planOptions: { selectedMenu: '메인메뉴' } } });
+const firstLeadId = r.lead.id;
+[s, r] = await call(lead, { method: 'POST', body: { storeName: '중복테스트매장', ownerName: '김사장', phoneNumber: '010-9999-8888', planOptions: { selectedMenu: '메인메뉴' } } });
+check(s === 200 && r.lead.id === firstLeadId && r.message.includes('이미 접수'), '동일 신청 더블클릭 시 중복 생성 없이 기존 건 반환');
+
+// 6-2. /api/admin 관리자 목록 중복 제거 확인
+const admin = (await load('api/admin.js')).default;
+[s, r] = await call(admin, { method: 'POST', body: { action: 'login', password: 'shopstory2026!' } });
+const adminToken = r.token;
+check(s === 200 && !!adminToken, '관리자 로그인 성공');
+[s, r] = await call(admin, { method: 'GET', query: { token: adminToken } });
+check(s === 200 && Array.isArray(r.leads), '관리자 리드 목록 조회 성공');
+const dupCount = r.leads.filter((l) => l.phoneNumber === '010-9999-8888').length;
+check(dupCount === 1, `동일 리드 중복 제거 확인 (결과: ${dupCount}개)`);
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

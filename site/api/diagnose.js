@@ -5,6 +5,7 @@ import {
   cleanHtml, searchLocal, addressScore, nameScore, regionTokens,
   findPlaceId, fetchPlaceHome, fetchPlaceMenus, buildOfficialSummary,
 } from '../server/naver.js';
+import { addRecentStore } from './recent-stores.js';
 
 // 2. 네이버 블로그 검색 (NCP 우선 -> OpenAPI 폴백). 같은 이름의 다른 지점 글이 섞이지 않도록 상호·지역 키워드로 걸러낸다
 function brandToken(storeName) {
@@ -285,6 +286,12 @@ export default async function handler(req, res) {
 
     const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category);
     const officialSummary = buildOfficialSummary(home);
+
+    try {
+      addRecentStore({ storeName: resolvedName, category, address });
+    } catch (e) {
+      // ignore
+    }
 
     return res.status(200).json({
       storeName: resolvedName,

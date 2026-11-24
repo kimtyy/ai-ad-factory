@@ -13,6 +13,47 @@ function verifyToken(token) {
   return token.startsWith('adm_');
 }
 
+function areLeadsDuplicate(a, b) {
+  if (a.id && b.id && a.id === b.id) return true;
+  const phoneA = String(a.phoneNumber || '').replace(/[^0-9]/g, '');
+  const phoneB = String(b.phoneNumber || '').replace(/[^0-9]/g, '');
+  if (phoneA.length >= 8 && phoneB.length >= 8 && phoneA === phoneB) {
+    const storeA = String(a.storeName || '').replace(/\s+/g, '').toLowerCase();
+    const storeB = String(b.storeName || '').replace(/\s+/g, '').toLowerCase();
+    if (storeA === storeB || storeA.includes(storeB) || storeB.includes(storeA)) {
+      const tA = new Date(a.createdAt).getTime();
+      const tB = new Date(b.createdAt).getTime();
+      if (!isNaN(tA) && !isNaN(tB)) {
+        if (Math.abs(tA - tB) < 60 * 60 * 1000) return true;
+        const dateA = new Date(tA).toISOString().slice(0, 10);
+        const dateB = new Date(tB).toISOString().slice(0, 10);
+        if (dateA === dateB) return true;
+      } else {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function dedupeLeads(listA, listB) {
+  const merged = [];
+  for (const item of [...(listA || []), ...(listB || [])]) {
+    if (!item) continue;
+    const idx = merged.findIndex((m) => areLeadsDuplicate(m, item));
+    if (idx === -1) {
+      merged.push(item);
+    } else {
+      merged[idx] = { ...merged[idx], ...item };
+    }
+  }
+  return merged.sort((a, b) => {
+    const tA = new Date(a.createdAt).getTime() || 0;
+    const tB = new Date(b.createdAt).getTime() || 0;
+    return tB - tA;
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -100,12 +141,14 @@ export default async function handler(req, res) {
         if (gasRes.ok) {
           const gasData = await gasRes.json();
           if (Array.isArray(gasData.leads)) {
-            leads = gasData.leads;
+            leads = dedupeLeads(gasData.leads, global.__SHOPSTORY_LEADS__);
           }
         }
       } catch (e) {
         console.warn('Google Sheets read error:', e.message);
       }
+    } else {
+      leads = dedupeLeads([], global.__SHOPSTORY_LEADS__);
     }
 
     return res.status(200).json({

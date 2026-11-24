@@ -1,19 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FC, FormEvent } from 'react';
 import type { StoreCandidate } from '../types';
-import { searchStores } from '../services/api';
+import { searchStores, getRecentStores, RecentStoreItem } from '../services/api';
 
 interface SearchScreenProps {
   onSearch: (storeName: string, candidate?: StoreCandidate) => void;
   isLoading: boolean;
 }
-
-const POPULAR_EXAMPLES = [
-  '효정명인갈비',
-  '설맥 가평현리점',
-  '제주 돈사돈 본점',
-  '어니언 안국',
-];
 
 export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => {
   const [storeName, setStoreName] = useState('');
@@ -22,7 +15,19 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
   const [selected, setSelected] = useState<StoreCandidate | null>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [hint, setHint] = useState('');
+  const [recentStores, setRecentStores] = useState<RecentStoreItem[]>([
+    { storeName: '설맥 가평현리점', category: '생맥주, 호프', address: '경기 가평군 조종면 현리' },
+    { storeName: '효정명인갈비', category: '육류, 고기요리', address: '경기 가평군 설악면' },
+  ]);
   const justPicked = useRef(false);
+
+  useEffect(() => {
+    getRecentStores().then((items) => {
+      if (items && items.length > 0) {
+        setRecentStores(items);
+      }
+    });
+  }, []);
 
   // 상호명 2글자 이상 → 300ms 뒤 실제 매장 후보(같은 이름 여러 지점)를 보여줘서 사장님이 자기 지점을 직접 고르게 한다
   useEffect(() => {
@@ -81,12 +86,17 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
     onSearch(storeName.trim());
   };
 
-  const handleChipClick = (example: string) => {
+  const handleRecentStoreClick = (item: RecentStoreItem) => {
     justPicked.current = true;
-    setStoreName(example);
+    setStoreName(item.storeName);
     setCandidates([]);
     startLoadingAnimation();
-    onSearch(example);
+    onSearch(item.storeName, {
+      storeName: item.storeName,
+      address: item.address,
+      roadAddress: item.address,
+      category: item.category,
+    });
   };
 
   const startLoadingAnimation = () => {
@@ -254,20 +264,41 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
         )}
       </div>
 
-      {/* 추천 빠른 검색 칩 */}
+      {/* 최근 진단된 매장 세로 리스트 카드 */}
       <div className="w-full text-left">
-        <p className="text-xs font-semibold text-slate-400 mb-2.5">
-          지금 사장님들이 많이 진단해 본 매장
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {POPULAR_EXAMPLES.map((example) => (
+        <div className="flex items-center justify-between mb-2.5 px-0.5">
+          <h3 className="text-xs font-bold text-slate-500 tracking-tight flex items-center gap-1.5">
+            <span>⏱️</span>
+            <span>최근 진단된 매장</span>
+          </h3>
+          <span className="text-[11px] text-slate-400 font-medium">클릭 시 바로 진단</span>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs divide-y divide-slate-100 overflow-hidden">
+          {recentStores.slice(0, 6).map((item, idx) => (
             <button
-              key={example}
-              onClick={() => handleChipClick(example)}
+              key={`${item.storeName}_${idx}`}
+              type="button"
+              onClick={() => handleRecentStoreClick(item)}
               disabled={isLoading}
-              className="px-3 py-1.5 rounded-full bg-white border border-slate-200 hover:border-[#0F2744] hover:text-[#0F2744] text-xs font-medium text-slate-600 shadow-2xs transition-all active:scale-95"
+              className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-slate-50 active:bg-slate-100/80 transition-colors group cursor-pointer disabled:opacity-50"
             >
-              #{example}
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="w-5 h-5 rounded-full bg-slate-100 group-hover:bg-[#EEF3F9] group-hover:text-[#0F2744] text-slate-500 font-bold text-[11px] flex items-center justify-center shrink-0 transition-colors">
+                  {idx + 1}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-bold text-slate-800 group-hover:text-[#0F2744] truncate transition-colors">
+                    {item.storeName}
+                  </div>
+                  <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                    {item.category || '일반음식점'} {item.address ? `· ${item.address}` : ''}
+                  </div>
+                </div>
+              </div>
+              <span className="text-slate-300 group-hover:text-[#0F2744] group-hover:translate-x-0.5 text-xs font-bold transition-all shrink-0">
+                ›
+              </span>
             </button>
           ))}
         </div>

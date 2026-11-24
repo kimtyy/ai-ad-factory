@@ -45,6 +45,7 @@ export const LeadModal: FC<LeadModalProps> = ({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage('');
 
     if (!ownerName.trim()) {
@@ -259,8 +260,8 @@ export const LeadModal: FC<LeadModalProps> = ({
                 입력하신 번호(<strong className="text-slate-800">{phoneNumber}</strong>, 카카오톡)로 빠르게 안내드릴게요.
               </p>
               <div className="pt-2 border-t border-slate-200/60 text-[11px] text-slate-500">
-                • 제작 안내: 확인 후 순차 발송 (영업시간 기준 1~2시간 이내)<br />
-                • 담당자 직접 문의: <a href="mailto:kimtyy@gmail.com" className="underline text-slate-700">kimtyy@gmail.com</a>
+                • 제작 안내: 접수 후 1일 이내 순차 제작·발송<br />
+                • 담당자 직접 문의: <a href="mailto:kimtyy@naver.com" className="underline text-slate-700">kimtyy@naver.com</a>
               </div>
             </div>
 

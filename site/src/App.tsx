@@ -5,6 +5,7 @@ import { ReportScreen } from './components/ReportScreen';
 import { PlanBottomSheet } from './components/PlanBottomSheet';
 import { LeadModal } from './components/LeadModal';
 import { StickyCTA } from './components/StickyCTA';
+import { Footer } from './components/Footer';
 import { AdminPage } from './pages/AdminPage';
 import { StoreDiagnosticResult, PlanOptions, LeadSubmission, StoreCandidate } from './types';
 import { diagnoseStore, submitLead } from './services/api';
@@ -116,17 +117,8 @@ export default function App() {
           )}
         </main>
 
-        {/* 푸터 정보 (어퍼바운드 스타일 깔끔한 신뢰 정보) */}
-        <footer className="px-5 py-8 text-center text-xs text-slate-400 space-y-2 border-t border-slate-200/60 mt-auto">
-          <div className="font-bold text-slate-600">샵스토리 (ShopStory)</div>
-          <p className="leading-relaxed">
-            AI 기반 소상공인 매장 정밀 진단 및 숏폼 홍보 영상 자동 제작 솔루션
-          </p>
-          <div className="text-[11px] text-slate-400">
-            상호: 허브스마트 | 대표: 김태영 | 문의: kimtyy@gmail.com<br />
-            © 2026 허브스마트. All rights reserved. · <a href="/admin" className="underline hover:text-slate-600">관리자</a>
-          </div>
-        </footer>
+        {/* 푸터 정보 */}
+        <Footer />
 
         {/* 하단 고정 메인 CTA 버튼 (리포트 화면에서만 표시) */}
         {diagnosticResult && (

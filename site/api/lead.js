@@ -52,6 +52,37 @@ export default async function handler(req, res) {
     createdAt: createdAt || new Date().toISOString(),
   };
 
+  const cleanPhone = String(phoneNumber).replace(/[^0-9]/g, '');
+  const cleanStore = String(storeName).replace(/\s+/g, '').toLowerCase();
+  const cleanOwner = String(ownerName || '사장님').trim().toLowerCase();
+
+  // 중복 제출(더블클릭) 방지: 동일 신청 건이 30초 이내 중복 전송된 경우 기존 건 반환
+  const existingDup = global.__SHOPSTORY_LEADS__.find((l) => {
+    const lPhone = String(l.phoneNumber || '').replace(/[^0-9]/g, '');
+    const lStore = String(l.storeName || '').replace(/\s+/g, '').toLowerCase();
+    const lOwner = String(l.ownerName || '').trim().toLowerCase();
+    const lMemo = String(l.planOptions?.ownerMemo || '');
+    const lMenu = String(l.planOptions?.selectedMenu || '');
+    const timeDiff = Math.abs(Date.now() - new Date(l.createdAt).getTime());
+    return (
+      lPhone === cleanPhone &&
+      lStore === cleanStore &&
+      lOwner === cleanOwner &&
+      lMemo === cleanOptions.ownerMemo &&
+      lMenu === cleanOptions.selectedMenu &&
+      timeDiff < 30 * 1000
+    );
+  });
+
+  if (existingDup) {
+    console.log('[중복 리드 접수 방지 - 기존 건 반환]', storeName, phoneNumber);
+    return res.status(200).json({
+      success: true,
+      message: '이미 접수된 신청입니다.',
+      lead: existingDup,
+    });
+  }
+
   // 메모리 보관
   global.__SHOPSTORY_LEADS__.unshift(newLead);
 

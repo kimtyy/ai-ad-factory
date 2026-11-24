@@ -49,6 +49,32 @@ export async function diagnoseStore(
   return generateDynamicDiagnosis(trimmed);
 }
 
+export interface RecentStoreItem {
+  storeName: string;
+  category: string;
+  address: string;
+}
+
+export async function getRecentStores(): Promise<RecentStoreItem[]> {
+  const fallback: RecentStoreItem[] = [
+    { storeName: '설맥 가평현리점', category: '생맥주, 호프', address: '경기 가평군 조종면 현리' },
+    { storeName: '효정명인갈비', category: '육류, 고기요리', address: '경기 가평군 설악면' },
+  ];
+
+  try {
+    const res = await fetch('/api/recent-stores');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.stores) && data.stores.length > 0) {
+        return data.stores as RecentStoreItem[];
+      }
+    }
+  } catch (err) {
+    console.warn('Backend /api/recent-stores unavailable, using seed stores:', err);
+  }
+  return fallback;
+}
+
 export async function submitLead(lead: LeadSubmission): Promise<{ success: boolean; message: string }> {
   // 1. 로컬 백업 저장 (유실 방지)
   try {
@@ -68,6 +94,19 @@ export async function submitLead(lead: LeadSubmission): Promise<{ success: boole
     });
 
     if (res.ok) {
+      const resData = await res.json().catch(() => ({}));
+      // 로컬 스토리지 항목에 서버가 생성한 id 동기화
+      if (resData.lead && resData.lead.id) {
+        try {
+          const existing = JSON.parse(localStorage.getItem('shopstory_leads') || '[]');
+          if (Array.isArray(existing) && existing.length > 0) {
+            existing[existing.length - 1] = { ...existing[existing.length - 1], ...resData.lead };
+            localStorage.setItem('shopstory_leads', JSON.stringify(existing));
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
       return { success: true, message: '정상 접수되었습니다.' };
     }
   } catch (err) {

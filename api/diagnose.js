@@ -1,5 +1,6 @@
 // site/api/diagnose.js
 // 네이버 지역 검색 API + 블로그 검색 API + 네이버 플레이스 공식 메뉴판 + 유튜브 실제 영상 검색
+import { addRecentStore } from './recent-stores.js';
 
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 
@@ -455,6 +456,12 @@ export default async function handler(req, res) {
     }
 
     const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category);
+
+    try {
+      addRecentStore({ storeName: resolvedName, category, address });
+    } catch (e) {
+      // ignore
+    }
 
     return res.status(200).json({
       storeName: resolvedName,

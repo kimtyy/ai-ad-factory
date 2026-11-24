@@ -4,7 +4,7 @@
   "outputDirectory": "site/dist",
   "rewrites": [
     {
-      "source": "/((?!api|privacy\\.html|favicon\\.svg|robots\\.txt).*)",
+      "source": "/((?!api|privacy\\.html|terms\\.html|favicon\\.svg|robots\\.txt).*)",
       "destination": "/index.html"
     }
   ],
