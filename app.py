@@ -718,22 +718,27 @@ SCENE_ROLE_LABELS = {**OWNER_ROLE_LABELS, **MEMORY_ROLE_LABELS, "hook": "🔥 �
 # ---- 모드별 최적 스타일 프리셋: 모드 탭을 누르는 순간 오디오·폰트·자막 위치가 자동으로 맞춰진다 (사이드바를 열 필요 없음)
 # 사용자가 직접 바꾸면 그 모드의 선택으로 기억해 두고, 다음에 그 모드로 돌아오면 프리셋 대신 기억한 값을 쓴다
 MODE_PRESETS = {
-    "owner": {"audio": "voice_and_sub", "font": "impact", "pos": "mid"},        # 🏪 AI 나레이션 + 임팩트 고딕 + 중단 55%
-    "memory": {"audio": "voice_and_sub", "font": "pop", "pos": "mid"},          # 🎉 AI 나레이션 + 분위기 톤에 맞는 폰트(기본 팝체) + 중단 55%
-    "travel": {"audio": "bgm_only", "font": "serif", "pos": "top"},             # 🏨 BGM + 감성 명조 + 상단 24%
-    "commerce": {"audio": "voice_and_sub", "font": "pop", "pos": "mid"},        # 🛍️ AI 나레이션 + 둥근 팝체 + 중단 55%
-    "book": {"audio": "bgm_only", "font": "serif", "pos": "mid"},               # 📚 BGM + 감성 명조 + 중단 55%
-    "video_overlay": {"audio": "voice_and_sub", "font": "impact", "pos": "mid"},
+    "owner": {"audio": "voice_and_sub", "font": "impact", "pos": "mid", "thumb_style": "intense"},        # 🏪 AI 나레이션 + 임팩트 고딕 + 중단 55% + 강렬한 먹방형
+    "memory": {"audio": "voice_and_sub", "font": "pop", "pos": "mid", "thumb_style": "magazine"},          # 🎉 AI 나레이션 + 분위기 톤에 맞는 폰트(기본 팝체) + 중단 55% + 감성 매거진형
+    "travel": {"audio": "bgm_only", "font": "serif", "pos": "top", "thumb_style": "magazine"},             # 🏨 BGM + 감성 명조 + 상단 24% + 감성 매거진형
+    "commerce": {"audio": "voice_and_sub", "font": "pop", "pos": "mid", "thumb_style": "intense"},        # 🛍️ AI 나레이션 + 둥근 팝체 + 중단 55% + 강렬한 먹방형
+    "book": {"audio": "bgm_only", "font": "serif", "pos": "mid", "thumb_style": "magazine"},               # 📚 BGM + 감성 명조 + 중단 55% + 감성 매거진형
+    "video_overlay": {"audio": "voice_and_sub", "font": "impact", "pos": "mid", "thumb_style": "intense"},
 }
 
 
 def _style_now() -> dict:
     ss = st.session_state
-    return {"audio": ss.get("audio_choice"), "font": ss.get("caption_font_choice"), "pos": ss.get("caption_pos")}
+    return {
+        "audio": ss.get("audio_choice"),
+        "font": ss.get("caption_font_choice"),
+        "pos": ss.get("caption_pos"),
+        "thumb_style": ss.get("thumbnail_style_choice", "intense"),
+    }
 
 
 def _remember_style():
-    """사용자가 오디오·폰트·자막 위치를 직접 바꿨을 때 (on_change): 지금 모드의 선택으로 저장"""
+    """사용자가 오디오·폰트·자막 위치·썸네일 스타일을 직접 바꿨을 때 (on_change): 지금 모드의 선택으로 저장"""
     ss = st.session_state
     key = "memory" if (STORE_APP and ss.get("store_kind") == "memory") else ss.get("production_mode", "owner")      # 추억 쇼츠 선택이 매장 홍보 선택을 덮어쓰지 않게
     ss.setdefault("style_by_mode", {})[key] = _style_now()
@@ -744,6 +749,7 @@ def _apply_mode_style(mode: str):
     ss = st.session_state
     st_ = (ss.get("style_by_mode") or {}).get(mode) or MODE_PRESETS.get(mode) or MODE_PRESETS["owner"]
     ss["audio_choice"], ss["caption_font_choice"], ss["caption_pos"] = st_["audio"], st_["font"], st_["pos"]
+    ss["thumbnail_style_choice"] = st_.get("thumb_style", "intense")
 
 
 def reset_mode_session_state(prev_mode: str, new_mode: str):
@@ -869,6 +875,7 @@ if STORE_APP:
             _style["audio"] = _sty["audio"]
         _ss.setdefault("style_by_mode", {})["owner"] = _style
         _ss["audio_choice"], _ss["caption_font_choice"], _ss["caption_pos"] = _style["audio"], _style["font"], _style["pos"]
+        _ss["thumbnail_style_choice"] = _style.get("thumb_style", "intense")
         if _sty["actor"] and _sty["actor"] in VOICE_ACTOR_PROFILES:
             _ss["lead_actor_pending"] = _sty["actor"]              # 성우 위젯 값은 아래 '첫 진입 성우 설정' 뒤에 장착
         if _sty["bgm_mood"]:
@@ -1230,6 +1237,10 @@ st.session_state.setdefault("caption_font_choice", "impact")
 if st.session_state.get("caption_font_choice") not in font_keys:
     st.session_state.caption_font_choice = "impact"
 caption_font_key = st.session_state.caption_font_choice
+from core.render.thumbnail import THUMBNAIL_STYLES, THUMBNAIL_STYLE_META
+st.session_state.setdefault("thumbnail_style_choice", "magazine" if is_memory else "intense")
+if st.session_state.get("thumbnail_style_choice") not in THUMBNAIL_STYLES:
+    st.session_state.thumbnail_style_choice = "magazine" if is_memory else "intense"
 st.session_state.setdefault("caption_pos", "mid")
 if is_owner_mode or (is_travel_mode and st.session_state.get("stay_ctx")) or (is_commerce_mode and st.session_state.get("shop_item")):
     os.environ["OWNER_CAPTION_POS"] = st.session_state.get("caption_pos", "mid")          # 렌더 단계의 모드 정책(자막 높이·가로 사진 위치)이 읽음
@@ -1351,6 +1362,10 @@ def _w_audio_block():
     if is_owner_mode or (is_travel_mode and st.session_state.get("stay_ctx")) or (is_commerce_mode and st.session_state.get("shop_item")):
         st.radio("📐 자막 위치", list(CAPTION_POS_OPTIONS), key="caption_pos", format_func=CAPTION_POS_OPTIONS.get, horizontal=True, on_change=_remember_style,
                  help="실제 유튜브 쇼츠 앱은 화면 아래쪽(60~90%)에 채널명·제목·AI 라벨이 올라와 자막과 겹쳐요. 기본(55%)은 그 바로 위, 상단(24%)은 사진을 전혀 안 가려요.")
+    st.markdown("**🖼️ 썸네일 스타일**")
+    st.radio("썸네일 스타일", list(THUMBNAIL_STYLES), key="thumbnail_style_choice",
+             format_func=lambda k: THUMBNAIL_STYLE_META[k]["label"], horizontal=True, on_change=_remember_style,
+             help="\n".join(f"{v['label']}: {v['desc']}" for v in THUMBNAIL_STYLE_META.values()))
 
 
 def _w_stay_settings():
@@ -2810,6 +2825,7 @@ def current_spec(bgm_path=None) -> pipeline.JobSpec:
         photo_buckets=dict(ss.get("photo_buckets") or {}) if (is_owner_mode and not is_memory) else {},
         keep_photo_order=bool(ss.get("keep_photo_order")) if (is_owner_mode and not is_memory) else False,
         ai_disclosure_map=dict(ss.get("ai_disclosure_map") or {}),
+        thumbnail_style=ss.get("thumbnail_style_choice", "intense"),
         memory=is_memory, memory_tone=ss.get("mem_tone", "lively"),
         tempo="rap",
         tone_instruction=selected_tone_instruction,
@@ -3277,7 +3293,8 @@ if render_btn:
                     extract_thumbnail(single_v, _raw, at=0.5)
                     _frame = _np.array(_PILImage.open(_raw).convert("RGB"))
                     AdCompositor(output_dir=current_job().final_dir).render_thumbnail(
-                        _frame, copy["thumb_main"], thumb_out, sub_text=copy.get("thumb_sub", ""), accent=copy.get("accent", ""))
+                        _frame, copy["thumb_main"], thumb_out, sub_text=copy.get("thumb_sub", ""), accent=copy.get("accent", ""),
+                        style=st.session_state.get("thumbnail_style_choice", "intense"))
                     os.remove(_raw)
                     from core.youtube_upload import export_cover_jpg
                     export_cover_jpg(thumb_out)
@@ -3410,26 +3427,23 @@ if st.session_state.final_video_path and os.path.exists(st.session_state.final_v
                     type="primary",
                     key="download_cta"
                 )
-        if is_memory:
-            # 🎉 MP4 저장과 썸네일 커버 이미지 저장을 나란히 (단톡방 공유·릴스/쇼츠 커버용). 업로드용 JPG(thumbnail.jpg)가 있으면 그것을, 없으면 PNG를 준다
-            _tp = st.session_state.get("thumb_path")
-            _has_thumb = bool(_tp and os.path.exists(_tp))
-            _bc1, _bc2 = st.columns(2) if _has_thumb else (st.container(), None)
-            with _bc1:
-                _download_button()
-            if _has_thumb:
-                _jpg = os.path.join(os.path.dirname(_tp), "thumbnail.jpg")
-                _tfile, _tmime, _text = (_jpg, "image/jpeg", ".jpg") if os.path.exists(_jpg) else (_tp, "image/png", ".png")
-                with _bc2:
-                    with open(_tfile, "rb") as _tf:
-                        st.download_button("🖼️ 썸네일 커버 이미지 저장", data=_tf, file_name=f"{product_name or '추억쇼츠'}_thumbnail{_text}",
-                                           mime=_tmime, use_container_width=True, key="download_thumb")
-                st.image(_tp, width=200, caption="썸네일 미리보기 · 영상 맨 앞 0.5초에도 같은 커버가 들어가 있어요")
+        # 🖼️ MP4 저장과 썸네일 커버 이미지 저장을 나란히 (단톡방 공유·릴스/쇼츠 커버용). 업로드용 JPG(thumbnail.jpg)가 있으면 그것을, 없으면 PNG를 준다
+        _tp = st.session_state.get("thumb_path")
+        _has_thumb = bool(_tp and os.path.exists(_tp))
+        _bc1, _bc2 = st.columns(2) if _has_thumb else (st.container(), None)
+        with _bc1:
+            _download_button()
+        if _has_thumb:
+            _jpg = os.path.join(os.path.dirname(_tp), "thumbnail.jpg")
+            _tfile, _tmime, _text = (_jpg, "image/jpeg", ".jpg") if os.path.exists(_jpg) else (_tp, "image/png", ".png")
+            with _bc2:
+                with open(_tfile, "rb") as _tf:
+                    st.download_button("🖼️ 썸네일 커버 이미지 저장", data=_tf, file_name=f"{product_name or '쇼츠'}_thumbnail{_text}",
+                                       mime=_tmime, use_container_width=True, key="download_thumb")
+            st.image(_tp, width=220, caption="🖼️ 썸네일 미리보기 · 영상 맨 앞에도 같은 커버가 적용되어 있어요")
         st.markdown("#### 📱 9:16 쇼츠 완성본 (스마트폰 뷰어)")
         with st.container(key="phone_frame"):
             st.video(st.session_state.final_video_path)
-        if not is_memory:
-            _download_button()
         _bs = st.session_state.get("bgm_status") or {}
         if _bs.get("info"):
             _bi = _bs["info"]

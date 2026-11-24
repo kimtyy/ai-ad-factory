@@ -79,6 +79,7 @@ class JobSpec:
     photo_buckets: Dict[str, int] = field(default_factory=dict)          # 사진 5단계 시각 정렬 버킷 {경로: 1~5}
     keep_photo_order: bool = False                                       # True면 올린 순서 그대로 (AI 자동 정렬·비전 분류 호출 생략)
     ai_disclosure_map: Dict[str, bool] = field(default_factory=dict)     # 씬별 AI 모션 연출 고지 여부 {미디어경로: True/False}
+    thumbnail_style: str = "intense"                                     # 썸네일 스타일: intense(강렬한 먹방형) / magazine(감성 매거진형) / navy_premium(네이비 프리미엄 카드형)
     # 🎉 모임·행사·추억 쇼츠: name = 모임·행사 이름(선택), 사진·영상 N개(최대 10) = 컷 N개 = 카피 N줄 (core/planners/memory.py)
     memory: bool = False
     memory_tone: str = "lively"                                          # lively(유쾌) / warm(따뜻) / formal(기록·기념)
@@ -823,14 +824,15 @@ def render(spec: JobSpec, job, scenes: List[Dict[str, Any]], progress: Optional[
                 region=region_of(spec.address) if spec.mode == "owner" else "",
                 core_concept=concept_clean,
                 business_type=spec.business_type or "")
+        thumb_style = getattr(spec, "thumbnail_style", "intense") or "intense"
         if spec.memory:
-            # 🎉 추억: 광고용 큰 글씨 대신 기념 사진 느낌의 감성 썸네일 (감성 명조/둥근 팝체, 판촉 문구 없음)
-            from core.render.thumbnail import render_memory_thumbnail
-            thumb = render_memory_thumbnail(first_frame, copy["thumb_main"], spec.memory_tone, os.path.join(job.final_dir, "final_thumb.png"),
-                                            comp, sub_text=copy["thumb_sub"])
+            # 🎉 추억: 기본은 기념 사진 느낌의 감성 썸네일 (magazine), 사용자가 다른 스타일을 골랐으면 그 스타일 존중
+            mem_style = thumb_style if thumb_style in ("magazine", "navy_premium") else "magazine"
+            thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
+                                          sub_text=copy["thumb_sub"], accent=copy["accent"], style=mem_style, tone=spec.memory_tone)
         else:
             thumb = comp.render_thumbnail(first_frame, copy["thumb_main"], os.path.join(job.final_dir, "final_thumb.png"),
-                                          sub_text=copy["thumb_sub"], accent=copy["accent"])
+                                          sub_text=copy["thumb_sub"], accent=copy["accent"], style=thumb_style)
     except Exception as e:
         logger.warning(f"썸네일 생성 실패 (영상은 계속 렌더): {e}")
 

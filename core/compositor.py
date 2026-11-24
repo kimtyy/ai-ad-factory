@@ -323,9 +323,18 @@ class AdCompositor:
         return np.array(img)
 
     def render_thumbnail(self, frame: np.ndarray, main_text: str, out_path: str, sub_text: str = "", accent: str = "",
-                         width: int = 1080, height: int = 1920) -> str:
+                         width: int = 1080, height: int = 1920, style: str = "intense", **kwargs) -> str:
         """
-        쇼츠 썸네일 (1080x1920 PNG) - 영상 첫 0.3초·대시보드 미리보기·다운로드 공용
+        쇼츠 썸네일 (1080x1920 PNG) - 3종 스타일(intense, magazine, navy_premium) 지원
+        """
+        from core.render.thumbnail import render_styled_thumbnail
+        return render_styled_thumbnail(self, frame, main_text, out_path, sub_text=sub_text, accent=accent,
+                                       width=width, height=height, style=style, **kwargs)
+
+    def render_thumbnail_intense_raw(self, frame: np.ndarray, main_text: str, out_path: str, sub_text: str = "", accent: str = "",
+                                     width: int = 1080, height: int = 1920) -> str:
+        """
+        쇼츠 썸네일 (1080x1920 PNG) - 강렬한 먹방형 (기존 기본)
         - 배경: 씬 1 원본 컷(자막 없음) 꽉 채움 + 채도·대비 살짝 올림 + 상단·하단 비네트(어두운 그라데이션)
         - 메인 카피: 폭의 최대 26%(기존 11.5%의 약 2.3배) 글자, 노랑→주황→빨강 세로 그라데이션, 두꺼운 검은 외곽선 +
           아래로 밀린 입체(돌출) 레이어 + 블러 그림자, -4도 기울기(오른쪽 위로), 끝에 포인트(🔥💥😱🤯·ㄷㄷ·?!)
@@ -347,14 +356,15 @@ class AdCompositor:
         shade[bot_s:, :, 3] = (np.linspace(0.0, 1.0, H - bot_s) ** 1.4 * THUMB_VIGNETTE_BOTTOM)[:, None].astype(np.uint8)
         img.alpha_composite(Image.fromarray(shade))
 
-        text = (main_text or "").strip()
+        from core.render import fonts
+        text = fonts.clean_text(main_text)
         accent = (accent or "").strip()
         emoji = accent if accent and not re.match(r"^[ㄱ-ㅎ?!]+$", accent) else ""
         if accent and not emoji and not text.endswith(accent):
             text = f"{text}{accent}".strip()       # 'ㄷㄷ'·'?!'는 마지막 어절에 붙여 한 줄로 따로 떨어지지 않게
         if text:
             img.alpha_composite(self._thumb_main_layer(text, emoji, W, H))
-        sub_clean = (sub_text or "").strip()
+        sub_clean = fonts.clean_text(sub_text)
         if sub_clean and sub_clean not in ("가게", "매장", "상점", "None", "null", "undefined"):
             img.alpha_composite(self._thumb_sub_layer(sub_clean, W, H))
 
