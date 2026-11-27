@@ -103,6 +103,18 @@ async function fetchYouTubeVideos(storeName, apiKey) {
   return { count: 0, sampleTitle: '' };
 }
 
+// 업종 판별: 외식·식음료("food") vs 비식당/일반서비스("service")
+export function determineBusinessType(category = '', storeName = '') {
+  const text = `${category} ${storeName}`.toLowerCase();
+  const serviceRegex = /(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|병원|의원|한의원|치과|안과|정형외과|피부과|내과|이비인후과|동물병원|약국|학원|교습소|독서실|스터디카페|어학원|부동산|공인중개|펜션|숙박|모텔|호텔|게스트하우스|민박|꽃집|화원|플라워|헬스|피트니스|필라테스|요가|체육관|세탁|청소|방역|사진관|스튜디오|철물|유리|샷시|도배|에어컨|철거|이사|용달|렌트|법률|세무|노무|웨딩|장례)/i;
+  const foodRegex = /(음식점|식당|한식|중식|일식|양식|카페|디저트|베이커리|제과|빵|맥주|호프|주점|펍|포차|이자카야|고기|치킨|분식|국밥|회|해물|찌개|탕|구이|갈비|삼겹살|레스토랑|뷔페|패스트푸드|피자|버거|샌드위치|도시락|바\(bar\)|칼국수|냉면|족발|보쌈|곱창|막창|떡볶이|커피|샤브샤브|돈가스|초밥|파스타)/i;
+
+  if (serviceRegex.test(text)) return 'service';
+  if (foodRegex.test(text)) return 'food';
+  if (/음식점|식음료|카페|베이커리|주점/.test(category)) return 'food';
+  return 'service';
+}
+
 function snippet(text, n) {
   const t = cleanHtml(text);
   return t.length > n ? `${t.slice(0, n)}...` : t;
@@ -110,7 +122,7 @@ function snippet(text, n) {
 
 // 실제 데이터(플레이스 방문자 선택 키워드·이 매장에 연결된 후기·지점 필터를 통과한 블로그 후기)로 필살기 TOP 3를 만든다.
 // 근거가 하나도 없을 때만 일반 문구를 쓰고 isFallback 으로 표시한다 (작업실 앱은 그 항목을 쓰지 않는다).
-function buildStrengths({ resolvedName, home, blogItems }) {
+function buildStrengths({ resolvedName, home, blogItems, businessType = 'food' }) {
   const reviews = [];
   for (const r of (home && home.reviews) || []) reviews.push({ title: r.title, text: r.contents });
   for (const b of blogItems || []) reviews.push({ title: cleanHtml(b.title), text: cleanHtml(b.description) });
@@ -141,22 +153,42 @@ function buildStrengths({ resolvedName, home, blogItems }) {
     }
   }
   const real = out.length;
-  const generic = [
+  const genericFood = [
     { title: `${resolvedName}의 시그니처 대표 메뉴`, description: '네이버 플레이스에 등록된 핵심 메뉴', mentionRate: '대표 메뉴', sampleReview: '' },
     { title: '정갈하고 푸짐한 상차림 구성', description: '손님들이 부담 없이 즐길 수 있는 구성', mentionRate: '확인 필요', sampleReview: '' },
     { title: '친절한 응대와 쾌적한 매장 환경', description: '가족 외식 및 모임 장소로 추천', mentionRate: '확인 필요', sampleReview: '' },
   ];
+  const genericService = [
+    { title: `${resolvedName}의 핵심 전문 서비스 · 맞춤 상담`, description: '네이버 플레이스에 등록된 핵심 전문 서비스 및 맞춤 상담', mentionRate: '전문 서비스', sampleReview: '' },
+    { title: '꼼꼼한 진행과 친절한 응대로 쌓은 지역 신뢰', description: '철저하고 꼼꼼한 진행과 고객 맞춤 친절한 안내', mentionRate: '고객 만족', sampleReview: '' },
+    { title: '네이버 플레이스 검색으로 바로 연결되는 접근성', description: '네이버 지도 및 플레이스에서 위치 확인과 간편 문의 가능', mentionRate: '접근성 우수', sampleReview: '' },
+  ];
+  const generic = businessType === 'service' ? genericService : genericFood;
   for (let i = real; i < 3; i += 1) out.push({ rank: i + 1, ...generic[i], isFallback: true });
 
   const source = real === 0 ? 'fallback' : (voted.length > 0 ? 'official' : 'blog');
   return { strengths: out, source };
 }
 
-function buildHookCopy(storeName, menuName, category = '') {
+function buildHookCopy(storeName, menuName, category = '', businessType = 'food') {
   const sName = storeName || '우리 매장';
-  const menu = menuName || '대표 메뉴';
-  const text = `${menu} ${category}`.toLowerCase();
+  const menu = menuName || (businessType === 'service' ? '대표 서비스' : '대표 메뉴');
 
+  if (businessType === 'service') {
+    const text = `${category} ${sName} ${menu}`.toLowerCase();
+    // 1. 설비·수리·시공·인테리어·정비류
+    if (/(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|철물|유리|샷시|도배|장판|에어컨|철거|청소|방역|이사|용달|전기|조명|도어)/i.test(text)) {
+      return `${sName} 찾으셨나요? 꼼꼼하고 확실한 ${menu} 현장 해결, 지금 확인하세요 🔧`;
+    }
+    // 2. 미용·네일·뷰티·클리닉·병원류
+    if (/(미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|뷰티|메이크업|병원|의원|한의원|치과|안과|피부과|성형|클리닉|약국)/i.test(text)) {
+      return `${sName}에서 경험하는 섬세한 변화! ${menu} 실제 시술 느낌을 확인해 보세요 ✨`;
+    }
+    // 3. 학원·교육·운동·기타 서비스류
+    return `우리 동네에서 믿고 찾는 ${sName}! ${menu} 핵심 강점을 숏폼으로 만나보세요 📌`;
+  }
+
+  const text = `${menu} ${category}`.toLowerCase();
   if (/(맥주|생맥|눈꽃맥주|얼음맥주|하이볼|소주|막걸리|와인|사케|칵테일|호프|주점|펍|포차|이자카야)/.test(text)) {
     return `${sName} 오시면 첫 잔은 무조건 이거죠! 한 모금에 속이 뻥 뚫리는 ${menu} 실물 영접 🍺`;
   }
@@ -240,16 +272,24 @@ export default async function handler(req, res) {
       || givenAddress
       || '네이버 플레이스 등록 매장';
     const category = (home && home.category) || (localItem ? cleanHtml(localItem.category) : '일반음식점');
+    const businessType = determineBusinessType(category, resolvedName);
 
     // 5. 메뉴판: 공식 메뉴가 없을 때만 안내용 임시 항목 (menusSource 로 구분)
     let menus = officialMenusRaw || [];
 
     const menusSource = menus.length > 0 ? 'official' : 'fallback';
     if (menus.length === 0) {
-      menus = [
-        { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },
-        { name: '스페셜 단품 요리', price: '인기', isPopular: true, desc: '정성껏 조리하는 메인 메뉴' },
-      ];
+      if (businessType === 'service') {
+        menus = [
+          { name: `${resolvedName} 핵심 전문 서비스`, price: '상담', isPopular: true, desc: '고객 맞춤 전문 시공 및 서비스' },
+          { name: '맞춤 견적 · 시공 상담', price: '문의', isPopular: true, desc: '친절하고 정확한 현장 맞춤 상담' },
+        ];
+      } else {
+        menus = [
+          { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },
+          { name: '스페셜 단품 요리', price: '인기', isPopular: true, desc: '정성껏 조리하는 메인 메뉴' },
+        ];
+      }
     } else {
       menus = menus.map((m, i) => ({ ...m, isPopular: Boolean(m.isPopular || i < 2) }));
     }
@@ -271,20 +311,21 @@ export default async function handler(req, res) {
     } else {
       // 3순위: 인기/대표 메뉴 또는 첫 번째 메뉴
       const popMenu = menuPool.find((m) => m.isPopular);
-      recommendedMenu = popMenu ? popMenu.name : (menuPool[0]?.name || `${resolvedName} 대표 메뉴`);
+      const defaultItemName = businessType === 'service' ? `${resolvedName} 전문 서비스` : `${resolvedName} 대표 메뉴`;
+      recommendedMenu = popMenu ? popMenu.name : (menuPool[0]?.name || defaultItemName);
     }
 
     const keywordMenu = home && home.keywords.find((k) => menus.some((m) => m.name.includes(k)));
     const topKeyword = keywordMenu || (home && home.keywords[0]) || '';
 
     // 5. 필살기 TOP 3 + 후기 요약
-    const { strengths: topStrengths, source: strengthsSource } = buildStrengths({ resolvedName, home, blogItems });
+    const { strengths: topStrengths, source: strengthsSource } = buildStrengths({ resolvedName, home, blogItems, businessType });
     const reviewSummary = [
       ...((home && home.reviews) || []).map((r) => `${r.title}: ${snippet(r.contents, 120)}`),
       ...(blogItems || []).map((b) => `${cleanHtml(b.title)}: ${snippet(b.description, 120)}`),
     ].slice(0, 5).join('\n');
 
-    const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category);
+    const hookCopy = buildHookCopy(resolvedName, recommendedMenu, category, businessType);
     const officialSummary = buildOfficialSummary(home);
 
     // 네이버에서 실제로 확인된 매장(플레이스 홈 또는 지역검색 결과)만 노출 — 아무 입력어나 오타가 '최근 진단 매장'에 올라가지 않게
@@ -294,10 +335,15 @@ export default async function handler(req, res) {
       // ignore
     }
 
+    const conceptPitch = businessType === 'service'
+      ? `첫 3초 동안 ${recommendedMenu}의 전문성과 신뢰도를 직관적인 숏폼으로 전달해 고객의 문의와 방문을 유도합니다.${topKeyword ? ` 사장님이 대표 키워드로 등록한 '${topKeyword}'도 함께 보여드려요.` : ''}`
+      : `첫 3초 동안 ${recommendedMenu}의 클로즈업 비주얼과 사운드를 강조해 손님의 침샘을 자극하고 방문을 유도합니다.${topKeyword ? ` 사장님이 대표 키워드로 등록한 '${topKeyword}'도 함께 보여드려요.` : ''}`;
+
     return res.status(200).json({
       storeName: resolvedName,
       category,
       address,
+      businessType,
       placeId: placeId || '',
       officialSummary,
       officialKeywords: (home && home.keywords) || [],
@@ -317,7 +363,7 @@ export default async function handler(req, res) {
       aiPlan: {
         recommendedMenu,
         hookCopy,
-        conceptPitch: `첫 3초 동안 ${recommendedMenu}의 클로즈업 비주얼과 사운드를 강조해 손님의 침샘을 자극하고 방문을 유도합니다.${topKeyword ? ` 사장님이 대표 키워드로 등록한 '${topKeyword}'도 함께 보여드려요.` : ''}`,
+        conceptPitch,
       },
       menus,
     });

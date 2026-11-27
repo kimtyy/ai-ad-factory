@@ -9,6 +9,7 @@ interface PlanBottomSheetProps {
   onChangeOptions: (newOptions: PlanOptions) => void;
   menus: MenuItem[];
   recommendedMenu: string;
+  businessType?: 'food' | 'service';
 }
 
 const FONT_OPTIONS = [
@@ -46,8 +47,10 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
   onChangeOptions,
   menus,
   recommendedMenu,
+  businessType = 'food',
 }) => {
   const [showAllMenus, setShowAllMenus] = useState(false);
+  const isFood = businessType !== 'service';
 
   if (!isOpen) return null;
 
@@ -95,10 +98,10 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
         </div>
 
         <div className="space-y-6">
-          {/* 1. 주인공 메뉴 선택 */}
+          {/* 1. 주인공 메뉴 / 핵심 서비스 선택 */}
           <div>
             <label className="block text-xs font-bold text-slate-800 mb-2">
-              🍽️ 주인공 메뉴 (영상에 메인으로 등장할 요리)
+              {isFood ? '🍽️ 주인공 메뉴 (영상에 메인으로 등장할 요리)' : '📌 핵심 강조 서비스 (영상에 메인으로 소개될 서비스)'}
             </label>
             <div className="flex flex-wrap gap-2">
               {topRecommendedMenus.map((menu) => {
@@ -131,7 +134,7 @@ export const PlanBottomSheet: FC<PlanBottomSheetProps> = ({
                   onClick={() => setShowAllMenus(true)}
                   className="px-3.5 py-2 rounded-2xl text-xs font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
                 >
-                  + 더보기 ({otherMenus.length}개 메뉴)
+                  + 더보기 ({otherMenus.length}개 {isFood ? '메뉴' : '항목'})
                 </button>
               )}
             </div>

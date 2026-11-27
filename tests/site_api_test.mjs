@@ -51,9 +51,24 @@ const resp = (obj, text) => ({ ok: true, status: 200, json: async () => obj, tex
 globalThis.fetch = async (url) => {
   const u = String(url);
   calls.push(u);
-  if (u.includes('/search/v1/local')) return resp({ items: LOCAL_ITEMS });                  // 서버가 5개로 자르고 중복을 걸러야 함
-  if (u.includes('/search/v1/blog')) return resp({ items: BLOGS });
-  if (u.includes('m.search.naver.com')) return resp(null, searchHtml);
+  if (u.includes('/search/v1/local')) {
+    if (u.includes('%EC%82%BC%EC%A7%84') || u.includes('삼진설비')) {
+      return resp({ items: [{ title: '<b>삼진설비</b>', category: '수도설비공사', roadAddress: '서울 중랑구 망우로 123', address: '서울 중랑구 망우동 1', link: '' }] });
+    }
+    return resp({ items: LOCAL_ITEMS });                  // 서버가 5개로 자르고 중복을 걸러야 함
+  }
+  if (u.includes('/search/v1/blog')) {
+    if (u.includes('%EC%82%BC%EC%A7%84') || u.includes('삼진설비')) {
+      return resp({ items: [] }); // 리뷰가 적은 비식당 폴백 테스트
+    }
+    return resp({ items: BLOGS });
+  }
+  if (u.includes('m.search.naver.com')) {
+    if (u.includes('%EC%82%BC%EC%A7%84') || u.includes('삼진설비')) {
+      return resp(null, '<html><body>검색결과 없음</body></html>');
+    }
+    return resp(null, searchHtml);
+  }
   const m = u.match(/m\.place\.naver\.com\/place\/(\d+)\//);
   if (m && PAGES[m[1]]) return resp(null, PAGES[m[1]]);
   if (u.includes('youtube.com')) return resp(null, '');
@@ -125,6 +140,17 @@ check(s === 400, '상호명이 비면 400');
 check(s === 405, 'POST·GET 외 메서드는 405');
 [s, r] = await call(diagnose, { method: 'POST', body: JSON.stringify({ storeName: '설맥 가평현리점', placeId: RIGHT }) });
 check(s === 200 && r.placeId === RIGHT, '문자열 JSON 본문도 허용 (기존 호환)');
+
+// 2-1. 비식당 업종 (삼진설비 / 수도설비공사) 진단 테스트
+[s, r] = await call(diagnose, { method: 'POST', body: { storeName: '삼진설비' } });
+check(s === 200 && r.businessType === 'service', `비식당 업종 자동 판별: businessType=${r.businessType}`);
+check(r.scoreCard.menuCount === 0, `비식당 공식 메뉴 미등록 시 menuCount=0 (결과: ${r.scoreCard.menuCount})`);
+const topTitles = r.topStrengths.map((x) => x.title).join(' / ');
+check(!topTitles.includes('상차림') && !topTitles.includes('외식') && !topTitles.includes('시그니처 메뉴'), '비식당 폴백: 상차림/가족외식/시그니처 메뉴 단어 미포함');
+check(r.topStrengths[0].title.includes('핵심 전문 서비스') && r.topStrengths[1].title.includes('꼼꼼한 진행과 친절한 응대') && r.topStrengths[2].title.includes('네이버 플레이스 검색으로 바로 연결'), '비식당 TOP 3 신뢰 폴백 문구 정상 생성');
+check(r.topStrengths.every((x) => !x.sampleReview), '비식당 폴백 시 빈 sampleReview ("" 보장)');
+check(!r.aiPlan.hookCopy.includes('실물 영접') && !r.aiPlan.hookCopy.includes('시켜야죠') && !r.aiPlan.hookCopy.includes('입맛 당기는'), '비식당 훅 카피: 음식 관련 표현(실물 영접/시켜야죠/입맛 당기는) 미포함');
+check(r.aiPlan.hookCopy.includes('🔧') || r.aiPlan.hookCopy.includes('현장 해결'), `비식당 설비 훅 카피 생성 (${r.aiPlan.hookCopy})`);
 
 // ---------------------------------------------------------------- 3. /api/lead : 주소·placeId·메모 저장 + 입력 정리
 const lead = (await load('api/lead.js')).default;

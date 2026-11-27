@@ -18,6 +18,7 @@ export interface StoreDiagnosticResult {
   storeName: string;
   category: string;
   address: string;
+  businessType?: 'food' | 'service'; // 외식업("food") vs 비식당/서비스업("service")
   placeId?: string; // 네이버 플레이스 ID (선택한 지점의 정확한 공식정보 기준)
   officialSummary?: string; // 플레이스 공식 매장 특징 (대표 키워드·좌석·편의시설·방문자 선택 키워드)
   officialKeywords?: string[];

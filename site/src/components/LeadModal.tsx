@@ -12,6 +12,7 @@ interface LeadModalProps {
   onSubmit: (lead: LeadSubmission) => Promise<void>;
   isCompleted: boolean;
   onResetAll: () => void;
+  businessType?: 'food' | 'service';
 }
 
 export const LeadModal: FC<LeadModalProps> = ({
@@ -23,7 +24,9 @@ export const LeadModal: FC<LeadModalProps> = ({
   onSubmit,
   isCompleted,
   onResetAll,
+  businessType = 'food',
 }) => {
+  const isFood = businessType !== 'service';
   const [ownerName, setOwnerName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [agreed, setAgreed] = useState(true);
@@ -129,7 +132,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                 <span className="font-bold text-slate-800">{storeName}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">주인공 메뉴:</span>
+                <span className="text-slate-400">{isFood ? '주인공 메뉴:' : '핵심 강조 서비스:'}</span>
                 <span className="font-bold text-[#0F2744]">{planOptions.selectedMenu}</span>
               </div>
               <div className="flex justify-between">
@@ -202,7 +205,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                   value={planOptions.ownerMemo || ''}
                   maxLength={80}
                   onChange={(e) => onChangeOptions({ ...planOptions, ownerMemo: e.target.value })}
-                  placeholder="예: 단체석 30석 완비, 한우육회 메인 강조"
+                  placeholder={isFood ? '예: 단체석 30석 완비, 한우육회 메인 강조' : '예: 24시간 긴급 출동, 무료 견적 상담 강조'}
                   className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 placeholder-slate-400 transition-all"
                 />
               </div>

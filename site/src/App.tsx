@@ -142,6 +142,7 @@ export default function App() {
             onChangeOptions={setPlanOptions}
             menus={diagnosticResult.menus}
             recommendedMenu={diagnosticResult.aiPlan.recommendedMenu}
+            businessType={diagnosticResult.businessType}
           />
         )}
 
@@ -155,6 +156,7 @@ export default function App() {
           onSubmit={handleLeadSubmit}
           isCompleted={isLeadCompleted}
           onResetAll={handleResetAll}
+          businessType={diagnosticResult?.businessType}
         />
       </div>
     </div>

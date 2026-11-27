@@ -17,8 +17,9 @@ export const ReportScreen: FC<ReportScreenProps> = ({
   const shortsCount = result.scoreCard.shortsCount || 0;
   const currentMenu = planOptions.selectedMenu || result.aiPlan.recommendedMenu;
   const isDefaultMenu = !planOptions.selectedMenu || planOptions.selectedMenu === result.aiPlan.recommendedMenu;
+  const isFood = result.businessType !== 'service';
 
-  // 주인공 메뉴 변경 시 3초 훅(Hook) 카피 안의 메뉴명 실시간 동기화 (주류/음료 자연스러움 분기)
+  // 주인공 메뉴/서비스 변경 시 3초 훅(Hook) 카피 실시간 동기화
   const dynamicHookCopy = (() => {
     if (isDefaultMenu) {
       return result.aiPlan.hookCopy;
@@ -27,6 +28,18 @@ export const ReportScreen: FC<ReportScreenProps> = ({
     if (defaultMenu && result.aiPlan.hookCopy.includes(defaultMenu)) {
       return result.aiPlan.hookCopy.split(defaultMenu).join(currentMenu);
     }
+
+    if (!isFood) {
+      const text = `${result.category} ${result.storeName} ${currentMenu}`.toLowerCase();
+      if (/(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|철물|유리|샷시|도배|장판|에어컨|철거|청소|방역|이사|용달|전기|조명|도어)/i.test(text)) {
+        return `${result.storeName} 찾으셨나요? 꼼꼼하고 확실한 ${currentMenu} 현장 해결, 지금 확인하세요 🔧`;
+      }
+      if (/(미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|뷰티|메이크업|병원|의원|한의원|치과|안과|피부과|성형|클리닉|약국)/i.test(text)) {
+        return `${result.storeName}에서 경험하는 섬세한 변화! ${currentMenu} 실제 시술 느낌을 확인해 보세요 ✨`;
+      }
+      return `우리 동네에서 믿고 찾는 ${result.storeName}! ${currentMenu} 핵심 강점을 숏폼으로 만나보세요 📌`;
+    }
+
     const text = `${currentMenu} ${result.category}`.toLowerCase();
     if (/(맥주|생맥|눈꽃맥주|얼음맥주|하이볼|소주|막걸리|와인|사케|칵테일|호프|주점|펍|포차|이자카야)/.test(text)) {
       return `${result.storeName} 오시면 첫 잔은 무조건 이거죠! 한 모금에 속이 뻥 뚫리는 ${currentMenu} 실물 영접 🍺`;
@@ -120,9 +133,11 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                   <p className="text-xs text-slate-600 leading-relaxed mb-2">
                     {item.description}
                   </p>
-                  <div className="bg-slate-50 rounded-xl p-2.5 text-[11px] text-slate-500 italic border-l-2 border-[#0F2744]">
-                    {item.sampleReview}
-                  </div>
+                  {item.sampleReview && item.sampleReview.trim() && item.sampleReview.trim() !== '“”' && item.sampleReview.trim() !== '“...”' && (
+                    <div className="bg-slate-50 rounded-xl p-2.5 text-[11px] text-slate-500 italic border-l-2 border-[#0F2744]">
+                      {item.sampleReview}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -188,19 +203,40 @@ export const ReportScreen: FC<ReportScreenProps> = ({
         </div>
 
         <div className="space-y-3">
-          {/* 공식 메뉴판 */}
-          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-            <div className="flex items-center gap-2.5">
-              <span className="text-lg">📋</span>
-              <div>
-                <div className="text-xs font-bold text-slate-800">공식 메뉴판 등록</div>
-                <div className="text-[11px] text-slate-500">네이버 플레이스 연동</div>
+          {/* 공식 메뉴판 / 대표 서비스 정보 */}
+          {isFood && result.scoreCard.menuCount > 0 ? (
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <span className="text-lg">📋</span>
+                <div>
+                  <div className="text-xs font-bold text-slate-800">공식 메뉴판 등록</div>
+                  <div className="text-[11px] text-slate-500">네이버 플레이스 연동</div>
+                </div>
               </div>
+              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+                ✅ {result.scoreCard.menuCount}개 메뉴 확인됨
+              </span>
             </div>
-            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
-              ✅ {result.scoreCard.menuCount}개 메뉴 확인됨
-            </span>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <span className="text-lg">📋</span>
+                <div>
+                  <div className="text-xs font-bold text-slate-800">대표 서비스 · 가격 정보</div>
+                  <div className="text-[11px] text-slate-500">네이버 플레이스 연동</div>
+                </div>
+              </div>
+              {(result.officialKeywords && result.officialKeywords.length > 0) || result.placeId ? (
+                <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+                  ✅ 플레이스 정보 확인됨
+                </span>
+              ) : (
+                <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200">
+                  💡 직접 강조 항목 입력 가능
+                </span>
+              )}
+            </div>
+          )}
 
           {/* 홍보용 사진 */}
           <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
@@ -301,7 +337,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
         <div className="space-y-3.5 mb-4">
           <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-xs">
             <div className="text-[11px] font-bold text-slate-400 mb-1">
-              선택된 주인공 메뉴
+              {isFood ? '선택된 주인공 메뉴' : '선택된 핵심 서비스 / 강점'}
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[16px] font-extrabold text-slate-900">
@@ -348,7 +384,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
           onClick={onOpenBottomSheet}
           className="w-full mt-4 h-12 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-[0.99]"
         >
-          <span>⚙️ 숏폼 기획 (메뉴·자막·목소리·BGM) 수정하기</span>
+          <span>⚙️ 숏폼 기획 ({isFood ? '메뉴' : '서비스'}·자막·목소리·BGM) 수정하기</span>
           <span className="text-slate-400">&gt;</span>
         </button>
       </div>
@@ -364,8 +400,9 @@ export const ReportScreen: FC<ReportScreenProps> = ({
           <h3 className="text-[17px] font-extrabold text-slate-900 tracking-tight">
             샵스토리 완성 영상은 이 정도 퀄리티로 나옵니다
           </h3>
-          <p className="text-xs text-slate-500 mt-1">
-            별도 촬영 방문 없이, 사장님 매장 사진과 리뷰만으로 제작된 실제 숏폼입니다.
+          <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+            별도 촬영 방문 없이, 사장님 매장 사진과 리뷰만으로 제작된 실제 숏폼입니다.<br />
+            음식점·카페는 물론, 설비·미용·학원·병원 등 모든 지역 업종의 홍보 숏폼을 제작합니다.
           </p>
         </div>
 
