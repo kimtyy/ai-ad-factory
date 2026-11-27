@@ -27,7 +27,9 @@ export function determineBusinessType(category = '', storeName = '') {
 const REPAIR = /(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|철물|유리|샷시|도배|장판|에어컨|철거|청소|방역|이사|용달|전기|조명|도어)/;
 const MEDICAL = /(병원|의원|치과|안과|피부과|성형외과|정형외과|내과|이비인후과|클리닉|약국)/;
 const BEAUTY = /(미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|뷰티|메이크업)/;
-const EDUCATION = /(학원|교습|교육|독서실|스터디|필라테스|요가|헬스|피트니스|체육)/;
+const EDUCATION = /(학원|교습|교육|필라테스|요가|헬스|피트니스|체육|태권도|골프연습|수영장)/;
+// 공간을 빌려주거나 중개하는 업종 — '숲속펜션'처럼 상호에 있어도 기타로 확정한다
+const SPACE = /(펜션|숙박|호텔|모텔|민박|게스트하우스|부동산|중개|스터디카페|독서실)/;
 
 export function buildHookCopy(storeName, menuName, category = '', businessType = 'food') {
   const sName = storeName || '우리 매장';
@@ -99,10 +101,15 @@ const SERVICE_GROUPS = {
     desc: '원하는 스타일에 맞춘 1:1 상담',
     hook: (s) => `${s}에서 경험하는 섬세한 변화! 1:1 맞춤 상담과 예약 안내를 확인해 보세요 ✨`,
   },
-  other: {
+  education: {
     chips: ['맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    desc: '목표에 맞춘 친절한 상담과 안내',
+    hook: (s) => `우리 동네에서 믿고 찾는 ${s}! 상담·커리큘럼 안내를 숏폼으로 만나보세요 📌`,
+  },
+  other: {
+    chips: ['맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
     desc: '상황에 맞춘 친절한 상담과 안내',
-    hook: (s) => `우리 동네에서 믿고 찾는 ${s}! 상담·이용 안내를 숏폼으로 만나보세요 📌`,
+    hook: (s) => `우리 동네에서 믿고 찾는 ${s}! 대표 강점과 이용 안내를 숏폼으로 만나보세요 📌`,
   },
 };
 
@@ -111,7 +118,8 @@ export function serviceGroup(category = '', storeName = '') {
   for (const raw of [category, storeName]) {
     const text = String(raw || '').toLowerCase();
     if (MEDICAL.test(text)) return 'medical';
-    if (EDUCATION.test(text)) return 'other';       // '전기학원'·'미용학원'은 교육
+    if (EDUCATION.test(text)) return 'education';   // '전기학원'·'미용학원'은 교육
+    if (SPACE.test(text)) return 'other';
     if (REPAIR.test(text)) return 'repair';
     if (BEAUTY.test(text)) return 'beauty';
   }

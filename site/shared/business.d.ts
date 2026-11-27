@@ -13,5 +13,5 @@ export function swapHookMenu(args: {
 }): string;
 export function hasReviewText(s?: string): boolean;
 export function serviceStrengths(storeName: string): { title: string; description: string; mentionRate: string; sampleReview: string }[];
-export function serviceGroup(category?: string, storeName?: string): 'medical' | 'repair' | 'beauty' | 'other';
+export function serviceGroup(category?: string, storeName?: string): 'medical' | 'repair' | 'beauty' | 'education' | 'other';
 export function serviceMenus(storeName: string, category?: string): MenuItem[];

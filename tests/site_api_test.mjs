@@ -413,13 +413,23 @@ check(s === 200 && r.success === true, 'Super는 전체 리드 상태 변경 허
     ['피부,체형관리', '결', '1:1 맞춤 스타일링', '꼼꼼한 시술 · 예약 안내'],
     ['입시학원', '정상', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
     ['미용학원', '서울', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
-    ['펜션', '숲속', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['태권도장', '용인', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['필라테스', '결', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['부동산학원', '합격', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['', '정상학원', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['펜션', '숲속', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['', '수영펜션', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['호텔', '그랜드', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['부동산중개업', '행복', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['스터디카페', '작심', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['꽃집,꽃배달', '봄날', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
+    ['', '행복사진관', '맞춤 상담 · 이용 안내', '대표 강점 · 공간 소개'],
   ]) {
     const menus = B.serviceMenus(name, cat);
     check(menus.map((m) => m.name).join('|') === `${first}|${second}`, `${cat || '(업종 없음)'} ${name} → ${menus.map((m) => m.name).join(' / ')}`);
     for (const m of menus) {
       const hook = B.buildHookCopy(name, m.name, cat, 'service');
-      check(!hook.includes(m.name) && (B.serviceGroup(cat, name) === 'repair' || !/(시공|현장)/.test(hook + m.desc)), `기본 칩 훅 (${hook})`);
+      check((B.serviceGroup(cat, name) === 'education' || !hook.includes('커리큘럼')) && !hook.includes(m.name) && (B.serviceGroup(cat, name) === 'repair' || !/(시공|현장)/.test(hook + m.desc)), `기본 칩 훅 (${hook})`);
     }
   }
   const [st, res] = await call(diagnose, { method: 'POST', body: { storeName: '현리김창선의원' } });
