@@ -205,7 +205,7 @@ export const LeadModal: FC<LeadModalProps> = ({
                   value={planOptions.ownerMemo || ''}
                   maxLength={80}
                   onChange={(e) => onChangeOptions({ ...planOptions, ownerMemo: e.target.value })}
-                  placeholder={isFood ? '예: 단체석 30석 완비, 한우육회 메인 강조' : '예: 24시간 긴급 출동, 무료 견적 상담 강조'}
+                  placeholder={isFood ? '예: 단체석 30석 완비, 한우육회 메인 강조' : '예: 예약 방법, 상담 가능 시간 강조'}
                   className="w-full h-11 px-3.5 rounded-xl bg-white border border-slate-200 focus:border-[#0F2744] focus:outline-none text-sm font-medium text-slate-900 placeholder-slate-400 transition-all"
                 />
               </div>

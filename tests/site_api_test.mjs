@@ -398,5 +398,33 @@ check(s === 200 && r.success === true, 'Super는 전체 리드 상태 변경 허
   check(!/sampleReview\.trim\(\)/.test(mock.readFileSync(path.join(ROOT, 'site/src/components/ReportScreen.tsx'), 'utf8')), 'ReportScreen 은 공용 후기 검사 사용');
 }
 
+// ---------------------------------------------------------------- 10. 비식당 업종 그룹별 기본 추천 서비스
+{
+  const B = await load('shared/business.js');
+  for (const [cat, name, first, second] of [
+    ['의원', '현리김창선의원', '친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    ['', '현리김창선의원', '친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    ['한의원', '경희', '친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    ['약국', '온누리', '친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    ['피부과', '맑은', '친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    ['수도설비공사', '삼진설비', '맞춤 견적 · 시공 상담', '꼼꼼한 현장 점검 · 수리'],
+    ['자동차정비,수리', '행복카센터', '맞춤 견적 · 시공 상담', '꼼꼼한 현장 점검 · 수리'],
+    ['미용실', '살롱드봄', '1:1 맞춤 스타일링', '꼼꼼한 시술 · 예약 안내'],
+    ['피부,체형관리', '결', '1:1 맞춤 스타일링', '꼼꼼한 시술 · 예약 안내'],
+    ['입시학원', '정상', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['미용학원', '서울', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    ['펜션', '숲속', '맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+  ]) {
+    const menus = B.serviceMenus(name, cat);
+    check(menus.map((m) => m.name).join('|') === `${first}|${second}`, `${cat || '(업종 없음)'} ${name} → ${menus.map((m) => m.name).join(' / ')}`);
+    for (const m of menus) {
+      const hook = B.buildHookCopy(name, m.name, cat, 'service');
+      check(!hook.includes(m.name) && (B.serviceGroup(cat, name) === 'repair' || !/(시공|현장)/.test(hook + m.desc)), `기본 칩 훅 (${hook})`);
+    }
+  }
+  const [st, res] = await call(diagnose, { method: 'POST', body: { storeName: '현리김창선의원' } });
+  check(st === 200 && !JSON.stringify(res).includes('시공'), `의원 진단 응답 전체에 '시공' 없음 (${res.aiPlan.recommendedMenu})`);
+}
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

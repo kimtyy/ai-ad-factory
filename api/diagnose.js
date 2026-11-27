@@ -1,7 +1,7 @@
 // site/api/diagnose.js
 // 네이버 지역 검색 API + 블로그 검색 API + 네이버 플레이스 공식 메뉴판 + 유튜브 실제 영상 검색
 import { addRecentStore } from './recent-stores.js';
-import { determineBusinessType, buildHookCopy } from '../site/shared/business.js';
+import { determineBusinessType, buildHookCopy, serviceMenus } from '../site/shared/business.js';
 
 export { determineBusinessType };
 
@@ -354,10 +354,7 @@ export default async function handler(req, res) {
     let menus = placeResult.menus || [];
     if (menus.length === 0) {
       if (businessType === 'service') {
-        menus = [
-          { name: `${resolvedName} 핵심 전문 서비스`, price: '상담', isPopular: true, desc: '고객 맞춤 전문 시공 및 서비스' },
-          { name: '맞춤 견적 · 시공 상담', price: '문의', isPopular: true, desc: '친절하고 정확한 현장 맞춤 상담' },
-        ];
+        menus = serviceMenus(resolvedName, knownCategory);
       } else {
         menus = [
           { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },

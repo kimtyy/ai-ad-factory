@@ -233,7 +233,7 @@ export default async function handler(req, res) {
     const menusSource = menus.length > 0 ? 'official' : 'fallback';
     if (menus.length === 0) {
       if (businessType === 'service') {
-        menus = serviceMenus(resolvedName);
+        menus = serviceMenus(resolvedName, knownCategory);
       } else {
         menus = [
           { name: `${resolvedName} 대표 시그니처 메뉴`, price: '대표', isPopular: true, desc: '손님들이 가장 많이 찾는 대표 인기 메뉴' },

@@ -27,17 +27,20 @@ export function determineBusinessType(category = '', storeName = '') {
 const REPAIR = /(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|철물|유리|샷시|도배|장판|에어컨|철거|청소|방역|이사|용달|전기|조명|도어)/;
 const MEDICAL = /(병원|의원|치과|안과|피부과|성형외과|정형외과|내과|이비인후과|클리닉|약국)/;
 const BEAUTY = /(미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|뷰티|메이크업)/;
+const EDUCATION = /(학원|교습|교육|독서실|스터디|필라테스|요가|헬스|피트니스|체육)/;
 
 export function buildHookCopy(storeName, menuName, category = '', businessType = 'food') {
   const sName = storeName || '우리 매장';
   const menu = menuName || (businessType === 'service' ? '대표 서비스' : '대표 메뉴');
 
   if (businessType === 'service') {
-    const text = `${category} ${sName} ${menu}`.toLowerCase();
-    // 의료·약국은 시술 효과를 암시하지 않는 안내 문구 (미용 문구보다 먼저)
-    if (MEDICAL.test(text)) return `${sName} 알아보고 계셨나요? ${menu} 안내를 지금 확인해 보세요 🏥`;
-    if (REPAIR.test(text)) return `${sName} 찾으셨나요? 꼼꼼하고 확실한 ${menu} 현장 해결, 지금 확인하세요 🔧`;
-    if (BEAUTY.test(text)) return `${sName}에서 경험하는 섬세한 변화! ${menu} 실제 시술 느낌을 확인해 보세요 ✨`;
+    const group = serviceGroup(category, sName);
+    const g = SERVICE_GROUPS[group];
+    // 기본 추천 칩은 문장에 끼워 넣으면 어색하므로('꼼꼼한 현장 점검 · 수리 현장 해결') 그룹 전용 문장을 쓴다
+    if (Object.values(SERVICE_GROUPS).some((x) => x.chips.includes(menu))) return g.hook(sName);
+    if (group === 'medical') return `${sName} 알아보고 계셨나요? ${menu} 안내를 지금 확인해 보세요 🏥`;
+    if (group === 'repair') return `${sName} 찾으셨나요? 꼼꼼하고 확실한 ${menu} 현장 해결, 지금 확인하세요 🔧`;
+    if (group === 'beauty') return `${sName}에서 경험하는 섬세한 변화! ${menu} 실제 시술 느낌을 확인해 보세요 ✨`;
     return `우리 동네에서 믿고 찾는 ${sName}! ${menu} 핵심 강점을 숏폼으로 만나보세요 📌`;
   }
 
@@ -79,9 +82,43 @@ export function serviceStrengths(storeName) {
   ];
 }
 
-export function serviceMenus(storeName) {
-  return [
-    { name: `${storeName} 핵심 전문 서비스`, price: '상담', isPopular: true, desc: '고객 맞춤 전문 시공 및 서비스' },
-    { name: '맞춤 견적 · 시공 상담', price: '문의', isPopular: true, desc: '친절하고 정확한 현장 맞춤 상담' },
-  ];
+// 비식당 업종 그룹별 기본 추천 서비스 칩과 훅 (메뉴·키워드가 없을 때)
+const SERVICE_GROUPS = {
+  medical: {
+    chips: ['친절한 진료 · 건강 상담', '꼼꼼한 검진 · 맞춤 치료'],
+    desc: '증상과 상황에 맞춘 친절한 안내',
+    hook: (s) => `${s} 알아보고 계셨나요? 진료·상담 안내를 지금 확인해 보세요 🏥`,
+  },
+  repair: {
+    chips: ['맞춤 견적 · 시공 상담', '꼼꼼한 현장 점검 · 수리'],
+    desc: '친절하고 정확한 현장 맞춤 상담',
+    hook: (s) => `${s} 찾으셨나요? 꼼꼼한 점검부터 맞춤 상담까지, 지금 확인하세요 🔧`,
+  },
+  beauty: {
+    chips: ['1:1 맞춤 스타일링', '꼼꼼한 시술 · 예약 안내'],
+    desc: '원하는 스타일에 맞춘 1:1 상담',
+    hook: (s) => `${s}에서 경험하는 섬세한 변화! 1:1 맞춤 상담과 예약 안내를 확인해 보세요 ✨`,
+  },
+  other: {
+    chips: ['맞춤 상담 · 커리큘럼 안내', '친절한 예약 · 이용 안내'],
+    desc: '상황에 맞춘 친절한 상담과 안내',
+    hook: (s) => `우리 동네에서 믿고 찾는 ${s}! 상담·이용 안내를 숏폼으로 만나보세요 📌`,
+  },
+};
+
+// 업종(category)을 먼저 보고, 단서가 없으면 상호로 판단한다
+export function serviceGroup(category = '', storeName = '') {
+  for (const raw of [category, storeName]) {
+    const text = String(raw || '').toLowerCase();
+    if (MEDICAL.test(text)) return 'medical';
+    if (EDUCATION.test(text)) return 'other';       // '전기학원'·'미용학원'은 교육
+    if (REPAIR.test(text)) return 'repair';
+    if (BEAUTY.test(text)) return 'beauty';
+  }
+  return 'other';
+}
+
+export function serviceMenus(storeName, category = '') {
+  const g = SERVICE_GROUPS[serviceGroup(category, storeName)];
+  return g.chips.map((name, i) => ({ name, price: i === 0 ? '상담' : '문의', isPopular: true, desc: g.desc }));
 }
