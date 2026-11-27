@@ -375,5 +375,28 @@ check(s === 200 && r.success === true, 'Super는 전체 리드 상태 변경 허
   check(s === 401, '해시 계정 틀린 비밀번호 거부');
 }
 
+// ---------------------------------------------------------------- 9. 업종 판별 경계 사례 · 훅 유지 · 빈 후기
+{
+  const B = await load('shared/business.js');
+  const food = [['한식', '유리네 한상'], ['카페,디저트', '화원카페'], ['요리주점', '설맥'], ['떡,한과', '이사랑떡집'], ['정육점', '수리산정육점'], ['육류,고기요리', '화원갈비'], ['해장국', '병원앞해장국'], ['아이스크림', '플라워젤라또'], ['반찬가게', '엄마손'], ['', '유리네 분식'], ['', '화원갈비'], ['', '독수리식당'], ['', '이사랑 국밥'], ['', '행복상회']];
+  const service = [['수도설비공사', '삼진설비'], ['미용실', '살롱'], ['입시학원', '정상'], ['요리학원', '서울'], ['스터디카페', '작심'], ['치과', '밝은'], ['펜션', '숲속'], ['자동차정비,수리', '행복카센터'], ['목욕탕,사우나', '온천탕'], ['교회', '사랑의교회'], ['세무사', '회계사무소'], ['', '삼진설비'], ['', '작심 스터디카페'], ['', '중앙교회'], ['', '현대카센터'], ['', '바른치과의원']];
+  const wrongF = food.filter(([c, n]) => B.determineBusinessType(c, n) !== 'food').map((x) => x.join('/'));
+  const wrongS = service.filter(([c, n]) => B.determineBusinessType(c, n) !== 'service').map((x) => x.join('/'));
+  check(wrongF.length === 0, `외식업 경계 사례 ${food.length}건 판별 ${wrongF.join(', ')}`);
+  check(wrongS.length === 0, `비식당 경계 사례 ${service.length}건 판별 ${wrongS.join(', ')}`);
+  const FOODISH = /(실물 영접|시켜야죠|맛봐야죠|입맛|첫 잔)/;
+  for (const [store, from, to, cat] of [['삼진수도설비', '수도설비', '누수탐지', '수도설비공사'], ['살롱드봄', '커트', '볼륨펌', '미용실'], ['바른치과', '임플란트', '스케일링', '치과'], ['작심학원', '수학', '영어', '학원']]) {
+    const hook = B.buildHookCopy(store, from, cat, 'service');
+    const next = B.swapHookMenu({ hookCopy: hook, storeName: store, fromMenu: from, toMenu: to, category: cat, businessType: 'service' });
+    check(next.includes(store) && next.includes(to) && !FOODISH.test(next), `비식당 항목 변경 후 훅·상호 유지 (${next})`);
+    const rebuilt = B.swapHookMenu({ hookCopy: '항목명이 없는 훅', storeName: store, fromMenu: from, toMenu: to, category: cat, businessType: 'service' });
+    check(rebuilt.includes(to) && !FOODISH.test(rebuilt), `비식당 훅 재생성도 서비스 문구 (${rebuilt})`);
+  }
+  check(!B.buildHookCopy('바른치과', '스케일링', '치과', 'service').includes('시술 느낌'), '의료 업종은 시술 효과 문구 제외');
+  check(['', '   ', '“”', '“(”', '“...”', '(', '“ … ”', '""'].every((x) => !B.hasReviewText(x)) && B.hasReviewText('“친절해요”'), '빈 후기(공백·따옴표·괄호·말줄임표) 숨김');
+  const mock = await import('node:fs');
+  check(!/sampleReview\.trim\(\)/.test(mock.readFileSync(path.join(ROOT, 'site/src/components/ReportScreen.tsx'), 'utf8')), 'ReportScreen 은 공용 후기 검사 사용');
+}
+
 console.log(fails ? 'FAILURES: ' + fails : 'FAILURES: 0');
 process.exit(fails ? 1 : 0);

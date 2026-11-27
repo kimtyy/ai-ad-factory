@@ -1,4 +1,5 @@
 import { StoreDiagnosticResult } from '../types';
+import { determineBusinessType, buildHookCopy, serviceStrengths, serviceMenus } from '../../shared/business.js';
 
 export const KNOWN_STORES: Record<string, StoreDiagnosticResult> = {
   '설맥 가평현리점': {
@@ -108,6 +109,26 @@ export function generateDynamicDiagnosis(storeName: string): StoreDiagnosticResu
   const trimmed = storeName.trim();
   if (KNOWN_STORES[trimmed]) {
     return KNOWN_STORES[trimmed];
+  }
+
+  // 비식당 업종: 음식 문구·후기를 만들지 않고 업종 중립 안내만 보여준다
+  if (determineBusinessType('', trimmed) === 'service') {
+    const menus = serviceMenus(trimmed);
+    return {
+      storeName: trimmed,
+      category: '지역 서비스',
+      address: '네이버 플레이스 등록 매장',
+      businessType: 'service',
+      summary: `지금은 ${trimmed}의 플레이스 정보를 불러오지 못해 기본 안내를 보여드려요. 잠시 후 다시 검색해 주세요.`,
+      topStrengths: serviceStrengths(trimmed).map((s, i) => ({ rank: i + 1, ...s })),
+      scoreCard: { menuCount: 0, hasPhotos: true, shortsCount: 0 },
+      aiPlan: {
+        recommendedMenu: menus[0].name,
+        hookCopy: buildHookCopy(trimmed, menus[0].name, '', 'service'),
+        conceptPitch: `첫 3초 동안 ${menus[0].name}의 전문성과 신뢰도를 직관적인 숏폼으로 전달해 고객의 문의와 방문을 유도합니다.`,
+      },
+      menus,
+    };
   }
 
   // 매장명 키워드 기반 스마트 추론

@@ -1,5 +1,6 @@
 import type { FC } from 'react';
 import { StoreDiagnosticResult, PlanOptions } from '../types';
+import { swapHookMenu, hasReviewText } from '../../shared/business.js';
 
 interface ReportScreenProps {
   result: StoreDiagnosticResult;
@@ -20,41 +21,16 @@ export const ReportScreen: FC<ReportScreenProps> = ({
   const isFood = result.businessType !== 'service';
 
   // 주인공 메뉴/서비스 변경 시 3초 훅(Hook) 카피 실시간 동기화
-  const dynamicHookCopy = (() => {
-    if (isDefaultMenu) {
-      return result.aiPlan.hookCopy;
-    }
-    const defaultMenu = result.aiPlan.recommendedMenu;
-    if (defaultMenu && result.aiPlan.hookCopy.includes(defaultMenu)) {
-      return result.aiPlan.hookCopy.split(defaultMenu).join(currentMenu);
-    }
-
-    if (!isFood) {
-      const text = `${result.category} ${result.storeName} ${currentMenu}`.toLowerCase();
-      if (/(설비|수도|보일러|누수|배관|인테리어|시공|수리|정비|카센터|세차|타이어|공업사|철물|유리|샷시|도배|장판|에어컨|철거|청소|방역|이사|용달|전기|조명|도어)/i.test(text)) {
-        return `${result.storeName} 찾으셨나요? 꼼꼼하고 확실한 ${currentMenu} 현장 해결, 지금 확인하세요 🔧`;
-      }
-      if (/(미용|헤어|바버|네일|피부|에스테틱|왁싱|속눈썹|뷰티|메이크업|병원|의원|한의원|치과|안과|피부과|성형|클리닉|약국)/i.test(text)) {
-        return `${result.storeName}에서 경험하는 섬세한 변화! ${currentMenu} 실제 시술 느낌을 확인해 보세요 ✨`;
-      }
-      return `우리 동네에서 믿고 찾는 ${result.storeName}! ${currentMenu} 핵심 강점을 숏폼으로 만나보세요 📌`;
-    }
-
-    const text = `${currentMenu} ${result.category}`.toLowerCase();
-    if (/(맥주|생맥|눈꽃맥주|얼음맥주|하이볼|소주|막걸리|와인|사케|칵테일|호프|주점|펍|포차|이자카야)/.test(text)) {
-      return `${result.storeName} 오시면 첫 잔은 무조건 이거죠! 한 모금에 속이 뻥 뚫리는 ${currentMenu} 실물 영접 🍺`;
-    }
-    if (/(빙수|눈꽃빙수|팥빙수|아이스크림|파르페|스무디|에이드|주스|커피|라떼|아메리카노|카페|디저트)/.test(text)) {
-      return `${result.storeName} 가면 이건 무조건 맛봐야죠! 시원하게 입맛 당기는 ${currentMenu} 실물 영접 🍧`;
-    }
-    if (/(갈비|삼겹살|목살|소고기|한우|곱창|막창|구이|불고기|스테이크|숯불)/.test(text)) {
-      return `${result.storeName} 가면 이건 무조건 시켜야죠! 윤기 좔좔 흐르는 ${currentMenu} 실물 영접 🔥`;
-    }
-    if (/(찌개|탕|국밥|전골|라면|우동|짬뽕)/.test(text)) {
-      return `${result.storeName} 가면 이건 무조건 시켜야죠! 속까지 뜨끈하게 확 풀리는 ${currentMenu} 실물 영접 🍲`;
-    }
-    return `${result.storeName} 가면 이건 무조건 시켜야죠! 손님들 극찬 쏟아지는 ${currentMenu} 실물 영접 🔥`;
-  })();
+  const dynamicHookCopy = isDefaultMenu
+    ? result.aiPlan.hookCopy
+    : swapHookMenu({
+        hookCopy: result.aiPlan.hookCopy,
+        storeName: result.storeName,
+        fromMenu: result.aiPlan.recommendedMenu,
+        toMenu: currentMenu,
+        category: result.category,
+        businessType: isFood ? 'food' : 'service',
+      });
 
   return (
     <div className="px-4 py-6 space-y-6">
@@ -133,7 +109,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                   <p className="text-xs text-slate-600 leading-relaxed mb-2">
                     {item.description}
                   </p>
-                  {item.sampleReview && item.sampleReview.trim() && item.sampleReview.trim() !== '“”' && item.sampleReview.trim() !== '“...”' && (
+                  {hasReviewText(item.sampleReview) && (
                     <div className="bg-slate-50 rounded-xl p-2.5 text-[11px] text-slate-500 italic border-l-2 border-[#0F2744]">
                       {item.sampleReview}
                     </div>
@@ -217,6 +193,19 @@ export const ReportScreen: FC<ReportScreenProps> = ({
                 ✅ {result.scoreCard.menuCount}개 메뉴 확인됨
               </span>
             </div>
+          ) : isFood ? (
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <span className="text-lg">📋</span>
+                <div>
+                  <div className="text-xs font-bold text-slate-800">공식 메뉴판</div>
+                  <div className="text-[11px] text-slate-500">네이버 플레이스 연동</div>
+                </div>
+              </div>
+              <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">
+                💡 메뉴판 확인 필요
+              </span>
+            </div>
           ) : (
             <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
               <div className="flex items-center gap-2.5">
@@ -243,7 +232,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
             <div className="flex items-center gap-2.5">
               <span className="text-lg">📸</span>
               <div>
-                <div className="text-xs font-bold text-slate-800">홍보용 매장/메뉴 사진</div>
+                <div className="text-xs font-bold text-slate-800">홍보용 매장/{isFood ? '메뉴' : '서비스'} 사진</div>
                 <div className="text-[11px] text-slate-500">블로그 & 방문자 등록 사진</div>
               </div>
             </div>
@@ -287,7 +276,7 @@ export const ReportScreen: FC<ReportScreenProps> = ({
             ) : (
               <div className="mt-1 space-y-1.5">
                 <p className="text-xs text-emerald-900 leading-relaxed font-medium">
-                  기존 영상이 확인되지만, 알고리즘 유입을 유지하려면 신메뉴·계절별 새 쇼츠를 꾸준히 이어가야 합니다.
+                  기존 영상이 확인되지만, 알고리즘 유입을 유지하려면 {isFood ? '신메뉴' : '새 서비스'}·계절별 새 쇼츠를 꾸준히 이어가야 합니다.
                 </p>
                 {result.scoreCard.sampleVideoTitle && (
                   <div className="p-2 rounded-xl bg-white/80 border border-emerald-100 text-[11px] text-emerald-800 font-medium truncate flex items-center gap-1.5">

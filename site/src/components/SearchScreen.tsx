@@ -110,7 +110,7 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
       </h1>
 
       <p className="text-[14px] text-slate-600 leading-relaxed max-w-sm mb-7">
-        네이버 플레이스 리뷰와 메뉴판을 실시간으로 분석해<br />
+        네이버 플레이스 리뷰와 매장 정보를 실시간으로 분석해<br />
         손님을 끌어당길 9:16 숏폼 영상 기획을 바로 확인하세요.
       </p>
 
@@ -232,7 +232,7 @@ export const SearchScreen: FC<SearchScreenProps> = ({ onSearch, isLoading }) => 
                 <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${loadingStep >= 1 ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
                   ✓
                 </span>
-                <span>네이버 플레이스 공식 메뉴판 수집</span>
+                <span>네이버 플레이스 공식 정보 수집</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${loadingStep >= 2 ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-500'}`}>
